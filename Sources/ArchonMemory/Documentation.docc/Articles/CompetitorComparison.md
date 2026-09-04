@@ -17,13 +17,20 @@ the [whole-SDK competitor registry](../../../../context/competitor-signature-fea
 
 ## Signature feature comparison
 
-| Product | Signature outcome | Local/native qualification | ArchonMemory response |
-| --- | --- | :---: | --- |
-| [Mem0](https://docs.mem0.ai/features/contextual-add) | Automatic fact extraction, deduplication, contradiction-aware updates, and hybrid retrieval | ☁️ | Local `MemoryExtractor`, `ADD/UPDATE/DELETE/NO_CHANGE`, durable history, and vendor-neutral indexes |
-| [Supermemory](https://docs.supermemory.ai/memory-api/introduction) | Broad ingestion/connectors, multimodal memory, filtering, reranking, and profile synthesis | ☁️ | Local document ingestion, provenance, profile/context synthesis, filters, export, and audit |
-| [Zep](https://help.getzep.com/v2/concepts) | Temporal knowledge graph and fact invalidation | ☁️ | `validFrom`, `validTo`, `supersededById`, graph storage, and time-aware retrieval |
-| [Letta](https://docs.letta.com/api/typescript) | Self-editing working-memory blocks and hierarchical context | ☁️ | `CoreMemoryBlock`, explicit scopes, and ephemeral `ArchonContext` assembly |
-| [CrewAI Memory](https://github.com/crewAIInc/crewAI/blob/main/docs/v1.15.12/en/concepts/memory.mdx) | Unified scoped memory with semantic, recency, and importance recall | ☁️ | Deterministic user/agent/run scopes and hybrid local retrieval |
+| Capability | ArchonMemory | Mem0 | Supermemory | Zep | Letta | CrewAI Memory |
+| --- | :---: | :---: | :---: | :---: | :---: | :---: |
+| Local native Swift core | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Automatic extraction | ✅ | ✅ | ✅ | ⚠️ | ⚠️ | ⚠️ |
+| Deduplication / contradiction handling | ✅ | ✅ | ✅ | ⚠️ | ⚠️ | ⚠️ |
+| Temporal facts / invalidation | ✅ | ⚠️ | ⚠️ | ✅ | ⚠️ | ⚠️ |
+| Working-memory blocks | ✅ | ⚠️ | ⚠️ | ⚠️ | ✅ | ⚠️ |
+| Scoped hybrid retrieval | ✅ | ✅ | ✅ | ✅ | ⚠️ | ✅ |
+| Profile/context synthesis | ✅ | ⚠️ | ✅ | ⚠️ | ⚠️ | ⚠️ |
+| Local persistence / audit | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+
+Legend: ✅ available and qualifying · ⚠️ partial or adapter-dependent · ❌ no
+local-native equivalent. Detailed capability evidence remains in the
+[whole-SDK competitor registry](../../../../context/competitor-signature-features.md).
 
 ## ArchonMemory capability map
 
