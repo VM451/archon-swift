@@ -253,7 +253,11 @@ public actor ModelLoadManager {
         }
         loadingTasks[model.id] = task
         do {
-            try await task.value
+            try await withTaskCancellationHandler(operation: {
+                try await task.value
+            }, onCancel: {
+                task.cancel()
+            })
             guard loadingOperationIDs[model.id] == operationID else {
                 throw ArchonModelsError.cancelled
             }

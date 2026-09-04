@@ -140,6 +140,48 @@ struct ModelLoadManagerTests {
         #expect(await manager.state(for: model.id) == .cancelled)
     }
 
+    @Test("Cancelling the caller propagates to a warming model load")
+    func callerCancellationCancelsWarmingModel() async throws {
+        let variant = ModelVariant(
+            id: "model-caller-cancel",
+            name: "model.aimodel",
+            modelID: "example/model-caller-cancel",
+            source: .localImport,
+            format: .aimodel,
+            runtime: .coreAI,
+            sizeBytes: 1,
+            estimatedMemoryBytes: 1
+        )
+        let model = InstalledModel(
+            id: "model-caller-cancel",
+            directoryURL: .temporaryDirectory,
+            manifest: ArchonModelManifest(variant: variant, modelName: "Example")
+        )
+        let manager = ModelLoadManager(adapter: DelayedRuntimeAdapter())
+        let device = ArchonDeviceCapabilities(
+            platform: .iOS,
+            osVersion: ArchonOSVersion(major: 27),
+            physicalMemoryBytes: 8_000_000_000,
+            availableMemoryBytes: 6_000_000_000,
+            processorCount: 6,
+            deviceArchitecture: "arm64",
+            supportsAppleFoundationModels: false,
+            supportsCoreAI: true
+        )
+
+        let loading = Task { try await manager.load(model, on: device) }
+        try await Task.sleep(for: .milliseconds(50))
+        loading.cancel()
+
+        do {
+            try await loading.value
+            Issue.record("Expected caller cancellation to stop model loading.")
+        } catch let error as ArchonModelsError {
+            #expect(error == .cancelled)
+        }
+        #expect(await manager.state(for: model.id) == .cancelled)
+    }
+
     @Test("Unloading during a load cannot be overwritten by the suspended load")
     func unloadDuringLoadDoesNotResurrectModel() async throws {
         let variant = ModelVariant(
