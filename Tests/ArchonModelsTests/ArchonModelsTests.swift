@@ -41,6 +41,30 @@ private struct MockHTTPClient: ModelHTTPClient {
     }
 }
 
+private actor RecordingModelHTTPClient: ModelHTTPClient {
+    let payload: Data
+    private var requestedURLs: [URL] = []
+
+    init(payload: Data) {
+        self.payload = payload
+    }
+
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        if let url = request.url {
+            requestedURLs.append(url)
+        }
+        guard let url = request.url,
+              let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil) else {
+            throw ArchonModelsError.invalidResponse
+        }
+        return (payload, response)
+    }
+
+    func lastRequestedURL() -> URL? {
+        requestedURLs.last
+    }
+}
+
 private actor ControlledModelByteTransfer {
     private let payload: [UInt8]
     private var continuation: AsyncThrowingStream<UInt8, Error>.Continuation?
@@ -398,6 +422,31 @@ struct ArchonModelsTests {
         #expect(model.variants.map(\.format) == [.safetensors, .transformers, .aimodel])
         #expect(model.variants.last?.runtime == .coreAI)
         #expect(try await catalog.search(ModelSearchRequest(query: "Qwen", task: .vision)).isEmpty)
+
+        let compatibleWithoutDetails = try await catalog.search(ModelSearchRequest(
+            query: "Qwen",
+            compatibleOnly: true,
+            device: device,
+            includeVariants: false
+        ))
+        #expect(compatibleWithoutDetails.count == 1)
+        #expect(compatibleWithoutDetails.first?.variants.isEmpty == true)
+
+        let recorder = RecordingModelHTTPClient(payload: payload)
+        let compactCatalog = HuggingFaceCatalog(
+            baseURL: URL(string: "https://example.com")!,
+            session: recorder,
+            tokenStore: nil
+        )
+        _ = try await compactCatalog.search(ModelSearchRequest(
+            query: "Qwen",
+            compatibleOnly: true,
+            device: device,
+            includeVariants: false
+        ))
+        let requestURL = try #require(await recorder.lastRequestedURL())
+        let queryItems = try #require(URLComponents(url: requestURL, resolvingAgainstBaseURL: false)?.queryItems)
+        #expect(queryItems.first(where: { $0.name == "full" })?.value == "true")
     }
 
     @Test("Model license policy separates allowed, confirmation, and denied licenses")

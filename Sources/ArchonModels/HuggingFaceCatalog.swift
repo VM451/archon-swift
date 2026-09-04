@@ -82,17 +82,21 @@ public struct HuggingFaceCatalog: ModelCatalogProvider, Sendable {
     public func search(_ request: ModelSearchRequest) async throws -> [ModelDescriptor] {
         if let repositoryID = Self.repositoryID(from: request.query) {
             let model = try await inspect(repositoryID: repositoryID)
-            return [filtered(model, for: request)].compactMap { model in
-                if let task = request.task, !model.tasks.contains(task) { return nil }
-                guard !request.compatibleOnly || !model.variants.isEmpty else { return nil }
-                return model
+            guard let filteredModel = filtered(model, for: request) else {
+                return []
             }
+            return [filteredModel]
         }
         var components = URLComponents(url: baseURL.appendingPathComponent("api/models"), resolvingAgainstBaseURL: false)
         components?.queryItems = [
             URLQueryItem(name: "search", value: request.query),
             URLQueryItem(name: "limit", value: String(request.limit)),
-            URLQueryItem(name: "full", value: request.includeVariants ? "true" : "false"),
+            // Variant-level filters need the repository file inventory even
+            // when the caller only wants compact result rows.
+            URLQueryItem(
+                name: "full",
+                value: (request.includeVariants || request.compatibleOnly || request.runtime != nil || request.format != nil) ? "true" : "false"
+            ),
             URLQueryItem(name: "sort", value: "downloads"),
             URLQueryItem(name: "direction", value: "-1")
         ]
@@ -102,10 +106,8 @@ public struct HuggingFaceCatalog: ModelCatalogProvider, Sendable {
 
         var models: [ModelDescriptor] = []
         for payload in summaries.prefix(request.limit) {
-            let model = makeDescriptor(from: payload, includeVariants: request.includeVariants)
-            let filteredModel = filtered(model, for: request)
-            if let task = request.task, !filteredModel.tasks.contains(task) { continue }
-            if request.compatibleOnly && filteredModel.variants.isEmpty { continue }
+            let model = makeDescriptor(from: payload, includeVariants: true)
+            guard let filteredModel = filtered(model, for: request) else { continue }
             models.append(filteredModel)
         }
         return models
@@ -273,12 +275,14 @@ public struct HuggingFaceCatalog: ModelCatalogProvider, Sendable {
         return variants
     }
 
-    private func filtered(_ model: ModelDescriptor, for request: ModelSearchRequest) -> ModelDescriptor {
+    private func filtered(_ model: ModelDescriptor, for request: ModelSearchRequest) -> ModelDescriptor? {
+        guard request.task == nil || model.tasks.contains(request.task!) else { return nil }
         let filteredVariants = model.variants.filter { variant in
             (request.runtime == nil || variant.runtime == request.runtime) &&
             (request.format == nil || variant.format == request.format) &&
             (!request.compatibleOnly || request.device.map { ModelCompatibilityAnalyzer.analyze(variant: variant, device: $0).canLoad } == true)
         }
+        guard !request.compatibleOnly || !filteredVariants.isEmpty else { return nil }
         return ModelDescriptor(
             id: model.id,
             name: model.name,
