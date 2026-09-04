@@ -372,9 +372,15 @@ or an unavailable result. Test and preview code can inject deterministic mocks.
 
 ## Documentation
 
-- [`Documentation/architecture.md`](Documentation/architecture.md) — design boundaries and lifecycle rules.
-- [`Documentation/model-format.md`](Documentation/model-format.md) — manifest and artifact contract.
-- [`Documentation/migration-audit.md`](Documentation/migration-audit.md) — unified-package migration scope.
+- [`Documentation/README.md`](Documentation/README.md) — documentation index organized by tutorials, how-to guides, reference, explanation, and decisions.
+- [`Documentation/architecture.md`](Documentation/architecture.md) — compatibility entry point for focused architecture documents.
+- [`Documentation/model-format.md`](Documentation/model-format.md) — compatibility entry point for model contracts, catalogs, and lifecycle.
+- [`Documentation/migration-audit.md`](Documentation/migration-audit.md) — compatibility entry point for the migration decision record.
+- [`Documentation/tutorials/`](Documentation/tutorials/) — end-to-end local model tutorial.
+- [`Documentation/how-to/`](Documentation/how-to/) — integration, lifecycle, MCP, sandbox, semantic action, and release guides.
+- [`Documentation/reference/`](Documentation/reference/) — product, model, policy, and executable contracts.
+- [`Documentation/explanation/`](Documentation/explanation/) — architecture, dependency, local-first, and recovery rationale.
+- [`Documentation/decisions/`](Documentation/decisions/) — migration and architectural decision records.
 - [`context/competitor-signature-features.md`](context/competitor-signature-features.md) — capability evidence and local/native qualification.
 - [`context/feature-adoption-backlog.md`](context/feature-adoption-backlog.md) — feature decisions, priorities, and definitions of done.
 - [`context/quality-scorecard.md`](context/quality-scorecard.md) — replacement gates for correctness, safety, performance, and migration.
