@@ -1,0 +1,1355 @@
+import CryptoKit
+import Foundation
+import ArchonCore
+
+/// Host-owned bridge used by the optional model-library App Intents.
+///
+/// A consuming application should register its configured `ModelLibrary`
+/// during startup. Intents fail closed when the host has not registered a
+/// library, and the actor keeps registration race-free under Swift 6.
+public actor ModelLibraryIntentRegistry {
+    public static let shared = ModelLibraryIntentRegistry()
+
+    private var library: ModelLibrary?
+
+    public init() {}
+
+    public func register(_ library: ModelLibrary) {
+        self.library = library
+    }
+
+    public func unregister() {
+        library = nil
+    }
+
+    public func current() -> ModelLibrary? {
+        library
+    }
+}
+
+public struct ModelDownloadRequest: Sendable {
+    public let variant: ModelVariant
+    public let modelName: String
+    public let license: ModelLicenseMetadata?
+    public let sourceRepository: String?
+    public let sourceRevision: String?
+
+    public init(
+        variant: ModelVariant,
+        modelName: String,
+        license: ModelLicenseMetadata? = nil,
+        sourceRepository: String? = nil,
+        sourceRevision: String? = nil
+    ) {
+        self.variant = variant
+        self.modelName = modelName
+        self.license = license
+        self.sourceRepository = sourceRepository
+        self.sourceRevision = sourceRevision
+    }
+}
+
+/// Bounded retry policy for transient model-download failures. Integrity and
+/// manifest failures are deterministic and are never retried.
+public struct ModelDownloadPolicy: Sendable, Equatable {
+    public let maxAttempts: Int
+    public let initialBackoff: TimeInterval
+    public let maximumBackoff: TimeInterval
+
+    public init(
+        maxAttempts: Int = 3,
+        initialBackoff: TimeInterval = 1,
+        maximumBackoff: TimeInterval = 30
+    ) {
+        self.maxAttempts = max(1, maxAttempts)
+        self.initialBackoff = max(0, initialBackoff)
+        self.maximumBackoff = max(self.initialBackoff, maximumBackoff)
+    }
+}
+
+private struct PendingModelDownload: Sendable {
+    let url: URL
+    let relativePath: String?
+    let expectedSize: Int64?
+    let checksum: String?
+}
+
+private struct BackgroundDownloadJob: Sendable {
+    let coordinator: ModelBackgroundTransferCoordinator
+    var transferIdentifiers: [String]
+}
+
+/// A byte-stream provider used by the foreground model downloader. The
+/// default implementation is backed by `URLSession`; hosts and tests may
+/// inject a transport to exercise cancellation, range resume, or custom
+/// authentication without replacing the library's integrity pipeline.
+public typealias ModelByteStreamProvider = @Sendable (
+    URLRequest
+) async throws -> (AsyncThrowingStream<UInt8, Error>, HTTPURLResponse)
+
+public enum ModelDownloadState: Sendable, Equatable {
+    case queued
+    case resolving
+    case downloading(progress: Double, bytesDownloaded: Int64, totalBytes: Int64?)
+    case paused
+    case verifying
+    case installing
+    case ready(InstalledModel)
+    case updateAvailable(ModelUpdateCandidate)
+    case failed(String)
+    case cancelled
+}
+
+public struct ModelDownloadEvent: Sendable {
+    public let variantID: String
+    public let state: ModelDownloadState
+
+    public init(variantID: String, state: ModelDownloadState) {
+        self.variantID = variantID
+        self.state = state
+    }
+}
+
+public enum ManagedModelState: String, Codable, CaseIterable, Sendable {
+    case installed
+    case warming
+    case ready
+    case idle
+    case unloaded
+    case cancelled
+    case failed
+}
+
+public enum ModelMemoryPressure: String, Codable, CaseIterable, Sendable {
+    case normal
+    case warning
+    case critical
+}
+
+/// Runtime boundary for Core AI, MLX, or another explicitly supported local runtime.
+/// ArchonModels owns lifecycle and compatibility; the adapter owns Apple runtime calls.
+public protocol ModelRuntimeAdapter: Sendable {
+    func load(model: InstalledModel) async throws
+    func unload(model: InstalledModel) async
+}
+
+public struct UnavailableModelRuntimeAdapter: ModelRuntimeAdapter, Sendable {
+    public init() {}
+
+    public func load(model: InstalledModel) async throws {
+        throw ArchonModelsError.incompatible(.unsupportedFormat)
+    }
+
+    public func unload(model: InstalledModel) async {}
+}
+
+public actor ModelLoadManager {
+    private let adapter: any ModelRuntimeAdapter
+    private var states: [String: ManagedModelState] = [:]
+    private var loadingTasks: [String: Task<Void, Error>] = [:]
+    private var models: [String: InstalledModel] = [:]
+    private var lastUsedAt: [String: Date] = [:]
+
+    public init(adapter: any ModelRuntimeAdapter = UnavailableModelRuntimeAdapter()) {
+        self.adapter = adapter
+    }
+
+    public func state(for modelID: String) -> ManagedModelState? {
+        states[modelID]
+    }
+
+    public func loadedModelIDs() -> [String] {
+        states.compactMap { modelID, state in
+            state == .ready || state == .idle ? modelID : nil
+        }.sorted()
+    }
+
+    /// Returns a resident model, if it is loaded or idle in the runtime.
+    public func loadedModel(id: String) -> InstalledModel? {
+        guard states[id] == .ready || states[id] == .idle else { return nil }
+        return models[id]
+    }
+
+    /// Returns the sum of declared memory estimates for resident models.
+    public func loadedModelMemoryBytes() -> UInt64 {
+        models.reduce(into: UInt64(0)) { total, entry in
+            guard states[entry.key] == .ready || states[entry.key] == .idle else { return }
+            total += UInt64(max(entry.value.manifest.estimatedMemoryBytes ?? 0, 0))
+        }
+    }
+
+    public func load(_ model: InstalledModel, on device: ArchonDeviceCapabilities) async throws {
+        if states[model.id] == .ready {
+            lastUsedAt[model.id] = Date()
+            return
+        }
+        if states[model.id] == .idle {
+            states[model.id] = .ready
+            lastUsedAt[model.id] = Date()
+            return
+        }
+        if states[model.id] == .warming { throw ArchonModelsError.modelLoadInProgress(model.id) }
+        let variant = ModelVariant(
+            id: model.id,
+            name: model.manifest.modelName,
+            modelID: model.manifest.modelID,
+            source: .localImport,
+            format: model.manifest.format,
+            runtime: model.manifest.runtime,
+            architecture: model.manifest.architecture,
+            supportedDeviceArchitectures: model.manifest.supportedDeviceArchitectures,
+            supportedPlatforms: model.manifest.platforms,
+            minimumOS: model.manifest.minimumOS,
+            parameterCount: model.manifest.parameterCount,
+            contextLength: model.manifest.contextLength,
+            precision: model.manifest.precision,
+            quantization: model.manifest.quantization,
+            kvCacheBytesPerToken: model.manifest.kvCacheBytesPerToken,
+            sizeBytes: model.manifest.modelSizeBytes,
+            estimatedMemoryBytes: model.manifest.estimatedMemoryBytes,
+            estimatedQualityScore: model.manifest.estimatedQualityScore,
+            estimatedTokensPerSecond: model.manifest.estimatedTokensPerSecond,
+            sha256: model.manifest.checksum,
+            resources: model.manifest.modelResources,
+            tokenizerResources: model.manifest.tokenizerResources,
+            capabilities: model.manifest.capabilities
+        )
+        let residentMemory = models.reduce(into: UInt64(0)) { total, entry in
+            guard entry.key != model.id,
+                  states[entry.key] == .ready || states[entry.key] == .idle else { return }
+            total += UInt64(max(entry.value.manifest.estimatedMemoryBytes ?? 0, 0))
+        }
+        let deviceForLoad = ArchonDeviceCapabilities(
+            platform: device.platform,
+            osVersion: device.osVersion,
+            physicalMemoryBytes: device.physicalMemoryBytes,
+            availableMemoryBytes: device.availableMemoryBytes,
+            processorCount: device.processorCount,
+            deviceArchitecture: device.deviceArchitecture,
+            supportsAppleFoundationModels: device.supportsAppleFoundationModels,
+            supportsCoreAI: device.supportsCoreAI,
+            thermalState: device.thermalState,
+            loadedModelMemoryBytes: device.loadedModelMemoryBytes + residentMemory
+        )
+        let compatibility = ModelCompatibilityAnalyzer.analyze(variant: variant, device: deviceForLoad, isInstalled: true)
+        guard compatibility.canLoad else { throw ArchonModelsError.incompatible(compatibility.status) }
+
+        states[model.id] = .warming
+        models[model.id] = model
+        lastUsedAt[model.id] = Date()
+        let adapter = self.adapter
+        let task = Task {
+            try await adapter.load(model: model)
+            try Task.checkCancellation()
+        }
+        loadingTasks[model.id] = task
+        do {
+            try await task.value
+            loadingTasks[model.id] = nil
+            states[model.id] = .ready
+            lastUsedAt[model.id] = Date()
+        } catch is CancellationError {
+            loadingTasks[model.id] = nil
+            states[model.id] = .cancelled
+            throw ArchonModelsError.cancelled
+        } catch {
+            loadingTasks[model.id] = nil
+            states[model.id] = .failed
+            throw error
+        }
+    }
+
+    public func cancelLoad(modelID: String) {
+        loadingTasks[modelID]?.cancel()
+    }
+
+    public func prewarm(_ model: InstalledModel, on device: ArchonDeviceCapabilities) async throws {
+        try await load(model, on: device)
+    }
+
+    /// Makes one installed model the active resident model. Existing resident
+    /// models are unloaded before the new model is loaded so the compatibility
+    /// check accounts for the memory they would otherwise consume.
+    public func switchTo(_ model: InstalledModel, on device: ArchonDeviceCapabilities) async throws {
+        let residentModels = models.values.filter { $0.id != model.id && (states[$0.id] == .ready || states[$0.id] == .idle) }
+        for residentModel in residentModels {
+            await unload(residentModel)
+        }
+        try await load(model, on: device)
+    }
+
+    public func markIdle(modelID: String) {
+        guard states[modelID] == .ready else { return }
+        states[modelID] = .idle
+        lastUsedAt[modelID] = Date()
+    }
+
+    /// Gives the host app a safe hook for `UIApplication`/`NSApplication`
+    /// background transitions. Apps may keep warm models or unload all of them.
+    public func handleApplicationDidEnterBackground(unloadAll: Bool = false) async {
+        await unloadLoadedModels(where: { state in unloadAll || state == .idle })
+    }
+
+    /// Responds to host memory-pressure notifications without relying on a
+    /// private notification or a platform-specific app lifecycle object.
+    public func handleMemoryPressure(_ pressure: ModelMemoryPressure) async {
+        switch pressure {
+        case .normal:
+            break
+        case .warning:
+            await unloadIdleModels(olderThan: 0)
+        case .critical:
+            await cancelWarmingLoads()
+            await unloadLoadedModels(where: { $0 == .ready || $0 == .idle })
+        }
+    }
+
+    /// Responds to thermal state changes. Serious and critical states unload
+    /// all resident models; new loads are separately rejected by compatibility.
+    public func handleThermalState(_ thermalState: ArchonThermalState) async {
+        guard thermalState == .serious || thermalState == .critical else { return }
+        await cancelWarmingLoads()
+        await unloadLoadedModels(where: { $0 == .ready || $0 == .idle })
+    }
+
+    /// Unloads idle models that have not been used for the requested interval.
+    public func unloadIdleModels(olderThan age: TimeInterval) async {
+        let cutoff = Date().addingTimeInterval(-max(age, 0))
+        await unloadLoadedModels(
+            where: { state in state == .idle },
+            whereDate: { date in date <= cutoff }
+        )
+    }
+
+    public func unload(_ model: InstalledModel) async {
+        if let loadingTask = loadingTasks[model.id] {
+            loadingTask.cancel()
+            _ = try? await loadingTask.value
+            loadingTasks[model.id] = nil
+        }
+        await adapter.unload(model: model)
+        states[model.id] = .unloaded
+        models[model.id] = nil
+        lastUsedAt[model.id] = nil
+    }
+
+    private func unloadLoadedModels(
+        where predicate: (ManagedModelState) -> Bool,
+        whereDate datePredicate: ((Date) -> Bool)? = nil
+    ) async {
+        let ids = states.compactMap { modelID, state -> String? in
+            guard predicate(state) else { return nil }
+            if let datePredicate, let date = lastUsedAt[modelID], !datePredicate(date) { return nil }
+            return modelID
+        }
+        for modelID in ids {
+            guard let model = models[modelID] else { continue }
+            await adapter.unload(model: model)
+            states[modelID] = .unloaded
+            models[modelID] = nil
+            lastUsedAt[modelID] = nil
+        }
+    }
+
+    private func cancelWarmingLoads() async {
+        let tasks = Array(loadingTasks.values)
+        for task in tasks {
+            task.cancel()
+            _ = try? await task.value
+        }
+    }
+}
+
+/// Actor-isolated model library. Every install is staged and committed only after validation.
+public actor ModelLibrary {
+    public let rootURL: URL
+
+    public init(rootURL: URL? = nil) {
+        self.rootURL = rootURL ?? Self.defaultRootURL()
+    }
+
+    public static func makeDefault() -> ModelLibrary {
+        ModelLibrary()
+    }
+
+    public func installedModels() throws -> [InstalledModel] {
+        try ensureRoot()
+        let directories = try FileManager.default.contentsOfDirectory(
+            at: rootURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )
+        return try directories.compactMap { directory in
+            guard (try? directory.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { return nil }
+            let manifestURL = directory.appendingPathComponent(ArchonModelManifest.filename)
+            guard let data = try? Data(contentsOf: manifestURL) else { return nil }
+            let manifest = try JSONDecoder().decode(ArchonModelManifest.self, from: data)
+            let installedAt = (try? directory.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date()
+            let installed = InstalledModel(id: directory.lastPathComponent, directoryURL: directory, manifest: manifest, installedAt: installedAt)
+            let validation = ModelManifestValidator.validate(manifest, artifactAt: installed.artifactURL)
+            guard validation.isValid else { throw ArchonModelsError.invalidManifest(validation.errors) }
+            return installed
+        }.sorted { $0.id < $1.id }
+    }
+
+    public func contains(modelID: String) throws -> Bool {
+        try installedModels().contains { $0.manifest.modelID == modelID || $0.id == modelID }
+    }
+
+    public func installedModel(id: String) throws -> InstalledModel? {
+        try installedModels().first { $0.id == id || $0.manifest.modelID == id }
+    }
+
+    /// Compares installed source revisions with a catalog without downloading or mutating anything.
+    public func checkForUpdates(using catalog: any ModelCatalogProvider) async throws -> [ModelUpdateCandidate] {
+        let models = try installedModels()
+        var updates: [ModelUpdateCandidate] = []
+
+        for model in models {
+            guard let repository = model.manifest.sourceRepository,
+                  let currentRevision = model.manifest.sourceRevision,
+                  !repository.isEmpty,
+                  !currentRevision.isEmpty else { continue }
+
+            let descriptors = try await catalog.search(ModelSearchRequest(query: repository, limit: 100))
+            guard let descriptor = descriptors.first(where: { $0.id == repository }),
+                  let availableRevision = descriptor.revision,
+                  availableRevision != currentRevision else { continue }
+
+            let matchingVariant = descriptor.variants.first {
+                $0.runtime == model.manifest.runtime && $0.format == model.manifest.format
+            }
+            updates.append(ModelUpdateCandidate(
+                id: model.id,
+                installedModelID: model.id,
+                sourceRepository: repository,
+                currentRevision: currentRevision,
+                availableRevision: availableRevision,
+                variant: matchingVariant
+            ))
+        }
+
+        return updates.sorted { $0.id < $1.id }
+    }
+
+    public func stagingURL(for variant: ModelVariant) throws -> URL {
+        try ensureRoot()
+        let stagingDirectory = rootURL.appendingPathComponent(".staging", isDirectory: true)
+        try FileManager.default.createDirectory(at: stagingDirectory, withIntermediateDirectories: true)
+        return stagingDirectory.appendingPathComponent(safeComponent(variant.id) + ".part")
+    }
+
+    public func install(downloadedArtifactAt artifactURL: URL, request: ModelDownloadRequest) throws -> InstalledModel {
+        try ensureRoot()
+        guard request.variant.format.requiresConversion == false else {
+            throw ArchonModelsError.unsupportedArtifact("\(request.variant.format.rawValue) requires conversion before installation.")
+        }
+        let artifactName = safeArtifactName(preferred: request.variant.name, fallback: artifactURL.lastPathComponent)
+        let manifest = ArchonModelManifest(
+            variant: request.variant,
+            modelName: request.modelName,
+            license: request.license,
+            sourceRepository: request.sourceRepository,
+            sourceRevision: request.sourceRevision
+        )
+        let normalizedManifest = manifest.withArtifactPath(artifactName)
+        let validation = ModelManifestValidator.validate(normalizedManifest, artifactAt: artifactURL)
+        guard validation.isValid else {
+            throw ArchonModelsError.invalidManifest(validation.errors)
+        }
+        return try install(
+            artifactAt: artifactURL,
+            manifest: normalizedManifest,
+            installationID: request.variant.modelID + "-" + request.variant.id
+        )
+    }
+
+    private func install(
+        artifactAt artifactURL: URL,
+        manifest: ArchonModelManifest,
+        installationID: String? = nil
+    ) throws -> InstalledModel {
+        let artifactName = safeArtifactName(preferred: manifest.artifactPath, fallback: artifactURL.lastPathComponent)
+        let normalizedManifest = manifest.withArtifactPath(artifactName)
+        let directoryName = safeComponent(installationID ?? normalizedManifest.modelID + "-" + artifactName)
+        let destination = rootURL.appendingPathComponent(directoryName, isDirectory: true)
+        let stagingDirectory = rootURL.appendingPathComponent(".install-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: stagingDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: stagingDirectory) }
+
+        try Task.checkCancellation()
+        let destinationArtifact = stagingDirectory.appendingPathComponent(artifactName)
+        try FileManager.default.copyItem(at: artifactURL, to: destinationArtifact)
+        let manifestURL = stagingDirectory.appendingPathComponent(ArchonModelManifest.filename)
+        let manifestData = try JSONEncoder.archonEncoder.encode(normalizedManifest)
+        try manifestData.write(to: manifestURL, options: .atomic)
+
+        let backup = rootURL.appendingPathComponent(".backup-" + UUID().uuidString, isDirectory: true)
+        if FileManager.default.fileExists(atPath: destination.path) {
+            try FileManager.default.moveItem(at: destination, to: backup)
+        }
+        do {
+            // Do not cross the atomic commit boundary after a caller has
+            // paused or cancelled the owning download task. Once this move
+            // succeeds, the new model is intentionally considered installed.
+            try Task.checkCancellation()
+            try FileManager.default.moveItem(at: stagingDirectory, to: destination)
+            try? FileManager.default.removeItem(at: backup)
+        } catch {
+            if FileManager.default.fileExists(atPath: backup.path), !FileManager.default.fileExists(atPath: destination.path) {
+                try? FileManager.default.moveItem(at: backup, to: destination)
+            }
+            throw error
+        }
+
+        return InstalledModel(id: directoryName, directoryURL: destination, manifest: normalizedManifest)
+    }
+
+    /// Inspects a user-selected artifact without copying or registering it.
+    public func inspectArtifact(at sourceURL: URL) throws -> ModelArtifactInspection {
+        try ModelArtifactInspector.inspect(at: sourceURL)
+    }
+
+    /// Imports a user-selected artifact. A sidecar manifest is optional for
+    /// known runnable formats; raw weights are identified and rejected as
+    /// conversion-required rather than being registered as Ready.
+    public func importArtifact(at sourceURL: URL, manifest suppliedManifest: ArchonModelManifest? = nil) throws -> InstalledModel {
+        guard FileManager.default.fileExists(atPath: sourceURL.path) else {
+            throw ArchonModelsError.unsupportedArtifact(sourceURL.path)
+        }
+        let manifest: ArchonModelManifest
+        let artifactURL: URL
+        if let suppliedManifest {
+            manifest = suppliedManifest
+            artifactURL = sourceURL
+        } else {
+            let inspection = try ModelArtifactInspector.inspect(at: sourceURL)
+            let modelID = "local/\(safeComponent(sourceURL.deletingPathExtension().lastPathComponent))"
+            manifest = inspection.makeManifest(modelID: modelID)
+            if let artifactPath = manifest.artifactPath {
+                let components = artifactPath.split(separator: "/", omittingEmptySubsequences: false)
+                guard !artifactPath.isEmpty,
+                      !artifactPath.hasPrefix("/"),
+                      components.count == 1,
+                      !components.contains(where: { $0 == "." || $0 == ".." }) else {
+                    throw ArchonModelsError.invalidManifest(["artifactPath must be a single safe relative path component."])
+                }
+                artifactURL = sourceURL.appendingPathComponent(artifactPath, isDirectory: true)
+            } else {
+                artifactURL = sourceURL
+            }
+        }
+        guard FileManager.default.fileExists(atPath: artifactURL.path) else {
+            throw ArchonModelsError.unsupportedArtifact("Manifest artifact is missing at \(artifactURL.path).")
+        }
+        if manifest.format.requiresConversion {
+            throw ArchonModelsError.unsupportedArtifact("\(manifest.format.rawValue) requires conversion before installation.")
+        }
+        let artifactName = safeArtifactName(preferred: artifactURL.lastPathComponent, fallback: "model")
+        let normalizedManifest = manifest.withArtifactPath(artifactName)
+        let validation = ModelManifestValidator.validate(normalizedManifest, artifactAt: artifactURL)
+        guard validation.isValid else { throw ArchonModelsError.invalidManifest(validation.errors) }
+        return try install(
+            artifactAt: artifactURL,
+            manifest: normalizedManifest,
+            installationID: manifest.modelID + "-" + artifactName
+        )
+    }
+
+    public func delete(modelID: String) throws {
+        try ensureRoot()
+        let matches = try FileManager.default.contentsOfDirectory(
+            at: rootURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ).filter { directory in
+            guard (try? directory.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { return false }
+            if safeComponent(modelID) == directory.lastPathComponent || modelID == directory.lastPathComponent {
+                return true
+            }
+            let manifestURL = directory.appendingPathComponent(ArchonModelManifest.filename)
+            guard let data = try? Data(contentsOf: manifestURL),
+                  let manifest = try? JSONDecoder().decode(ArchonModelManifest.self, from: data) else {
+                return false
+            }
+            return manifest.modelID == modelID
+        }
+        for match in matches {
+            try FileManager.default.removeItem(at: match)
+        }
+    }
+
+    /// Removes only Archon-created staging and backup directories, never installed models.
+    public func clearTemporaryStorage() throws {
+        try ensureRoot()
+        let temporaryPrefixes = [".staging", ".backup-", ".install-"]
+        let entries = try FileManager.default.contentsOfDirectory(at: rootURL, includingPropertiesForKeys: nil, options: [])
+        for entry in entries where temporaryPrefixes.contains(where: { entry.lastPathComponent == $0 || entry.lastPathComponent.hasPrefix($0) }) {
+            try FileManager.default.removeItem(at: entry)
+        }
+    }
+
+    public func diskUsageBytes() throws -> Int64 {
+        try installedModels().reduce(into: Int64(0)) { total, model in
+            total += directorySize(at: model.directoryURL)
+        }
+    }
+
+    private func ensureRoot() throws {
+        try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+    }
+
+    private func directorySize(at url: URL) -> Int64 {
+        guard let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.fileSizeKey], options: [.skipsHiddenFiles]) else { return 0 }
+        return enumerator.compactMap { item -> Int64? in
+            guard let item = item as? URL else { return nil }
+            return try? item.resourceValues(forKeys: [.fileSizeKey]).fileSize.map(Int64.init)
+        }.reduce(0, +)
+    }
+
+    private func safeComponent(_ value: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
+        let result = value.unicodeScalars.map { allowed.contains($0) ? Character(String($0)) : "_" }
+        return String(result).prefix(160).isEmpty ? UUID().uuidString : String(String(result).prefix(160))
+    }
+
+    private func safeArtifactName(preferred: String?, fallback: String) -> String {
+        let candidate = (preferred?.isEmpty == false ? preferred! : fallback)
+        return safeComponent(URL(fileURLWithPath: candidate).lastPathComponent)
+    }
+
+    private static func defaultRootURL() -> URL {
+        let applicationSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        return (applicationSupport ?? FileManager.default.temporaryDirectory)
+            .appendingPathComponent("Archon", isDirectory: true)
+            .appendingPathComponent("Models", isDirectory: true)
+    }
+}
+
+public actor ModelDownloadManager {
+    private let byteStreamProvider: ModelByteStreamProvider
+    private let tokenStore: (any ModelTokenStore)?
+    private let policy: ModelDownloadPolicy
+    private let licensePolicy: ModelLicensePolicy?
+    private var activeTasks: [String: Task<Void, Never>] = [:]
+    private var requests: [String: ModelDownloadRequest] = [:]
+    private var pausedIDs: Set<String> = []
+    private var cancelledIDs: Set<String> = []
+    private var backgroundJobs: [String: BackgroundDownloadJob] = [:]
+
+    public init(
+        session: URLSession = .shared,
+        tokenStore: (any ModelTokenStore)? = KeychainModelTokenStore(),
+        policy: ModelDownloadPolicy = ModelDownloadPolicy(),
+        licensePolicy: ModelLicensePolicy? = nil,
+        byteStreamProvider: ModelByteStreamProvider? = nil
+    ) {
+        if let byteStreamProvider {
+            self.byteStreamProvider = byteStreamProvider
+        } else {
+            self.byteStreamProvider = { request in
+                let (bytes, response) = try await session.bytes(for: request)
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    throw ArchonModelsError.invalidResponse
+                }
+                let stream = AsyncThrowingStream<UInt8, Error> { continuation in
+                    let task = Task {
+                        do {
+                            for try await byte in bytes {
+                                try Task.checkCancellation()
+                                continuation.yield(byte)
+                            }
+                            continuation.finish()
+                        } catch {
+                            continuation.finish(throwing: error)
+                        }
+                    }
+                    continuation.onTermination = { _ in task.cancel() }
+                }
+                return (stream, httpResponse)
+            }
+        }
+        self.tokenStore = tokenStore
+        self.policy = policy
+        self.licensePolicy = licensePolicy
+    }
+
+    public func download(
+        _ request: ModelDownloadRequest,
+        into library: ModelLibrary
+    ) throws -> AsyncThrowingStream<ModelDownloadEvent, Error> {
+        let id = request.variant.id
+        guard activeTasks[id] == nil else { throw ArchonModelsError.downloadInProgress(id) }
+        guard request.variant.downloadURL != nil ||
+            !request.variant.resources.isEmpty ||
+            !request.variant.tokenizerResources.isEmpty else {
+            throw ArchonModelsError.noDownloadURL
+        }
+
+        pausedIDs.remove(id)
+        cancelledIDs.remove(id)
+        requests[id] = request
+        let (stream, continuation) = AsyncThrowingStream<ModelDownloadEvent, Error>.makeStream()
+        continuation.yield(ModelDownloadEvent(variantID: id, state: .queued))
+        let task = Task { [weak self] in
+            guard let self else { continuation.finish(); return }
+            await self.run(request: request, library: library, continuation: continuation)
+        }
+        activeTasks[id] = task
+        return stream
+    }
+
+    /// Runs the complete model-library lifecycle on top of an OS-managed
+    /// background transfer coordinator. Each resource is transferred to the
+    /// same staging layout used by the foreground manager; verification and
+    /// atomic installation remain mandatory before `.ready` is emitted.
+    public func downloadInBackground(
+        _ request: ModelDownloadRequest,
+        into library: ModelLibrary,
+        using coordinator: ModelBackgroundTransferCoordinator
+    ) throws -> AsyncThrowingStream<ModelDownloadEvent, Error> {
+        let id = request.variant.id
+        guard activeTasks[id] == nil else { throw ArchonModelsError.downloadInProgress(id) }
+        guard request.variant.downloadURL != nil ||
+            !request.variant.resources.isEmpty ||
+            !request.variant.tokenizerResources.isEmpty else {
+            throw ArchonModelsError.noDownloadURL
+        }
+
+        pausedIDs.remove(id)
+        cancelledIDs.remove(id)
+        requests[id] = request
+        backgroundJobs[id] = BackgroundDownloadJob(coordinator: coordinator, transferIdentifiers: [])
+        let (stream, continuation) = AsyncThrowingStream<ModelDownloadEvent, Error>.makeStream()
+        continuation.yield(ModelDownloadEvent(variantID: id, state: .queued))
+        let task = Task { [weak self] in
+            guard let self else { continuation.finish(); return }
+            await self.runInBackground(request: request, library: library, continuation: continuation, coordinator: coordinator)
+        }
+        activeTasks[id] = task
+        return stream
+    }
+
+    public func pause(variantID: String) {
+        guard activeTasks[variantID] != nil else { return }
+        pausedIDs.insert(variantID)
+        if let job = backgroundJobs[variantID] {
+            let coordinator = job.coordinator
+            let transferIdentifiers = job.transferIdentifiers
+            Task {
+                for transferIdentifier in transferIdentifiers {
+                    try? await coordinator.pause(identifier: transferIdentifier)
+                }
+            }
+            return
+        }
+        activeTasks[variantID]?.cancel()
+    }
+
+    public func resume(variantID: String, into library: ModelLibrary) throws -> AsyncThrowingStream<ModelDownloadEvent, Error> {
+        guard let request = requests[variantID] else { throw ArchonModelsError.invalidModelIdentifier(variantID) }
+        return try download(request, into: library)
+    }
+
+    /// Resumes a background-library transfer after a host recreated its
+    /// coordinator. The coordinator reconnects to any OS-owned tasks before
+    /// this manager resumes verification and installation.
+    public func resumeInBackground(
+        variantID: String,
+        into library: ModelLibrary,
+        using coordinator: ModelBackgroundTransferCoordinator
+    ) async throws -> AsyncThrowingStream<ModelDownloadEvent, Error> {
+        guard let request = requests[variantID] else {
+            throw ArchonModelsError.invalidModelIdentifier(variantID)
+        }
+        _ = try await coordinator.reconnect()
+        return try downloadInBackground(request, into: library, using: coordinator)
+    }
+
+    /// Retries the last request, preserving any valid partial file for range resume.
+    public func retry(
+        variantID: String,
+        into library: ModelLibrary,
+        backoff: TimeInterval = 0
+    ) async throws -> AsyncThrowingStream<ModelDownloadEvent, Error> {
+        guard let request = requests[variantID] else { throw ArchonModelsError.invalidModelIdentifier(variantID) }
+        if backoff > 0 {
+            let bounded = min(backoff, 60)
+            try await Task.sleep(for: .seconds(bounded))
+        }
+        return try download(request, into: library)
+    }
+
+    /// Retries from an empty staging location, leaving the installed model untouched.
+    public func redownload(
+        variantID: String,
+        into library: ModelLibrary
+    ) async throws -> AsyncThrowingStream<ModelDownloadEvent, Error> {
+        guard let request = requests[variantID] else { throw ArchonModelsError.invalidModelIdentifier(variantID) }
+        let stagingURL = try await library.stagingURL(for: request.variant)
+        try? FileManager.default.removeItem(at: stagingURL)
+        return try download(request, into: library)
+    }
+
+    /// Downloads the available catalog variant for an installed model's explicit update candidate.
+    public func update(
+        _ candidate: ModelUpdateCandidate,
+        into library: ModelLibrary
+    ) async throws -> AsyncThrowingStream<ModelDownloadEvent, Error> {
+        guard let variant = candidate.variant else {
+            throw ArchonModelsError.updateUnavailable(candidate.sourceRepository)
+        }
+        guard let installed = try await library.installedModel(id: candidate.installedModelID) else {
+            throw ArchonModelsError.updateUnavailable(candidate.installedModelID)
+        }
+        let request = ModelDownloadRequest(
+            variant: variant,
+            modelName: installed.manifest.modelName,
+            license: installed.manifest.license,
+            sourceRepository: candidate.sourceRepository,
+            sourceRevision: candidate.availableRevision
+        )
+        return try download(request, into: library)
+    }
+
+    public func cancel(variantID: String) {
+        guard activeTasks[variantID] != nil else { return }
+        cancelledIDs.insert(variantID)
+        if let job = backgroundJobs[variantID] {
+            let coordinator = job.coordinator
+            let transferIdentifiers = job.transferIdentifiers
+            Task {
+                for transferIdentifier in transferIdentifiers {
+                    try? await coordinator.cancel(identifier: transferIdentifier)
+                }
+            }
+            return
+        }
+        activeTasks[variantID]?.cancel()
+    }
+
+    public func isDownloading(variantID: String) -> Bool {
+        activeTasks[variantID] != nil
+    }
+
+    private func run(
+        request: ModelDownloadRequest,
+        library: ModelLibrary,
+        continuation: AsyncThrowingStream<ModelDownloadEvent, Error>.Continuation
+    ) async {
+        let id = request.variant.id
+        defer { activeTasks[id] = nil }
+
+        do {
+            continuation.yield(ModelDownloadEvent(variantID: id, state: .resolving))
+            let stagingURL = try await library.stagingURL(for: request.variant)
+            if let licensePolicy {
+                let identifier = request.license?.identifier ?? "unknown"
+                switch licensePolicy.decision(for: request.license) {
+                case .allowed:
+                    break
+                case .confirmationRequired:
+                    throw ArchonModelsError.licenseConfirmationRequired(identifier)
+                case .denied:
+                    throw ArchonModelsError.licenseDenied(identifier)
+                }
+            }
+            if request.variant.source == .huggingFace,
+               request.variant.requiresAuthentication,
+               await tokenStore?.token(for: "huggingface.co") == nil {
+                throw ArchonModelsError.authenticationRequired("huggingface.co")
+            }
+
+            let pending = try pendingDownloads(for: request.variant)
+            let existingBytes = pending.reduce(into: Int64(0)) { total, item in
+                let target = item.relativePath.map { stagingURL.appendingPathComponent($0) } ?? stagingURL
+                total += fileSize(at: target)
+            }
+            let expectedTotal = request.variant.sizeBytes ?? pending.compactMap(\.expectedSize).reduceIfComplete()
+            if let expectedTotal,
+               let fileSystemAttributes = try? FileManager.default.attributesOfFileSystem(forPath: library.rootURL.path),
+               let freeBytes = (fileSystemAttributes[.systemFreeSize] as? NSNumber)?.int64Value,
+               max(expectedTotal - existingBytes, 0) > freeBytes {
+                throw ArchonModelsError.insufficientDiskSpace
+            }
+
+            let authorizationToken = request.variant.source == .huggingFace
+                ? await tokenStore?.token(for: "huggingface.co")
+                : nil
+            var downloadedBytes = existingBytes
+            for item in pending {
+                try Task.checkCancellation()
+                let targetURL = item.relativePath.map { stagingURL.appendingPathComponent($0) } ?? stagingURL
+                let previousFileBytes = fileSize(at: targetURL)
+                let completed = try await downloadSingleWithRetry(
+                    item,
+                    to: targetURL,
+                    completedBytesBeforeFile: downloadedBytes - fileSize(at: targetURL),
+                    totalBytes: expectedTotal,
+                    authorizationToken: authorizationToken,
+                    variantID: id,
+                    continuation: continuation
+                )
+                downloadedBytes += completed - previousFileBytes
+            }
+
+            try Task.checkCancellation()
+            if let expectedSize = request.variant.sizeBytes, expectedSize != downloadedBytes {
+                throw ArchonModelsError.sizeMismatch(expected: expectedSize, actual: downloadedBytes)
+            }
+
+            try Task.checkCancellation()
+            continuation.yield(ModelDownloadEvent(variantID: id, state: .verifying))
+            if pending.count == 1, let expectedChecksum = request.variant.sha256 {
+                let actualChecksum = try sha256(of: stagingURL)
+                guard expectedChecksum.lowercased() == actualChecksum.lowercased() else {
+                    throw ArchonModelsError.integrityCheckFailed(expected: expectedChecksum, actual: actualChecksum)
+                }
+            }
+
+            try Task.checkCancellation()
+            continuation.yield(ModelDownloadEvent(variantID: id, state: .installing))
+            let installed = try await library.install(downloadedArtifactAt: stagingURL, request: request)
+            try? FileManager.default.removeItem(at: stagingURL)
+            continuation.yield(ModelDownloadEvent(variantID: id, state: .ready(installed)))
+            continuation.finish()
+        } catch {
+            if Task.isCancelled || error is CancellationError {
+                if pausedIDs.contains(id) {
+                    continuation.yield(ModelDownloadEvent(variantID: id, state: .paused))
+                    continuation.finish()
+                    return
+                }
+                if cancelledIDs.contains(id), let url = try? await library.stagingURL(for: request.variant) {
+                    try? FileManager.default.removeItem(at: url)
+                }
+                continuation.yield(ModelDownloadEvent(variantID: id, state: .cancelled))
+                continuation.finish(throwing: ArchonModelsError.cancelled)
+            } else {
+                continuation.yield(ModelDownloadEvent(variantID: id, state: .failed(error.localizedDescription)))
+                continuation.finish(throwing: error)
+            }
+        }
+    }
+
+    private func runInBackground(
+        request: ModelDownloadRequest,
+        library: ModelLibrary,
+        continuation: AsyncThrowingStream<ModelDownloadEvent, Error>.Continuation,
+        coordinator: ModelBackgroundTransferCoordinator
+    ) async {
+        let id = request.variant.id
+        defer {
+            activeTasks[id] = nil
+            backgroundJobs[id] = nil
+        }
+
+        do {
+            continuation.yield(ModelDownloadEvent(variantID: id, state: .resolving))
+            if let licensePolicy {
+                let identifier = request.license?.identifier ?? "unknown"
+                switch licensePolicy.decision(for: request.license) {
+                case .allowed:
+                    break
+                case .confirmationRequired:
+                    throw ArchonModelsError.licenseConfirmationRequired(identifier)
+                case .denied:
+                    throw ArchonModelsError.licenseDenied(identifier)
+                }
+            }
+            if request.variant.source == .huggingFace,
+               request.variant.requiresAuthentication,
+               await tokenStore?.token(for: "huggingface.co") == nil {
+                throw ArchonModelsError.authenticationRequired("huggingface.co")
+            }
+
+            let stagingURL = try await library.stagingURL(for: request.variant)
+            let pending = try pendingDownloads(for: request.variant)
+            // Background URLSession moves completed files into the staging
+            // layout atomically. Count completed resources as they are
+            // observed below rather than treating arbitrary staging files as
+            // trusted progress.
+            let existingBytes: Int64 = 0
+            let expectedTotal = request.variant.sizeBytes ?? pending.compactMap(\.expectedSize).reduceIfComplete()
+            if let expectedTotal,
+               let fileSystemAttributes = try? FileManager.default.attributesOfFileSystem(forPath: library.rootURL.path),
+               let freeBytes = (fileSystemAttributes[.systemFreeSize] as? NSNumber)?.int64Value,
+               max(expectedTotal - existingBytes, 0) > freeBytes {
+                throw ArchonModelsError.insufficientDiskSpace
+            }
+
+            let authorizationToken = request.variant.source == .huggingFace
+                ? await tokenStore?.token(for: "huggingface.co")
+                : nil
+            var completedBytes = existingBytes
+            for (index, item) in pending.enumerated() {
+                try Task.checkCancellation()
+                if pausedIDs.contains(id) {
+                    continuation.yield(ModelDownloadEvent(variantID: id, state: .paused))
+                    continuation.finish()
+                    return
+                }
+                if cancelledIDs.contains(id) {
+                    try? FileManager.default.removeItem(at: stagingURL)
+                    continuation.yield(ModelDownloadEvent(variantID: id, state: .cancelled))
+                    continuation.finish(throwing: ArchonModelsError.cancelled)
+                    return
+                }
+
+                let targetURL = item.relativePath.map { stagingURL.appendingPathComponent($0) } ?? stagingURL
+                let transferIdentifier = "\(id)#\(index)"
+                registerBackgroundTransfer(variantID: id, transferIdentifier: transferIdentifier)
+                let transferRequest = ModelBackgroundDownloadRequest(
+                    identifier: transferIdentifier,
+                    url: item.url,
+                    destinationURL: targetURL,
+                    headers: authorizationToken.map { ["Authorization": "Bearer \($0)"] } ?? [:]
+                )
+
+                let transferRecord = try await coordinator.record(for: transferIdentifier)
+                let transferEvents: AsyncThrowingStream<ModelBackgroundTransferEvent, Error>
+                if let transferRecord,
+                   transferRecord.status == .ready,
+                   FileManager.default.fileExists(atPath: targetURL.path) {
+                    completedBytes += fileSize(at: targetURL)
+                    continue
+                } else if let transferRecord,
+                          transferRecord.status == .downloading,
+                          await coordinator.isActive(identifier: transferIdentifier) {
+                    transferEvents = try await coordinator.events(for: transferIdentifier)
+                } else if let transferRecord,
+                          transferRecord.status == .paused || transferRecord.status == .failed || transferRecord.status == .cancelled {
+                    transferEvents = try await coordinator.resume(identifier: transferIdentifier, request: transferRequest)
+                } else {
+                    transferEvents = try await coordinator.start(transferRequest)
+                }
+
+                var ready = false
+                for try await event in transferEvents {
+                    switch event.state {
+                    case .queued:
+                        continuation.yield(ModelDownloadEvent(variantID: id, state: .resolving))
+                    case .downloading(let bytesDownloaded, let totalBytes):
+                        let aggregate = completedBytes + bytesDownloaded
+                        let progress = expectedTotal.map { min(1, Double(aggregate) / Double(max($0, 1))) } ?? 0
+                        continuation.yield(ModelDownloadEvent(variantID: id, state: .downloading(
+                            progress: progress,
+                            bytesDownloaded: aggregate,
+                            totalBytes: expectedTotal ?? totalBytes.map { $0 + completedBytes }
+                        )))
+                    case .ready:
+                        ready = true
+                    case .paused:
+                        if pausedIDs.contains(id) {
+                            continuation.yield(ModelDownloadEvent(variantID: id, state: .paused))
+                            continuation.finish()
+                            return
+                        }
+                        throw ArchonModelsError.backgroundTransferFailed("Transfer paused unexpectedly.")
+                    case .cancelled:
+                        if cancelledIDs.contains(id) {
+                            try? FileManager.default.removeItem(at: stagingURL)
+                            continuation.yield(ModelDownloadEvent(variantID: id, state: .cancelled))
+                            continuation.finish(throwing: ArchonModelsError.cancelled)
+                            return
+                        }
+                        throw ArchonModelsError.backgroundTransferFailed("Transfer was cancelled unexpectedly.")
+                    case .failed(let message):
+                        throw ArchonModelsError.backgroundTransferFailed(message)
+                    }
+                }
+                guard ready, FileManager.default.fileExists(atPath: targetURL.path) else {
+                    throw ArchonModelsError.backgroundTransferFailed("Transfer completed without its staged artifact.")
+                }
+                completedBytes += fileSize(at: targetURL)
+            }
+
+            try Task.checkCancellation()
+            if let expectedSize = request.variant.sizeBytes, expectedSize != completedBytes {
+                throw ArchonModelsError.sizeMismatch(expected: expectedSize, actual: completedBytes)
+            }
+            try Task.checkCancellation()
+            continuation.yield(ModelDownloadEvent(variantID: id, state: .verifying))
+            if pending.count == 1, let expectedChecksum = request.variant.sha256 {
+                let actualChecksum = try sha256(of: stagingURL)
+                guard expectedChecksum.lowercased() == actualChecksum.lowercased() else {
+                    throw ArchonModelsError.integrityCheckFailed(expected: expectedChecksum, actual: actualChecksum)
+                }
+            }
+            try Task.checkCancellation()
+            continuation.yield(ModelDownloadEvent(variantID: id, state: .installing))
+            let installed = try await library.install(downloadedArtifactAt: stagingURL, request: request)
+            try? FileManager.default.removeItem(at: stagingURL)
+            continuation.yield(ModelDownloadEvent(variantID: id, state: .ready(installed)))
+            continuation.finish()
+        } catch {
+            if pausedIDs.contains(id) {
+                continuation.yield(ModelDownloadEvent(variantID: id, state: .paused))
+                continuation.finish()
+            } else if cancelledIDs.contains(id) {
+                if let url = try? await library.stagingURL(for: request.variant) {
+                    try? FileManager.default.removeItem(at: url)
+                }
+                continuation.yield(ModelDownloadEvent(variantID: id, state: .cancelled))
+                continuation.finish(throwing: ArchonModelsError.cancelled)
+            } else {
+                continuation.yield(ModelDownloadEvent(variantID: id, state: .failed(error.localizedDescription)))
+                continuation.finish(throwing: error)
+            }
+        }
+    }
+
+    private func registerBackgroundTransfer(variantID: String, transferIdentifier: String) {
+        guard var job = backgroundJobs[variantID] else { return }
+        if !job.transferIdentifiers.contains(transferIdentifier) {
+            job.transferIdentifiers.append(transferIdentifier)
+            backgroundJobs[variantID] = job
+        }
+    }
+
+    private func pendingDownloads(for variant: ModelVariant) throws -> [PendingModelDownload] {
+        if variant.resources.isEmpty && variant.tokenizerResources.isEmpty {
+            guard let url = variant.downloadURL else { throw ArchonModelsError.noDownloadURL }
+            return [PendingModelDownload(url: url, relativePath: nil, expectedSize: variant.sizeBytes, checksum: variant.sha256)]
+        }
+
+        var pending: [PendingModelDownload] = []
+        var paths = Set<String>()
+        for resource in variant.resources + variant.tokenizerResources {
+            guard isSafeRelativePath(resource.relativePath) else {
+                throw ArchonModelsError.invalidManifest(["Resource path is unsafe: \(resource.relativePath)"])
+            }
+            guard let url = resource.url else {
+                throw ArchonModelsError.noDownloadURL
+            }
+            guard paths.insert(resource.relativePath).inserted else {
+                throw ArchonModelsError.invalidManifest(["Resource path is duplicated: \(resource.relativePath)"])
+            }
+            pending.append(PendingModelDownload(
+                url: url,
+                relativePath: resource.relativePath,
+                expectedSize: resource.sizeBytes,
+                checksum: resource.sha256
+            ))
+        }
+
+        // A package may expose a primary download URL in addition to resources.
+        // Keep it in the package when the resource list does not already name it.
+        if let url = variant.downloadURL,
+           let filename = URLComponents(url: url, resolvingAgainstBaseURL: false)?.path.split(separator: "/").last.map(String.init),
+           isSafeRelativePath(filename),
+           !paths.contains(filename) {
+            pending.insert(PendingModelDownload(url: url, relativePath: filename, expectedSize: nil, checksum: nil), at: 0)
+        }
+        guard !pending.isEmpty else { throw ArchonModelsError.noDownloadURL }
+        return pending
+    }
+
+    private func downloadSingle(
+        _ pending: PendingModelDownload,
+        to targetURL: URL,
+        completedBytesBeforeFile: Int64,
+        totalBytes: Int64?,
+        authorizationToken: String?,
+        variantID: String,
+        continuation: AsyncThrowingStream<ModelDownloadEvent, Error>.Continuation
+    ) async throws -> Int64 {
+        let fileManager = FileManager.default
+        try fileManager.createDirectory(at: targetURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        var currentBytes = fileSize(at: targetURL)
+
+        // A pause can happen after a resource has completed but before the
+        // package task advances to the next resource. Avoid asking a server
+        // for an invalid Range starting exactly at EOF; verify the local file
+        // and resume from the next incomplete resource instead.
+        if let expectedSize = pending.expectedSize, currentBytes == expectedSize {
+            if let expectedChecksum = pending.checksum {
+                let actualChecksum = try sha256(of: targetURL)
+                if expectedChecksum.lowercased() == actualChecksum.lowercased() {
+                    return currentBytes
+                }
+            } else {
+                return currentBytes
+            }
+            try handleRemoval(of: targetURL)
+            currentBytes = 0
+        } else if let expectedSize = pending.expectedSize, currentBytes > expectedSize {
+            try handleRemoval(of: targetURL)
+            currentBytes = 0
+        }
+
+        var request = URLRequest(url: pending.url)
+        if let authorizationToken {
+            request.setValue("Bearer \(authorizationToken)", forHTTPHeaderField: "Authorization")
+        }
+        if currentBytes > 0 {
+            request.setValue("bytes=\(currentBytes)-", forHTTPHeaderField: "Range")
+        }
+
+        let (bytes, response) = try await byteStreamProvider(request)
+        guard (200...299).contains(response.statusCode) else {
+            throw ArchonModelsError.httpFailure(statusCode: response.statusCode)
+        }
+
+        // Some servers ignore Range. Never append a full 200 response to a
+        // partial file or the resulting artifact will fail closed at validation.
+        let isResumed = currentBytes > 0 && response.statusCode == 206
+        if isResumed {
+            guard let contentRange = response.value(forHTTPHeaderField: "Content-Range"),
+                  contentRangeStart(contentRange) == currentBytes else {
+                throw ArchonModelsError.invalidResponse
+            }
+        }
+        if !fileManager.fileExists(atPath: targetURL.path) {
+            fileManager.createFile(atPath: targetURL.path, contents: nil)
+        }
+        guard let handle = try? FileHandle(forWritingTo: targetURL) else { throw ArchonModelsError.invalidResponse }
+        if !isResumed {
+            currentBytes = 0
+            try handle.truncate(atOffset: 0)
+        }
+        try handle.seekToEnd()
+        let responseLength = response.expectedContentLength > 0 ? response.expectedContentLength : nil
+        let inferredTotal = totalBytes ?? responseLength.map { $0 + completedBytesBeforeFile + currentBytes }
+        var buffer = Data()
+        buffer.reserveCapacity(64 * 1024)
+        var reportedBytes = currentBytes
+
+        do {
+            for try await byte in bytes {
+                try Task.checkCancellation()
+                buffer.append(byte)
+                if buffer.count >= 64 * 1024 {
+                    try handle.write(contentsOf: buffer)
+                    reportedBytes += Int64(buffer.count)
+                    buffer.removeAll(keepingCapacity: true)
+                    let aggregate = completedBytesBeforeFile + reportedBytes
+                    let progress = inferredTotal.map { min(1, Double(aggregate) / Double(max($0, 1))) } ?? 0
+                    continuation.yield(ModelDownloadEvent(variantID: variantID, state: .downloading(progress: progress, bytesDownloaded: aggregate, totalBytes: inferredTotal)))
+                }
+            }
+            if !buffer.isEmpty {
+                try handle.write(contentsOf: buffer)
+                reportedBytes += Int64(buffer.count)
+            }
+            try handle.close()
+
+            let aggregate = completedBytesBeforeFile + reportedBytes
+            let progress = inferredTotal.map { min(1, Double(aggregate) / Double(max($0, 1))) } ?? 0
+            continuation.yield(ModelDownloadEvent(variantID: variantID, state: .downloading(
+                progress: progress,
+                bytesDownloaded: aggregate,
+                totalBytes: inferredTotal
+            )))
+        } catch {
+            try? handle.close()
+            throw error
+        }
+
+        if let expectedSize = pending.expectedSize, expectedSize != reportedBytes {
+            throw ArchonModelsError.sizeMismatch(expected: expectedSize, actual: reportedBytes)
+        }
+        if let expectedChecksum = pending.checksum {
+            let actualChecksum = try sha256(of: targetURL)
+            guard expectedChecksum.lowercased() == actualChecksum.lowercased() else {
+                throw ArchonModelsError.integrityCheckFailed(expected: expectedChecksum, actual: actualChecksum)
+            }
+        }
+        return reportedBytes
+    }
+
+    private func downloadSingleWithRetry(
+        _ pending: PendingModelDownload,
+        to targetURL: URL,
+        completedBytesBeforeFile: Int64,
+        totalBytes: Int64?,
+        authorizationToken: String?,
+        variantID: String,
+        continuation: AsyncThrowingStream<ModelDownloadEvent, Error>.Continuation
+    ) async throws -> Int64 {
+        var attempt = 0
+        while true {
+            do {
+                return try await downloadSingle(
+                    pending,
+                    to: targetURL,
+                    completedBytesBeforeFile: completedBytesBeforeFile,
+                    totalBytes: totalBytes,
+                    authorizationToken: authorizationToken,
+                    variantID: variantID,
+                    continuation: continuation
+                )
+            } catch {
+                attempt += 1
+                guard attempt < policy.maxAttempts,
+                      shouldRetry(error),
+                      !Task.isCancelled else {
+                    throw error
+                }
+                let exponent = pow(2, Double(attempt - 1))
+                let delay = min(policy.maximumBackoff, policy.initialBackoff * exponent)
+                if delay > 0 {
+                    try await Task.sleep(for: .seconds(delay))
+                }
+            }
+        }
+    }
+
+    private func fileSize(at url: URL) -> Int64 {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = (attributes[.size] as? NSNumber)?.int64Value else { return 0 }
+        return size
+    }
+
+    private func isSafeRelativePath(_ path: String) -> Bool {
+        !path.isEmpty && !path.hasPrefix("/") &&
+            !path.split(separator: "/", omittingEmptySubsequences: false).contains(where: { $0.isEmpty || $0 == "." || $0 == ".." })
+    }
+
+    private func sha256(of url: URL) throws -> String {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { throw ArchonModelsError.invalidResponse }
+        defer { try? handle.close() }
+        var digest = SHA256()
+        while let data = try handle.read(upToCount: 1024 * 1024), !data.isEmpty {
+            digest.update(data: data)
+        }
+        return digest.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func shouldRetry(_ error: Error) -> Bool {
+        if error is CancellationError || Task.isCancelled { return false }
+        if let error = error as? URLError { return error.code != .cancelled }
+        if case let ArchonModelsError.httpFailure(statusCode) = error {
+            return statusCode == 408 || statusCode == 425 || statusCode == 429 || (500...599).contains(statusCode)
+        }
+        return false
+    }
+
+    private func contentRangeStart(_ value: String) -> Int64? {
+        let components = value.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+        guard components.count == 2, components[0].lowercased() == "bytes" else { return nil }
+        guard let range = components[1].split(separator: "/", maxSplits: 1, omittingEmptySubsequences: true).first else {
+            return nil
+        }
+        return Int64(range.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: true).first ?? "")
+    }
+
+    private func handleRemoval(of url: URL) throws {
+        try FileManager.default.removeItem(at: url)
+    }
+}
+
+private extension Array where Element == Int64 {
+    func reduceIfComplete() -> Int64? {
+        isEmpty ? nil : reduce(0, +)
+    }
+}
+
+private extension JSONEncoder {
+    static var archonEncoder: JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        return encoder
+    }
+}
