@@ -49,8 +49,13 @@ extension ArchonSearch {
     ) async throws -> [SearchResult] {
         let startTime = Date()
         let urls = try await discoveryEngine.search(query: query, source: source)
-        let targetURLs = Array(urls.prefix(maxResults))
+        let targetURLs = Array(urls.prefix(min(max(maxResults, 0), 100)))
         guard !targetURLs.isEmpty else { return [] }
+        if let latency, latency <= Date().timeIntervalSince(startTime) {
+            return []
+        }
+        let boundedSnippetCharacters = min(max(maxSnippetCharacters, 0), SearchURLPolicy.maxResponseBytes)
+        let boundedHighlightCount = min(max(maxHighlights, 0), 100)
         
         var results = Array<SearchResult?>(repeating: nil, count: targetURLs.count)
         let core = semanticCore
@@ -58,24 +63,46 @@ extension ArchonSearch {
         
         switch livecrawl {
         case .fast:
-            try await withThrowingTaskGroup(of: IndexedSearchResult?.self) { group in
+            try await withThrowingTaskGroup(of: IndexedSearchEvent.self) { group in
                 for (index, url) in targetURLs.enumerated() {
                     group.addTask {
                         do {
                             let (title, text, _) = try await HTMLContentExtractor.fetchStaticPage(url: url)
-                            let snippet = try await core.extractRelevantContext(from: text, query: q, maxCharacters: maxSnippetCharacters)
-                            let highlightContext = try await core.extractRelevantContext(from: text, query: q, maxCharacters: maxHighlights * 300)
-                            let highlights = HTMLContentExtractor.highlights(from: highlightContext, maxHighlights: maxHighlights)
-                            return IndexedSearchResult(index: index, result: SearchResult(url: url, title: title, snippet: snippet, highlights: highlights))
+                            let snippet = try await core.extractRelevantContext(from: text, query: q, maxCharacters: boundedSnippetCharacters)
+                            let highlightContext = try await core.extractRelevantContext(from: text, query: q, maxCharacters: boundedHighlightCount * 300)
+                            let highlights = HTMLContentExtractor.highlights(from: highlightContext, maxHighlights: boundedHighlightCount)
+                            return .completed(IndexedSearchResult(index: index, result: SearchResult(url: url, title: title, snippet: snippet, highlights: highlights)))
+                        } catch is CancellationError {
+                            throw CancellationError()
                         } catch {
-                            return nil
+                            return .completed(nil)
                         }
                     }
                 }
-                for try await value in group {
-                    if let value = value { results[value.index] = value.result }
-                    if let latency = latency, Date().timeIntervalSince(startTime) >= latency {
-                        break
+                if let latency {
+                    let remaining = max(0, latency - Date().timeIntervalSince(startTime))
+                    group.addTask {
+                        do {
+                            try await Task.sleep(for: .seconds(remaining))
+                            return .deadline
+                        } catch {
+                            return .completed(nil)
+                        }
+                    }
+                }
+                var completedPages = 0
+                while let event = try await group.next() {
+                    switch event {
+                    case .completed(let value):
+                        completedPages += 1
+                        if let value { results[value.index] = value.result }
+                        if completedPages == targetURLs.count {
+                            group.cancelAll()
+                            return
+                        }
+                    case .deadline:
+                        group.cancelAll()
+                        return
                     }
                 }
             }
@@ -85,9 +112,9 @@ extension ArchonSearch {
                 if let latency = latency, Date().timeIntervalSince(startTime) >= latency { break }
                 do {
                     let scrape = try await scraper.scrape(url: url, configuration: scrapeConfig)
-                    let snippet = try await core.extractRelevantContext(from: scrape.text, query: q, maxCharacters: maxSnippetCharacters)
-                    let highlightContext = try await core.extractRelevantContext(from: scrape.text, query: q, maxCharacters: maxHighlights * 300)
-                    let highlights = HTMLContentExtractor.highlights(from: highlightContext, maxHighlights: maxHighlights)
+                    let snippet = try await core.extractRelevantContext(from: scrape.text, query: q, maxCharacters: boundedSnippetCharacters)
+                    let highlightContext = try await core.extractRelevantContext(from: scrape.text, query: q, maxCharacters: boundedHighlightCount * 300)
+                    let highlights = HTMLContentExtractor.highlights(from: highlightContext, maxHighlights: boundedHighlightCount)
                     results[index] = SearchResult(url: url, title: scrape.title, snippet: snippet, highlights: highlights)
                 } catch {
                     // Skip failed full-rendered pages.
@@ -102,4 +129,9 @@ extension ArchonSearch {
 private struct IndexedSearchResult: Sendable {
     let index: Int
     let result: SearchResult
+}
+
+private enum IndexedSearchEvent: Sendable {
+    case completed(IndexedSearchResult?)
+    case deadline
 }

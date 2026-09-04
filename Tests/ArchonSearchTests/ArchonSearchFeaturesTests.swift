@@ -78,6 +78,59 @@ struct ArchonSearchFeaturesTests {
         #expect(firstContent.markdown.localizedCaseInsensitiveContains("SwiftData") == true)
         #expect(firstContent.highlights.count <= 2)
     }
+
+    @Test("Search and contents honor an already-expired latency budget")
+    func expiredLatencyBudgetReturnsWithoutEnrichment() async throws {
+        let tempDir = try makeTempHTMLDirectory(
+            fileName: "budget.md",
+            content: "<html><head><title>Budget</title></head><body><p>Budget test content.</p></body></html>"
+        )
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let engine = makeEngine()
+        let searchResults = try await engine.search(
+            query: "budget",
+            source: .localWorkspace(directoryPath: tempDir.path),
+            maxResults: 1,
+            livecrawl: .fast,
+            latency: 0
+        )
+        let contentResults = try await engine.contents(
+            query: "budget",
+            source: .localWorkspace(directoryPath: tempDir.path),
+            maxPages: 1,
+            livecrawl: .fast,
+            timeout: 0
+        )
+
+        #expect(searchResults.isEmpty)
+        #expect(contentResults.isEmpty)
+    }
+
+    @Test("Search clamps a negative result limit instead of trapping")
+    func negativeSearchLimitIsEmpty() async throws {
+        let tempDir = try makeTempHTMLDirectory(fileName: "bounded.md", content: "bounded search content")
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let emptyResults = try await makeEngine().search(
+            query: "bounded",
+            source: .localWorkspace(directoryPath: tempDir.path),
+            maxResults: -1,
+            livecrawl: .fast
+        )
+        let boundedResults = try await makeEngine().search(
+            query: "bounded",
+            source: .localWorkspace(directoryPath: tempDir.path),
+            maxResults: 1,
+            maxSnippetCharacters: -1,
+            maxHighlights: -1,
+            livecrawl: .fast
+        )
+
+        #expect(emptyResults.isEmpty)
+        #expect(boundedResults.count == 1)
+        #expect(boundedResults[0].highlights.isEmpty)
+    }
     
     @Test("Deep search runs multi-step workflow and returns structured answer")
     func deepSearchMultiStep() async throws {

@@ -42,7 +42,9 @@ public struct ModelArtifactInspection: Codable, Equatable, Sendable {
 
     public var requiresConversion: Bool { format.requiresConversion }
     public var isRunnable: Bool {
-        !requiresConversion && runtime != .unknown && !(manifest?.isExperimental ?? false)
+        !requiresConversion && runtime != .unknown &&
+            (format.directRuntime == nil || format.directRuntime == runtime) &&
+            !(manifest?.isExperimental ?? false)
     }
 
     /// Creates a manifest for an artifact that has no sidecar manifest. The

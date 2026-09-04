@@ -17,6 +17,18 @@ public enum ArchonModelFormat: String, Codable, CaseIterable, Sendable {
         case .gguf, .safetensors, .transformers, .unknown: true
         }
     }
+
+    /// The runtime contract for directly executable artifact formats.
+    /// Conversion-required source formats intentionally return nil: their
+    /// eventual runtime must be declared by the conversion output rather than
+    /// guessed from the input weights.
+    public var directRuntime: ArchonModelRuntime? {
+        switch self {
+        case .aimodel, .coreAIBundle: .coreAI
+        case .mlx: .mlx
+        case .gguf, .safetensors, .transformers, .unknown: nil
+        }
+    }
 }
 
 public enum ArchonModelSource: String, Codable, CaseIterable, Sendable {
@@ -766,6 +778,14 @@ public enum ModelCompatibilityAnalyzer {
             )
         }
 
+        if let expectedRuntime = variant.format.directRuntime, variant.runtime != expectedRuntime {
+            return ModelCompatibility(
+                status: .unsupportedFormat,
+                fit: .cannotRun,
+                reasons: ["The \(variant.format.rawValue) artifact must declare the \(expectedRuntime.rawValue) runtime; Archon will not reinterpret it through \(variant.runtime.rawValue)."]
+            )
+        }
+
         if variant.isExperimental {
             return ModelCompatibility(
                 status: .experimental,
@@ -1268,6 +1288,9 @@ public enum ModelManifestValidator {
         }
         if manifest.format.requiresConversion {
             errors.append("\(manifest.format.rawValue) requires conversion before it can be packaged.")
+        }
+        if let expectedRuntime = manifest.format.directRuntime, manifest.runtime != expectedRuntime {
+            errors.append("The \(manifest.format.rawValue) artifact must declare the \(expectedRuntime.rawValue) runtime.")
         }
         if manifest.isExperimental {
             warnings.append("This artifact is Experimental until runtime, output, and device validation have passed.")

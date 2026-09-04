@@ -552,7 +552,23 @@ public actor ModelLibrary {
         let artifactURL: URL
         if let suppliedManifest {
             manifest = suppliedManifest
-            artifactURL = sourceURL
+            if let artifactPath = suppliedManifest.artifactPath {
+                let components = artifactPath.split(separator: "/", omittingEmptySubsequences: false)
+                guard !artifactPath.isEmpty,
+                      !artifactPath.hasPrefix("/"),
+                      components.count == 1,
+                      !components.contains(where: { $0 == "." || $0 == ".." }) else {
+                    throw ArchonModelsError.invalidManifest(["artifactPath must be a single safe relative path component."])
+                }
+                var sourceIsDirectory: ObjCBool = false
+                guard FileManager.default.fileExists(atPath: sourceURL.path, isDirectory: &sourceIsDirectory),
+                      sourceIsDirectory.boolValue else {
+                    throw ArchonModelsError.invalidManifest(["A manifest artifactPath requires a package directory as the import source."])
+                }
+                artifactURL = sourceURL.appendingPathComponent(artifactPath, isDirectory: true)
+            } else {
+                artifactURL = sourceURL
+            }
         } else {
             let inspection = try ModelArtifactInspector.inspect(at: sourceURL)
             let modelID = "local/\(safeComponent(sourceURL.deletingPathExtension().lastPathComponent))"

@@ -14,6 +14,10 @@ extension ArchonSearch {
         scrapeConfig: ScrapeConfiguration = ScrapeConfiguration(),
         timeout: TimeInterval? = nil
     ) async throws -> ListBuildingOutput<T> {
+        guard let queueActor else {
+            throw SearchError.initializationFailed(reason: initializationFailure ?? "The crawl store could not be initialized.")
+        }
+
         let startTime = Date()
         let seedURLs = try await discoveryEngine.search(query: query, source: source)
         guard !seedURLs.isEmpty else { throw SearchError.noResultsFound }

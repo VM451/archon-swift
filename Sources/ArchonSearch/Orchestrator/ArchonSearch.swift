@@ -7,8 +7,9 @@ public final class ArchonSearch: Sendable {
     internal let discoveryEngine: DiscoveryEngine
     internal let semanticCore: ArchonSemanticCore
     internal let structuredExtractionHandler: StructuredExtractionHandler?
-    internal let modelContainer: ModelContainer
-    internal let queueActor: FrontierQueueActor
+    internal let modelContainer: ModelContainer?
+    internal let queueActor: FrontierQueueActor?
+    internal let initializationFailure: String?
     
     /// Initializes a new ArchonSearch instance.
     /// By default, initializes an in-memory SwiftData database for crawling.
@@ -17,15 +18,20 @@ public final class ArchonSearch: Sendable {
         self.semanticCore = ArchonSemanticCore(structuredExtractionHandler: structuredExtractionHandler)
         self.structuredExtractionHandler = structuredExtractionHandler
         
+        let container: ModelContainer?
+        let initializationFailure: String?
         do {
             let schema = Schema([CrawlNode.self, ScrapedPage.self])
             let config = ModelConfiguration(isStoredInMemoryOnly: true)
-            let container = try ModelContainer(for: schema, configurations: [config])
-            self.modelContainer = container
-            self.queueActor = FrontierQueueActor(modelContainer: container)
+            container = try ModelContainer(for: schema, configurations: [config])
+            initializationFailure = nil
         } catch {
-            fatalError("Failed to initialize SwiftData ModelContainer: \(error)")
+            container = nil
+            initializationFailure = String(describing: error)
         }
+        self.modelContainer = container
+        self.queueActor = container.map { FrontierQueueActor(modelContainer: $0) }
+        self.initializationFailure = initializationFailure
     }
     
     /// Runs an autonomous, stealth, on-device search and structured information extraction.
@@ -46,12 +52,20 @@ public final class ArchonSearch: Sendable {
         deepResearchDepth: Int = 0,
         timeout: TimeInterval? = nil
     ) async throws -> ResearchOutput<T> {
+        guard let queueActor else {
+            throw SearchError.initializationFailed(reason: initializationFailure ?? "The crawl store could not be initialized.")
+        }
+
         let startTime = Date()
         // 1. Discover initial URLs
         let seedURLs = try await discoveryEngine.search(query: query, source: source)
         
         // 2. Enqueue discovered URLs into background SwiftData crawl queue
         try await queueActor.enqueue(urls: seedURLs, priority: 10, parentURLString: nil)
+        var depthByURL = [String: Int]()
+        for seedURL in seedURLs {
+            depthByURL[seedURL.absoluteString] = 0
+        }
         
         var firstResult: T?
         var pagesScraped = 0
@@ -75,6 +89,7 @@ public final class ArchonSearch: Sendable {
             }
             
             let urlString = nextURL.absoluteString
+            let currentDepth = depthByURL[urlString] ?? 0
             
             do {
                 // Scrape page on MainActor
@@ -104,9 +119,14 @@ public final class ArchonSearch: Sendable {
                 scrapedPagesData.append(ScrapedPageData(url: nextURL, text: scrapeResult.text))
                 
                 // Deep Research: Harvest relevant internal sub-links from markdown text
-                if deepResearchDepth > 0 {
+                if currentDepth < max(deepResearchDepth, 0) {
                     let harvestedURLs = Array(harvestURLs(from: scrapeResult.text, currentURL: nextURL).prefix(100))
                     if !harvestedURLs.isEmpty {
+                        for harvestedURL in harvestedURLs {
+                            if depthByURL[harvestedURL.absoluteString] == nil {
+                                depthByURL[harvestedURL.absoluteString] = currentDepth + 1
+                            }
+                        }
                         // Enqueue sub-links with lower priority and set parent node
                         try await queueActor.enqueue(urls: harvestedURLs, priority: 5, parentURLString: urlString)
                     }
@@ -233,6 +253,7 @@ public enum SearchError: Error, Sendable, Codable, CustomStringConvertible {
     case rateLimited(urlString: String, retryAfter: TimeInterval?)
     case extractionFailed(reason: String)
     case networkFailure(urlString: String, statusCode: Int)
+    case initializationFailed(reason: String)
     case timeoutBudgetExceeded
     case noResultsFound
     
@@ -246,6 +267,8 @@ public enum SearchError: Error, Sendable, Codable, CustomStringConvertible {
             return "ExtractionFailed: Struct extraction failed. Reason: \(reason)"
         case .networkFailure(let urlString, let statusCode):
             return "NetworkFailure: HTTP \(statusCode) for URL: \(urlString)"
+        case .initializationFailed(let reason):
+            return "InitializationFailed: The crawl store could not be initialized. Reason: \(reason)"
         case .timeoutBudgetExceeded:
             return "TimeoutBudgetExceeded: Overall crawl timeout budget reached."
         case .noResultsFound:

@@ -178,6 +178,28 @@ struct ArchonModelsTests {
         #expect(result.canLoad)
     }
 
+    @Test("Direct artifact formats cannot claim a different runtime")
+    func rejectsMismatchedDirectArtifactRuntime() {
+        let variant = ModelVariant(
+            id: "mismatched-coreai",
+            name: "model.aimodel",
+            modelID: "example/mismatch",
+            source: .localImport,
+            format: .aimodel,
+            runtime: .mlx,
+            estimatedMemoryBytes: 100
+        )
+
+        let result = ModelCompatibilityAnalyzer.analyze(variant: variant, device: device)
+
+        #expect(result.status == .unsupportedFormat)
+        #expect(result.canLoad == false)
+
+        let manifest = ArchonModelManifest(variant: variant, modelName: variant.name)
+        let report = ModelManifestValidator.validate(manifest)
+        #expect(report.errors.contains { $0.contains("must declare the coreAI runtime") })
+    }
+
     @Test("Experimental Core AI exports remain visibly blocked until validation")
     func blocksExperimentalCoreAIExport() throws {
         let variant = ModelVariant(
@@ -1628,6 +1650,29 @@ struct ArchonModelsTests {
         #expect(installed.manifest.modelID == "apple/example")
         #expect(installed.artifactURL.lastPathComponent == "model.aimodel")
         #expect(try await library.installedModels().count == 1)
+    }
+
+    @Test("Supplied manifests resolve their artifact path from a package directory")
+    func importsSuppliedPackageManifest() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("archon-supplied-package-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let artifact = root.appendingPathComponent("model.aimodel")
+        try Data("model".utf8).write(to: artifact)
+
+        let manifest = ArchonModelManifest(
+            modelID: "apple/supplied",
+            modelName: "Supplied Core AI",
+            runtime: .coreAI,
+            format: .aimodel,
+            artifactPath: artifact.lastPathComponent,
+            modelSizeBytes: 5
+        )
+        let library = ModelLibrary(rootURL: root.appendingPathComponent("library"))
+        let installed = try await library.importArtifact(at: root, manifest: manifest)
+
+        #expect(installed.artifactURL.lastPathComponent == "model.aimodel")
+        #expect(String(data: try Data(contentsOf: installed.artifactURL), encoding: .utf8) == "model")
     }
 
     @Test("Model library reports newer catalog revisions without downloading them")
