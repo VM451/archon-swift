@@ -978,6 +978,51 @@ struct ArchonModelsTests {
         #expect(replacementEvent?.state == .downloading(bytesDownloaded: 128, totalBytes: 256))
     }
 
+    @Test("Cancelling a background download consumer cancels the manager job")
+    func cancelsBackgroundDownloadWhenEventConsumerStops() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("archon-background-download-cancel-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let identifier = "background-download-cancel"
+        let variant = ModelVariant(
+            id: identifier,
+            name: "model.aimodel",
+            modelID: "example/\(identifier)",
+            source: .directURL,
+            downloadURL: URL(string: "https://models.example.test/model.aimodel"),
+            format: .aimodel,
+            runtime: .coreAI,
+            sizeBytes: 1
+        )
+        let manager = ModelDownloadManager(
+            tokenStore: nil,
+            policy: ModelDownloadPolicy(maxAttempts: 1, initialBackoff: 0)
+        )
+        let coordinator = ModelBackgroundTransferCoordinator(
+            sessionIdentifier: "com.archon.tests.background-download-cancel.\(UUID().uuidString)"
+        )
+        let events = try await manager.downloadInBackground(
+            ModelDownloadRequest(variant: variant, modelName: "Background Cancelled"),
+            into: ModelLibrary(rootURL: root.appendingPathComponent("library")),
+            using: coordinator
+        )
+        let consumer = Task {
+            do {
+                for try await _ in events {}
+            } catch {
+                // Cancellation is asserted through the manager state below.
+            }
+        }
+
+        try await Task.sleep(for: .milliseconds(50))
+        consumer.cancel()
+        _ = await consumer.result
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(await manager.isDownloading(variantID: identifier) == false)
+        try? await coordinator.cancel(identifier: "\(identifier)#0")
+    }
+
     @Test("Model downloads retry transient HTTP failures with bounded backoff")
     func retriesTransientDownloadFailure() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("archon-retry-(UUID().uuidString)")
