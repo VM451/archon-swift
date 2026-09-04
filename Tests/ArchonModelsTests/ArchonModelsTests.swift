@@ -400,7 +400,7 @@ struct ArchonModelsTests {
           "gated": false,
           "private": false,
           "sha": "immutable-revision",
-          "cardData": {"license": "apache-2.0", "language": ["en", "zh"]},
+          "cardData": {"license": "apache-2.0", "license_link": "https://example.com/license", "language": ["en", "zh"]},
           "siblings": [
             {"rfilename": "qwen.safetensors", "size": 100},
             {"rfilename": "pytorch_model.bin", "size": 110},
@@ -418,6 +418,7 @@ struct ArchonModelsTests {
         let model = try #require(models.first)
 
         #expect(model.license?.identifier == "apache-2.0")
+        #expect(model.licenseURL == URL(string: "https://example.com/license"))
         #expect(model.supportedLanguages == ["en", "zh"])
         #expect(model.variants.map(\.format) == [.safetensors, .transformers, .aimodel])
         #expect(model.variants.last?.runtime == .coreAI)

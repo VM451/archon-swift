@@ -224,6 +224,10 @@ public struct ModelDescriptor: Codable, Equatable, Sendable, Identifiable {
     public let supportedLanguages: [String]
     public let variants: [ModelVariant]
 
+    /// Convenience access to the declared license URL without requiring
+    /// callers to unwrap the full license metadata value.
+    public var licenseURL: URL? { license?.url }
+
     public init(
         id: String,
         name: String,
