@@ -14,7 +14,8 @@ public enum OnDeviceBackend: String, Codable, Equatable, Sendable {
 
 /// Runtime preference when multiple on-device engines are available.
 public enum OnDeviceRuntimePreference: String, Codable, Equatable, Sendable {
-    /// Automatically prefers Apple Foundation Model on eligible devices, otherwise Core AI if available, falling back to MLX.
+    /// Automatically prefers Apple Foundation Model on eligible devices and otherwise uses MLX for curated open-weight variants.
+    /// Core AI requires an explicit Core AI model source or runtime preference because a Hugging Face model ID is not proof of a compatible export.
     case auto
 
     /// Prefers Apple's native Core AI runtime for custom models on the Neural Engine.
@@ -230,7 +231,7 @@ public final class OnDeviceProvider: LLMProvider, @unchecked Sendable {
                 preference: preference
             )
 
-            if runtimePref == .preferCoreAI || (runtimePref == .auto && hardwareProfile.isCoreAISupported) {
+            if runtimePref == .preferCoreAI {
                 return (CoreAIProvider(variant: variant), .coreAI, variant)
             } else {
                 return (MLXLocalProvider(variant: variant), .mlx, variant)
