@@ -938,6 +938,46 @@ struct ArchonModelsTests {
         await transfer.finishCurrent()
     }
 
+    @Test("Cancelling a background event consumer detaches only that observer")
+    func cancelsBackgroundEventConsumer() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("archon-background-event-cancel-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let identifier = "background-event-cancel"
+        let request = ModelBackgroundDownloadRequest(
+            identifier: identifier,
+            url: URL(string: "https://models.example.test/model.aimodel")!,
+            destinationURL: root.appendingPathComponent("model.aimodel")
+        )
+        let store = InMemoryModelBackgroundDownloadStore()
+        try await store.save(ModelBackgroundDownloadRecord(
+            request: request,
+            status: .downloading,
+            bytesDownloaded: 128,
+            totalBytes: 256
+        ))
+        let coordinator = ModelBackgroundTransferCoordinator(
+            sessionIdentifier: "com.archon.tests.background-event-cancel.\(UUID().uuidString)",
+            store: store
+        )
+
+        let events = try await coordinator.events(for: identifier)
+        let consumer = Task {
+            do {
+                for try await _ in events {}
+            } catch {
+                Issue.record("Unexpected background event stream failure: \(error)")
+            }
+        }
+        consumer.cancel()
+        _ = await consumer.result
+
+        let replacementEvents = try await coordinator.events(for: identifier)
+        var iterator = replacementEvents.makeAsyncIterator()
+        let replacementEvent = try await iterator.next()
+        #expect(replacementEvent?.state == .downloading(bytesDownloaded: 128, totalBytes: 256))
+    }
+
     @Test("Model downloads retry transient HTTP failures with bounded backoff")
     func retriesTransientDownloadFailure() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("archon-retry-(UUID().uuidString)")

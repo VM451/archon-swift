@@ -331,6 +331,7 @@ public actor ModelBackgroundTransferCoordinator {
     private var taskIdentifiers: [String: Int] = [:]
     private var identifiersByTask: [Int: String] = [:]
     private var continuations: [String: AsyncThrowingStream<ModelBackgroundTransferEvent, Error>.Continuation] = [:]
+    private var continuationTokens: [String: UUID] = [:]
     private var pauseRequested: Set<String> = []
     private var cancelRequested: Set<String> = []
     private var finishedTaskIdentifiers: Set<Int> = []
@@ -423,7 +424,14 @@ public actor ModelBackgroundTransferCoordinator {
             throw ModelBackgroundTransferError.alreadyActive(identifier)
         }
         let (stream, continuation) = AsyncThrowingStream<ModelBackgroundTransferEvent, Error>.makeStream()
+        let continuationToken = UUID()
+        continuation.onTermination = { [weak self] _ in
+            Task {
+                await self?.removeContinuation(for: identifier, token: continuationToken)
+            }
+        }
         continuations[identifier] = continuation
+        continuationTokens[identifier] = continuationToken
         if taskIdentifiers[identifier] == nil {
             switch record.status {
             case .queued:
@@ -436,19 +444,19 @@ public actor ModelBackgroundTransferCoordinator {
             case .paused:
                 continuation.yield(.init(identifier: identifier, state: .paused))
                 continuation.finish()
-                continuations[identifier] = nil
+                clearContinuation(for: identifier)
             case .ready:
                 continuation.yield(.init(identifier: identifier, state: .ready(record.request.destinationURL)))
                 continuation.finish()
-                continuations[identifier] = nil
+                clearContinuation(for: identifier)
             case .failed:
                 continuation.yield(.init(identifier: identifier, state: .failed(record.lastError ?? "Background download failed.")))
                 continuation.finish()
-                continuations[identifier] = nil
+                clearContinuation(for: identifier)
             case .cancelled:
                 continuation.yield(.init(identifier: identifier, state: .cancelled))
                 continuation.finish()
-                continuations[identifier] = nil
+                clearContinuation(for: identifier)
             }
         } else {
             switch record.status {
@@ -499,6 +507,12 @@ public actor ModelBackgroundTransferCoordinator {
         resumeData: Data?
     ) async throws -> AsyncThrowingStream<ModelBackgroundTransferEvent, Error> {
         let (stream, continuation) = AsyncThrowingStream<ModelBackgroundTransferEvent, Error>.makeStream()
+        let continuationToken = UUID()
+        continuation.onTermination = { [weak self] _ in
+            Task {
+                await self?.removeContinuation(for: request.identifier, token: continuationToken)
+            }
+        }
         let task: URLSessionDownloadTask
         if let resumeData {
             task = session.downloadTask(withResumeData: resumeData)
@@ -513,6 +527,7 @@ public actor ModelBackgroundTransferCoordinator {
         taskIdentifiers[request.identifier] = task.taskIdentifier
         identifiersByTask[task.taskIdentifier] = request.identifier
         continuations[request.identifier] = continuation
+        continuationTokens[request.identifier] = continuationToken
         delegate.register(task: task, destinationURL: request.destinationURL)
         var record = ModelBackgroundDownloadRecord(
             request: request,
@@ -588,7 +603,7 @@ public actor ModelBackgroundTransferCoordinator {
             try? await store.save(record)
             continuations[identifier]?.yield(.init(identifier: identifier, state: .failed(errorMessage)))
             continuations[identifier]?.finish()
-            continuations[identifier] = nil
+            clearContinuation(for: identifier)
             return
         }
         record.status = .ready
@@ -597,7 +612,7 @@ public actor ModelBackgroundTransferCoordinator {
         try? await store.save(record)
         continuations[identifier]?.yield(.init(identifier: identifier, state: .ready(destinationURL ?? record.request.destinationURL)))
         continuations[identifier]?.finish()
-        continuations[identifier] = nil
+        clearContinuation(for: identifier)
     }
 
     func receiveCompleted(taskIdentifier: Int, errorMessage: String?) async {
@@ -631,7 +646,7 @@ public actor ModelBackgroundTransferCoordinator {
         try? await store.save(record)
         continuations[identifier]?.yield(.init(identifier: identifier, state: .paused))
         continuations[identifier]?.finish()
-        continuations[identifier] = nil
+        clearContinuation(for: identifier)
     }
 
     private func finish(
@@ -653,7 +668,17 @@ public actor ModelBackgroundTransferCoordinator {
         try? await store.save(record)
         continuations[identifier]?.yield(.init(identifier: identifier, state: state))
         continuations[identifier]?.finish()
+        clearContinuation(for: identifier)
+    }
+
+    private func removeContinuation(for identifier: String, token: UUID) {
+        guard continuationTokens[identifier] == token else { return }
+        clearContinuation(for: identifier)
+    }
+
+    private func clearContinuation(for identifier: String) {
         continuations[identifier] = nil
+        continuationTokens[identifier] = nil
     }
 
 }
