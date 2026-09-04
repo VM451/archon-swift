@@ -1,34 +1,63 @@
 # Competitive Analysis & Architecture Convergence
 
-Compare ArchonMemory against open-source memory frameworks (**Mem0**, **Supermemory**, **Letta/MemGPT**, and **Zep**).
+ArchonMemory extracts the strongest user outcomes from memory products while
+preserving a stricter local-native boundary: the durable memory core runs
+in-process through Swift on Apple platforms, and cloud models or CloudKit sync
+are explicit host-controlled extensions. This is not a claim that every
+competitor feature or every model can run locally.
 
-## Overview
+## How to compare the products
 
-Modern agentic AI architectures typically depend on server-hosted microservices (Postgres with `pgvector`, Qdrant, Neo4j, or Redis). This introduces high recurring cloud infrastructure costs, latency, and privacy compliance hurdles.
+Capability evidence answers whether a product advertises or ships a feature.
+Local qualification asks whether the core behavior runs on the user's Apple
+device through native Swift/SwiftPM without a required service or separate
+local server. Independent user-pull evidence is required before a feature is
+called “user-loved.” The full evidence, confidence, and quality gates are in
+the [whole-SDK competitor registry](../../../../context/competitor-signature-features.md).
 
-**ArchonMemory** draws architectural inspiration from the best open-source projects in the memory ecosystem, re-engineered from the ground up as a native Swift 6 framework running **100% on-device on Apple Silicon** with **zero recurring cloud hosting costs**.
+## Signature feature comparison
 
----
+| Product | Signature outcome | Local/native qualification | ArchonMemory response |
+| --- | --- | :---: | --- |
+| [Mem0](https://docs.mem0.ai/features/contextual-add) | Automatic fact extraction, deduplication, contradiction-aware updates, and hybrid retrieval | ☁️ | Local `MemoryExtractor`, `ADD/UPDATE/DELETE/NO_CHANGE`, durable history, and vendor-neutral indexes |
+| [Supermemory](https://docs.supermemory.ai/memory-api/introduction) | Broad ingestion/connectors, multimodal memory, filtering, reranking, and profile synthesis | ☁️ | Local document ingestion, provenance, profile/context synthesis, filters, export, and audit |
+| [Zep](https://help.getzep.com/v2/concepts) | Temporal knowledge graph and fact invalidation | ☁️ | `validFrom`, `validTo`, `supersededById`, graph storage, and time-aware retrieval |
+| [Letta](https://docs.letta.com/api/typescript) | Self-editing working-memory blocks and hierarchical context | ☁️ | `CoreMemoryBlock`, explicit scopes, and ephemeral `ArchonContext` assembly |
+| [CrewAI Memory](https://github.com/crewAIInc/crewAI/blob/main/docs/v1.15.12/en/concepts/memory.mdx) | Unified scoped memory with semantic, recency, and importance recall | ☁️ | Deterministic user/agent/run scopes and hybrid local retrieval |
 
-## 📊 Comprehensive Feature Matrix
+## ArchonMemory capability map
 
-| Feature Dimension | Mem0 (Python/Cloud) | Supermemory | Letta / MemGPT | Zep | ArchonMemory (Apple Native) |
-|---|---|---|---|---|---|
-| **Hosting Cost** | Paid Cloud / Docker Server | Cloud Hosted | Self-Hosted Server | Cloud Subscription | **$0.00 (100% Free & Local)** |
-| **Vector Engine** | Qdrant / Chroma | Cloud Index | Postgres / Chroma | Cloud Vector DB | **Apple `Accelerate` SIMD (vDSP)** |
-| **Full-Text Search** | SQLite / Postgres | Keyword Search | SQL / SQLite | Semantic/Keyword | **SQLite FTS5 Porter Virtual Tables** |
-| **Knowledge Graphs** | Graphiti / NetworkX | Auto-Tagging | Structured Tools | Temporal Graphiti | **[LocalGraphStore](doc:LocalGraphStore) (Entity Triples)** |
-| **Document Ingestion** | Custom Loaders | URL & Bookmark Parser | File Attachments | Dialog Summaries | **[ingest()](doc:ArchonClient/ingest) (Chunking & Tagging)** |
-| **Tiered Memory** | Single Store | Bookmarks | Working / Recall / Archival | Summary + Episodic | **Hierarchical [MemoryTier](doc:MemoryTier)** |
-| **Cross-Device Sync** | Cloud Database Cluster | Web App Sync | Server Synchronization | Cloud Backend | **Apple CloudKit (`ArchonPrivateZone`)** |
-| **On-Device LLM** | Ollama (Local Python) | Web API | Local Ollama / vLLM | Cloud API | **Apple Foundation Models + Ollama** |
-| **System Integrations** | None | Chrome Extension | REST API | LangChain / SDK | **CoreSpotlight + Siri AppIntents** |
+| Capability | Archon implementation | Boundary and evidence |
+| --- | --- | --- |
+| Durable facts | GRDB/SQLite-backed `MemoryItem` lifecycle with history and deletion | Application-owned; package tests cover update/delete and reopen behavior |
+| Working memory | `CoreMemoryBlock` and `CoreMemoryManager` | Explicitly separate from durable memory and request context |
+| Temporal truth | Validity windows, supersession, versions, and graph relations | Must pass contradiction, invalidation, migration, and recovery tests |
+| Retrieval | FTS5, dense vectors, filters, recency/importance, and optional `VectorIndex` | `ArchonMemoryProxima` is optional; the durable store remains authoritative |
+| Profile/context synthesis | Document ingestion, summaries, provenance, and `ArchonContext` contributors | No implicit inference or source deletion; user scope and audit are explicit |
+| Sync | Optional CloudKit boundary | Sync is not required for local operation and remains host/configuration-owned |
+| Model support | Apple Foundation Models, Core ML, local MLX, and explicit provider protocols | Credentials and model-family adapters belong to the consuming app |
 
----
+## Current index evidence
 
-## 🏛️ Architectural Attribution & Inspiration
+The deterministic [memory/index benchmark](../../../../context/memory-index-benchmark.md)
+compares Archon's current vector store, the optional Proxima adapter, and
+RecallKit on 2,000- and 10,000-record workloads. On the arm64 macOS package
+host, the Proxima adapter reached `Recall@10 = 1.000` at 10,000 records with
+`efSearch=256` and `0.73 / 0.75 ms` median/p95 query latency. These are not
+iPhone measurements and do not approve replacing the default.
 
-- **Mem0 ([mem0ai/mem0](https://github.com/mem0ai/mem0))**: Pioneered the conversational extraction state machine (`ADD`, `UPDATE`, `DELETE`, `NO_CHANGE`) and bi-temporal fact invalidation.
-- **Supermemory ([supermemoryai/supermemory](https://github.com/supermemoryai/supermemory))**: Inspired the document ingestion, URL bookmarking, and automatic semantic tag extraction pipelines.
-- **Letta / MemGPT ([letta-ai/letta](https://github.com/letta-ai/letta))**: Inspired the 3-tier memory hierarchy: In-Context Working Memory Blocks, Chronological Recall Logs, and Archival Vector Storage.
-- **Zep ([getzep/zep](https://github.com/getzep/zep))**: Inspired the rolling dialogue summarizer and temporal recency decay scoring.
+The [quality scorecard](../../../../context/quality-scorecard.md) requires
+Recall@10 of at least `0.99`, no worse equivalent p95 latency, bounded memory,
+correct persistence/recovery/deletion/migration, no privacy regression, and
+consuming-app/device evidence before a replacement becomes the default.
+
+## Design principles
+
+- Reuse Apple frameworks and qualifying Swift packages behind Archon-owned
+  contracts; do not copy competitor code or expose vendor types by default.
+- Keep extraction, temporal validity, scopes, forgetting, export, audit, and
+  durable storage as Archon-owned semantics.
+- Keep vectors and indexes replaceable; indexes may store IDs/vectors but not
+  Archon lifecycle or permission state.
+- Never imply that CloudKit, a cloud model, or a hosted memory service is
+  required for the local core.
