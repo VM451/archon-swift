@@ -979,6 +979,46 @@ struct ArchonModelsTests {
         #expect(replacementEvent?.state == .downloading(bytesDownloaded: 128, totalBytes: 256))
     }
 
+    @Test("Cancelling an orphaned background record finishes its observer")
+    func cancelsOrphanedBackgroundRecord() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("archon-background-orphan-cancel-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let identifier = "orphaned-background"
+        let destination = root.appendingPathComponent("model.part")
+        try Data("partial".utf8).write(to: destination)
+        let request = ModelBackgroundDownloadRequest(
+            identifier: identifier,
+            url: URL(string: "https://models.example.test/model.aimodel")!,
+            destinationURL: destination
+        )
+        let store = InMemoryModelBackgroundDownloadStore()
+        try await store.save(ModelBackgroundDownloadRecord(request: request, status: .downloading))
+        let coordinator = ModelBackgroundTransferCoordinator(
+            sessionIdentifier: "com.archon.tests.background-orphan-cancel.\(UUID().uuidString)",
+            store: store
+        )
+        let events = try await coordinator.events(for: identifier)
+        let consumer = Task {
+            var states: [ModelBackgroundTransferState] = []
+            do {
+                for try await event in events {
+                    states.append(event.state)
+                }
+            } catch {
+                Issue.record("Unexpected orphaned background event failure: \(error)")
+            }
+            return states
+        }
+
+        try await coordinator.cancel(identifier: identifier)
+        let states = await consumer.value
+        #expect(states.contains(.cancelled))
+        #expect(try await coordinator.record(for: identifier)?.status == .cancelled)
+        #expect(!FileManager.default.fileExists(atPath: destination.path))
+    }
+
     @Test("Cancelling a background download consumer cancels the manager job")
     func cancelsBackgroundDownloadWhenEventConsumerStops() async throws {
         let root = FileManager.default.temporaryDirectory

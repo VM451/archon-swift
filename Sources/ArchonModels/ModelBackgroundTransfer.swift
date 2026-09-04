@@ -402,14 +402,11 @@ public actor ModelBackgroundTransferCoordinator {
         }
         guard let taskIdentifier = taskIdentifiers[identifier],
               let task = delegate.task(withIdentifier: taskIdentifier) else {
-            guard var record = try await store.record(for: identifier) else {
+            guard let record = try await store.record(for: identifier) else {
                 throw ModelBackgroundTransferError.noRecord(identifier)
             }
             try? FileManager.default.removeItem(at: record.request.destinationURL)
-            record.status = .cancelled
-            record.taskIdentifier = nil
-            record.resumeData = nil
-            try await store.save(record)
+            await finish(identifier: identifier, status: .cancelled, state: .cancelled, errorMessage: nil)
             return
         }
         cancelRequested.insert(identifier)
