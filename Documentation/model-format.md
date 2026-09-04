@@ -77,7 +77,12 @@ inference-throughput measurements.
 
 `MLXModelRuntimeAdapter` is the concrete runtime-management adapter for
 manifests declaring the `mlx` format and runtime. It loads the installed
-artifact through MLX Swift and releases the cached container on unload.
+artifact through MLX Swift on macOS, iOS, and visionOS and releases the cached
+container on unload. The package pins the MLX core to the public upstream
+revision that fixes the current Xcode Metal address-space diagnostics. If a
+consumer removes that runtime dependency, the provider remains API-compatible
+but fails closed with `unavailableOnPlatform`; it never pretends that a missing
+runtime can execute an MLX artifact.
 `CoreAIModelRuntime` uses the public Apple `AIModelAsset` and `AIModel` APIs for
 URL-backed Core AI assets. Text generation remains model-specific because
 those APIs expose tensor functions, so applications inject a tokenizer and

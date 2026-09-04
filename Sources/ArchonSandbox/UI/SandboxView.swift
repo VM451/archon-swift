@@ -12,7 +12,7 @@ public struct ArchonSandboxView: View {
     
     public var body: some View {
         ZStack(alignment: .bottom) {
-            #if canImport(WebKit)
+            #if (os(iOS) || os(macOS)) && canImport(WebKit)
             NativeSandboxRepresentable(controller: controller)
                 .clipShape(RoundedRectangle(cornerRadius: configuration.cornerRadius, style: .continuous))
             #else

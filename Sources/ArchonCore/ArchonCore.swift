@@ -1,7 +1,7 @@
 import Foundation
 
-#if canImport(UIKit)
-import UIKit
+#if canImport(Darwin)
+import Darwin
 #endif
 
 #if canImport(FoundationModels)
@@ -193,11 +193,7 @@ public struct ArchonDeviceCapabilities: Codable, Equatable, Sendable {
         let physicalMemory = processInfo.physicalMemory
         let platform: ArchonPlatform
         #if os(iOS)
-        #if canImport(UIKit)
-        platform = UIDevice.current.userInterfaceIdiom == .pad ? .iPadOS : .iOS
-        #else
-        platform = .iOS
-        #endif
+        platform = archonCurrentDeviceIsIPad ? .iPadOS : .iOS
         #elseif os(visionOS)
         platform = .visionOS
         #else
@@ -257,6 +253,31 @@ public struct ArchonDeviceCapabilities: Codable, Equatable, Sendable {
             loadedModelMemoryBytes: 0
         )
     }
+}
+
+private var archonCurrentDeviceIsIPad: Bool {
+    #if os(iOS)
+    if let simulatorIdentifier = ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"] {
+        return simulatorIdentifier.lowercased().hasPrefix("ipad")
+    }
+
+    #if canImport(Darwin)
+    var systemInfo = utsname()
+    guard uname(&systemInfo) == 0 else { return false }
+    let machine = systemInfo.machine
+    let machineSize = MemoryLayout.size(ofValue: machine)
+    let identifier = withUnsafePointer(to: machine) {
+        $0.withMemoryRebound(to: CChar.self, capacity: machineSize) {
+            String(cString: $0)
+        }
+    }
+    return identifier.lowercased().hasPrefix("ipad")
+    #else
+    return false
+    #endif
+    #else
+    return false
+    #endif
 }
 
 public enum ArchonCoreError: Error, LocalizedError, Equatable, Sendable {

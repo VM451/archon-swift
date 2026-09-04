@@ -25,25 +25,40 @@ public actor ArchonBackgroundTaskHandler {
     }
 
     /// Schedules a background maintenance task.
-    public func scheduleBackgroundMaintenance() async {
+    public func scheduleBackgroundMaintenance() {
         #if os(iOS)
         let request = BGProcessingTaskRequest(identifier: Self.taskIdentifier)
         request.requiresNetworkConnectivity = false
         request.requiresExternalPower = true
         request.earliestBeginDate = Date(timeIntervalSinceNow: 6 * 3600) // Every 6 hours
 
-        do {
-            if #available(iOS 27.0, *) {
-                try await BGTaskScheduler.shared.submitTaskRequest(request)
-            } else {
-                try BGTaskScheduler.shared.submit(request)
+        if #available(iOS 27.0, *) {
+            BGTaskScheduler.shared.submitTaskRequest(request) { [weak self] error in
+                let errorMessage = error?.localizedDescription
+                Task { [weak self, errorMessage] in
+                    await self?.recordSubmissionResult(errorMessage: errorMessage)
+                }
             }
-            logger.info("Successfully scheduled background consolidation task.")
-        } catch {
-            logger.error("Failed to submit background task: \(error.localizedDescription)")
+        } else {
+            do {
+                try BGTaskScheduler.shared.submit(request)
+                logger.info("Successfully scheduled background consolidation task.")
+            } catch {
+                logger.error("Failed to submit background task: \(error.localizedDescription)")
+            }
         }
         #endif
     }
+
+    #if os(iOS)
+    private func recordSubmissionResult(errorMessage: String?) {
+        if let errorMessage {
+            logger.error("Failed to submit background task: \(errorMessage)")
+        } else {
+            logger.info("Successfully scheduled background consolidation task.")
+        }
+    }
+    #endif
 
     #if os(iOS)
     private func handleBackgroundConsolidation(task: BGProcessingTask) async {

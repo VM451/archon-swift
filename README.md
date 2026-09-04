@@ -1,171 +1,201 @@
 # Archon Swift
 
-Archon is a modular, local-first Swift SDK for native Apple applications. It uses Apple frameworks where they already provide the capability and adds the missing integration layers for models, context, memory, research, tools, sandboxing, and in-app semantic actions.
+[![Swift 6](https://img.shields.io/badge/Swift-6-orange?logo=swift)](https://www.swift.org)
+[![Platforms](https://img.shields.io/badge/platforms-iOS%20%7C%20macOS%20%7C%20visionOS-blue)](https://developer.apple.com)
+
+Archon is a modular, local-first Swift SDK for building native AI features on
+Apple platforms. It composes model lifecycle, agent graphs, context, memory,
+research, tools, sandboxing, MCP, semantic actions, and SwiftUI surfaces.
+
+Each product is independently adoptable. `ArchonFull` is the optional
+all-products re-export.
+
+## At a glance
+
+| Property | Value |
+| --- | --- |
+| Language | Swift 6.4, strict-concurrency settings |
+| Platforms | iOS 27, macOS 27, visionOS 27 |
+| Package manager | Swift Package Manager |
+| Runtime posture | Apple-first; Core AI and MLX adapters where available |
+| Default safety posture | Typed errors, bounded operations, fail closed |
+| App boundary | The consuming app owns credentials, entitlements, permissions, and host adapters |
+
+## Why Archon
+
+- Native Swift APIs instead of a server-first control plane.
+- Local model discovery, compatibility checks, downloads, validation, and installation.
+- Composable agent graphs with model routing, tools, interrupts, checkpoints, and evaluation.
+- Application-owned memory and RAG with optional CloudKit synchronization.
+- Search and research outputs with citations and an inspectable search path.
+- Permission-aware MCP, semantic host actions, and capability-restricted WebKit sandboxes.
+- No fabricated inference, extraction, search, telemetry, or platform records when a required capability is unavailable.
+
+## System design
+
+```mermaid
+flowchart TB
+    App["Native Apple app"]
+    Facade["ArchonFull<br/>optional re-export"]
+    Core["ArchonCore<br/>capabilities · policy · errors"]
+    Models["ArchonModels<br/>catalog · artifacts · downloads"]
+    Agent["ArchonAgent<br/>graphs · routing · tools"]
+    Context["ArchonContext<br/>request-scoped context"]
+    Memory["ArchonMemory<br/>long-term memory · RAG"]
+    Search["ArchonSearch<br/>discovery · crawl · citations"]
+    Connect["ArchonConnect<br/>MCP transport · permissions"]
+    ComputerUse["ArchonComputerUse<br/>semantic host actions"]
+    Sandbox["ArchonSandbox<br/>restricted WebKit workspace"]
+    UI["ArchonModelsUI<br/>SwiftUI model surfaces"]
+    Runtime["Apple Foundation Models<br/>Core AI · MLX adapters"]
+    Host["Host services<br/>credentials · entitlements · permissions"]
+
+    App --> Facade
+    App --> Host
+    Facade --> Core
+    Facade --> Models
+    Facade --> Agent
+    Facade --> Context
+    Facade --> Memory
+    Facade --> Search
+    Facade --> Connect
+    Facade --> ComputerUse
+    Facade --> Sandbox
+    Facade --> UI
+
+    Agent --> Models
+    Agent --> Context
+    Agent --> Memory
+    Agent --> Search
+    Agent --> Connect
+    Agent --> ComputerUse
+    Agent --> Sandbox
+    Models --> Runtime
+    Context --> Memory
+    Context --> Search
+    Host -. injects .-> Runtime
+    Host -. authorizes .-> Connect
+    Host -. observes .-> ComputerUse
+    Host -. supplies .-> Sandbox
+```
+
+Arrows show composition and service boundaries, not the complete SwiftPM
+dependency graph. Read [`Documentation/architecture.md`](Documentation/architecture.md)
+for the deeper design notes.
 
 ## Products
 
-```text
-ArchonCore          shared primitives and device capabilities
-ArchonModels        catalog discovery, compatibility, downloads, manifests, and storage
-ArchonAgent         stateful agent graphs and provider orchestration
-ArchonContext       request-scoped context assembly
-ArchonMemory        long-term application-owned memory
-ArchonSearch        current-information and research pipelines
-ArchonSandbox       capability-restricted mini-app execution
-ArchonConnect       MCP transport, discovery, and permission boundary
-ArchonComputerUse   semantic host-app actions with risk controls
-ArchonModelsUI      optional SwiftUI model-library view
-ArchonFull          convenience re-export of the SDK family
+| Product | Responsibility |
+| --- | --- |
+| `ArchonCore` | Shared capabilities, device facts, policy, logging, and errors |
+| `ArchonModels` | Catalogs, Hugging Face discovery, model formats, compatibility, downloads, manifests, and lifecycle |
+| `ArchonAgent` | Stateful graphs, routing, providers, tools, interrupts, checkpoints, evaluation, and SwiftUI chat |
+| `ArchonContext` | Request-scoped context assembly; never persists or executes actions |
+| `ArchonMemory` | Application-owned memory, graph storage, vector search, RAG, and CloudKit sync |
+| `ArchonSearch` | Search, scraping, deep research, structured extraction, citations, and monitoring |
+| `ArchonSandbox` | Capability-restricted WebKit mini-apps, DOM/JS patches, events, and workspace sync |
+| `ArchonConnect` | MCP client, JSON-RPC HTTP transport, schema validation, and permission policy |
+| `ArchonComputerUse` | Semantic snapshots and host-defined actions with risk and postcondition checks |
+| `ArchonModelsUI` | SwiftUI model discovery, installed-library, detail, storage, and download views |
+| `ArchonFull` | Convenience re-export of the SDK family |
+
+## Capability comparison
+
+Legend: ✅ first-class in the project · ⚠️ adjacent, partial, or adapter-owned ·
+❌ outside the product’s core scope. This is a concise positioning snapshot,
+not a performance ranking; there is no uniform market-share ranking for these
+different categories.
+
+| Feature | [Archon Swift](https://github.com/VM451/archon-swift) | [Apple FM](https://developer.apple.com/documentation/foundationmodels) | [LangGraph](https://langchain-ai.github.io/langgraph/) | [LlamaIndex](https://www.llamaindex.ai/) | [Mem0](https://docs.mem0.ai/introduction) | [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk) | [Tavily](https://docs.tavily.com/) | [Firecrawl](https://docs.firecrawl.dev/) | [Exa](https://exa.ai/docs) | [SerpAPI](https://serpapi.com/) | [SearXNG](https://docs.searxng.org/) | [Perplexica](https://github.com/ItzCrazyKns/Perplexica) | [TinyFish](https://docs.tinyfish.ai/) |
+| --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| Apple-native Swift | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| On-device model lifecycle | ✅ | ✅ | ⚠️ | ⚠️ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ⚠️ | ❌ |
+| Agent graphs | ✅ | ⚠️ | ✅ | ✅ | ⚠️ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ⚠️ |
+| App-owned memory / RAG | ✅ | ❌ | ⚠️ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Web research | ✅ | ❌ | ⚠️ | ⚠️ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ |
+| MCP | ✅ | ❌ | ⚠️ | ⚠️ | ⚠️ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
+| Host semantic actions | ✅ | ⚠️ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
+| Restricted sandbox | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| SwiftUI surfaces | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+
+Archon’s distinction is the integrated Apple application boundary: specialist
+tools can still be used behind Archon protocols or host adapters.
+
+## Quick start
+
+Add the package URL in Xcode or Swift Package Manager:
+
+```swift
+.package(url: "https://github.com/VM451/archon-swift.git", branch: "main")
 ```
 
-Every product is independently adoptable. `ArchonModels` never advertises raw Hugging Face `GGUF` or `SafeTensors` artifacts as directly runnable: those variants are reported as conversion-required until a supported runtime representation is available.
-
-## Model lifecycle
-
-`ArchonModels` provides a provider-based catalog API, including Hugging Face,
-Apple/Archon static registries, direct URLs, and local manifest discovery;
-Hugging Face metadata/authentication support; deterministic device-fit
-analysis; Keychain-backed tokens; resumable range downloads; checksum/size
-validation; staged installation; and an `archon-model.json` manifest that
-preserves source provenance.
-
-Runnable single-file artifacts and directory/bundle artifacts are supported. Directory packages can declare model and tokenizer resources; the validator checks every declared relative path, size, checksum, and symlink boundary before atomic installation. Installed source revisions can be compared with any catalog provider through `ModelLibrary.checkForUpdates(using:)` without starting a download.
+Use only the products you need:
 
 ```swift
 import ArchonModels
 
 let catalog = HuggingFaceCatalog()
 let models = try await catalog.search(ModelSearchRequest(query: "Qwen"))
-let device = ArchonDeviceCapabilities.current
-let fit = ModelCompatibilityAnalyzer.analyze(variant: models[0].variants[0], device: device)
+let fit = ModelCompatibilityAnalyzer.analyze(
+    variant: models[0].variants[0],
+    device: .current
+)
 ```
 
-Compatibility is intentionally explicit. `compatible` means the SDK knows the artifact can be loaded by the declared runtime; `conversionRequired`, `unsupportedArchitecture`, `requiresNewerOS`, and `insufficientMemory` are not loadable states.
-
-Catalogs can be static or HTTP-backed. `RemoteModelCatalog` accepts a developer,
-Apple, or Archon registry endpoint, forwards search filters, and can resolve a
-Keychain-backed bearer token through the injected model-token store. The
-`AppleCoreAIModelCatalog` and `ArchonCompatibleModelCatalog` convenience
-wrappers accept the same remote provider while preserving their catalog roles.
-`ModelLicensePolicy` provides deterministic allowed/confirmation/denied decisions
-for known, custom, and missing license identifiers; an injected policy can stop
-the download manager before any transfer begins.
-
-Apple Foundation Model execution uses the public `FoundationModels` runtime through
-`AppleFoundationModelProvider` and `FoundationModelsRuntime`. If the system model is
-unavailable, generation fails with an availability error; the provider does not
-synthesize a response. Dynamic Archon tool schemas are rejected until a typed
-`FoundationModels.Tool` adapter can preserve their argument contract.
-
-Core AI integration uses Apple's public `CoreAI` APIs when the consuming build
-and device provide them. `CoreAIModelRuntime` validates URL-backed
-`AIModelAsset` packages, specializes and caches `AIModel`, exposes function
-descriptors, and unloads the cached model. Core AI is a tensor/function runtime,
-not a universal text-generation API, so `CoreAIProvider` accepts an explicit
-`CoreAITextGenerationAdapter` for the model's tokenizer, prompt format,
-sampling, KV cache, and output decoding; without that adapter it fails closed
-and never returns synthetic inference. Catalog model identifiers must first be
-resolved to a bundled or local asset by the consuming application. Hosts can
-also pass `CoreAIModelRuntimeAdapter` to `ModelLoadManager` to connect installed
-`.aimodel` packages to the same specialization lifecycle.
-
-`ArchonConnect` includes an injectable MCP client plus a JSON-RPC HTTP transport
-for initialize, tool/resource discovery, resource reads, and tool calls. Tool
-schemas are validated locally, request timeouts are bounded, and risk/permission
-policy is enforced before a call reaches the transport. The transport supports
-buffered JSON-RPC and streamable-HTTP responses; a consuming app remains
-responsible for any long-lived notification/session stream it needs.
-`ArchonComputerUse` is semantic and host-app scoped: an action can require an
-observed element, can provide a host-defined postcondition verifier against a
-fresh semantic snapshot, and the package never emits device-wide coordinate
-events. Its controller exposes explicit `start`, `pause`, `resume`, and `stop`
-lifecycle operations; a stopped or paused action cannot report a late success
-even if a host closure ignores cooperative task cancellation.
-
-`ArchonModelsUI` provides a functional installed-library view and an injectable
-catalog browser with Recommended, Downloaded, Apple/Core AI, and Hugging Face
-collections plus task, runtime, size, license, publisher, and device-fit
-filters. Model detail drives the real download manager, including progress,
-pause/resume/cancel/retry/redownload/delete, verification, installation, and
-failure states.
-
-`ArchonModels` also exposes optional App Intents for listing installed models,
-checking model-library storage, and deleting a selected model. Register the
-host's configured `ModelLibrary` with
-`await ModelLibraryIntentRegistry.shared.register(...)` during startup; each
-intent fails closed until that registration exists.
-
-## Developer model tool
-
-The package also builds an `archon-model` executable for preparation workflows:
+For a complete host composition, run:
 
 ```bash
-swift run archon-model inspect path/to/archon-model.json
-swift run archon-model validate path/to/archon-model.json --artifact path/to/model.aimodel
-swift run archon-model package --manifest path/to/archon-model.json --artifact path/to/model.aimodel --output MyModel.archonmodel
-swift run archon-model convert Qwen/Qwen3-0.6B --core-ai-models /path/to/coreai-models --output Qwen3.aimodel
-swift run archon-model search Qwen
+swift run archon-example-app
 ```
 
-`convert` delegates only to Apple's developer-side `coreai-models` exporter;
-it requires `uv` and a local checkout and fails closed without them. It never
-embeds Python conversion infrastructure in the runtime package. `benchmark`
-validates the manifest and measures real model preparation for directly
-runnable Core AI `.aimodel` and MLX `.mlx` artifacts; unsupported runtime/format
-pairs fail closed rather than producing synthetic throughput.
+## Model lifecycle
+
+`ArchonModels` supports static and HTTP-backed catalogs, Hugging Face metadata,
+Keychain-backed tokens, device-fit analysis, single-file or directory
+artifacts, checksum and resource validation, resumable foreground/background
+downloads, atomic installation, revision checks, and App Intents.
+
+Runnable Core AI and MLX artifacts are distinct from raw `GGUF`, `SafeTensors`,
+and Transformers files. Unsupported or conversion-required artifacts are never
+reported as Ready. See [`Documentation/model-format.md`](Documentation/model-format.md).
+
+The developer-only `archon-model` executable handles inspection, validation,
+packaging, conversion through Apple’s `coreai-models` exporter, and real local
+artifact preparation benchmarks.
 
 ## Build and test
-
-This checkout is a Swift Package Manager library family, not an Xcode application. Run package verification from this directory:
 
 ```bash
 swift build -j 2
 swift test --no-parallel -j 2 --disable-sandbox
 ```
 
-The inherited live deep-research integration test is opt-in with
-`ARCHON_ENABLE_LIVE_TESTS=1`; default package tests stay offline and bounded.
-The performance SLA benchmark is opt-in with
-`ARCHON_ENABLE_BENCHMARKS=1` because timing varies with host load.
+Optional live research tests and timing-sensitive benchmarks are disabled by
+default. See [`Benchmarks/README.md`](Benchmarks/README.md).
 
-The package includes a buildable `archon-example-app` SwiftUI host composition
-for demonstrating model discovery, compatibility, downloads, installed-model
-management, storage actions, and App Intents registration. It is not a signed
-Xcode `.app` target; deployment and live UI acceptance still require a
-consuming Apple application with the host's credentials, entitlements, privacy
-usage descriptions, and model-runtime adapters. The optional SwiftUI product
-is source-compiled as part of the package build.
+## Integration boundaries
 
-Search and memory persistence are real, but structured memory/research extraction
-requires the host to inject a model handler/provider. The default paths fail
-closed when no model is available; they do not fabricate extracted fields or
-successful writes.
+The package is a SwiftPM library family with a buildable SwiftUI example host,
+not a signed Xcode application. A production app supplies its own:
 
-The built-in web search/content, deep-research, sandbox, and persistent-memory
-tools also fail closed until the host injects a real service. Apple platform
-tools use the same rule. `NativeApplePlatformServices` uses public EventKit for
-Calendar and Reminders, Contacts for contact lookup, MapKit for place search
-and distance, and sandboxed file access; Notes, Mail, battery telemetry, and
-timer scheduling still require explicit host services. Permission denial and
-invalid input are surfaced as typed errors. A consuming app must provide the
-corresponding privacy usage descriptions and entitlements before requesting
-access. Test and preview code can inject deterministic mocks.
+- model tokenizer/text adapters and provider credentials;
+- privacy usage descriptions, entitlements, and platform permissions;
+- MCP servers, search services, lifecycle forwarding, and host semantic observations;
+- user-facing policy for side effects and data retention.
 
-Memory App Intents and background maintenance use the actor-backed
-`ArchonClientIntentRegistry`; register the host client during startup when
-those integrations are enabled.
+When one of these boundaries is absent, the relevant API returns a typed error
+or an unavailable result. Test and preview code can inject deterministic mocks.
 
-`ModelDownloadManager` preserves staging files for foreground pause/resume.
-For OS-managed background transfer, `ModelBackgroundTransferCoordinator` uses
-an Apple background `URLSession`, resume data, connectivity waiting, progress,
-cancellation, and a caller-selected persistent `ModelBackgroundDownloadStore`.
-Recreate it with the same session identifier after a process relaunch and call
-`reconnect()` before observing or controlling the transfer. The coordinator
-only transfers bytes; callers must still run `ModelLibrary` verification and
-atomic installation before exposing a model as Ready. File-backed stores
-redact credential-bearing request headers; after relaunch, pass a replacement
-request with fresh Keychain-derived authorization to `resume` when needed.
+## Documentation
+
+- [`Documentation/architecture.md`](Documentation/architecture.md) — design boundaries and lifecycle rules.
+- [`Documentation/model-format.md`](Documentation/model-format.md) — manifest and artifact contract.
+- [`Documentation/migration-audit.md`](Documentation/migration-audit.md) — unified-package migration scope.
+- [`Examples/README.md`](Examples/README.md) — buildable SwiftUI host.
+- [`Benchmarks/README.md`](Benchmarks/README.md) — opt-in performance checks.
 
 ## Governing rule
 
-Before adding an Archon abstraction, ask whether Apple already solves the problem. Use Apple when it does, build only the missing adapter when it partly does, and report unsupported behavior honestly when no safe adapter exists.
+Use Apple when Apple already solves the problem. Add only the missing adapter
+when it does not. Report unsupported behavior honestly when no safe adapter
+exists.

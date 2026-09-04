@@ -45,7 +45,7 @@ public enum MLXLocalProviderError: Error, LocalizedError, Sendable, Equatable {
         case .emptyPrompt:
             return "MLX generation requires at least one chat message."
         case .unavailableOnPlatform:
-            return "The MLX runtime is unavailable on this platform. Use an Apple Foundation Model, Core AI model, or a consuming app that includes the MLX runtime for macOS."
+            return "The MLX runtime is unavailable on this platform. Use an Apple Foundation Model, Core AI model, or a consuming app that links MLX Swift for this platform."
         }
     }
 }

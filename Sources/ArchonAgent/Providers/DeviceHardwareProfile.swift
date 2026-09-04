@@ -4,10 +4,6 @@ import Foundation
 import Darwin
 #endif
 
-#if canImport(UIKit)
-import UIKit
-#endif
-
 /// Target Apple platform classification.
 public enum ApplePlatformKind: String, Codable, Equatable, Sendable {
     case iOS
@@ -145,15 +141,11 @@ public struct DeviceHardwareProfile: Sendable, Equatable {
         #if os(macOS)
         detectedPlatform = .macOS
         #elseif os(iOS)
-        #if canImport(UIKit)
-        if UIDevice.current.userInterfaceIdiom == .pad {
+        if deviceHardwareIdentifier.lowercased().hasPrefix("ipad") {
             detectedPlatform = .iPadOS
         } else {
             detectedPlatform = .iOS
         }
-        #else
-        detectedPlatform = .iOS
-        #endif
         #else
         detectedPlatform = .macOS
         #endif
@@ -262,4 +254,24 @@ public struct DeviceHardwareProfile: Sendable, Equatable {
         processorCount: 10,
         isAppleFoundationModelSupported: true
     )
+}
+
+private var deviceHardwareIdentifier: String {
+    if let simulatorIdentifier = ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"] {
+        return simulatorIdentifier
+    }
+
+    #if canImport(Darwin)
+    var systemInfo = utsname()
+    guard uname(&systemInfo) == 0 else { return "" }
+    let machine = systemInfo.machine
+    let machineSize = MemoryLayout.size(ofValue: machine)
+    return withUnsafePointer(to: machine) {
+        $0.withMemoryRebound(to: CChar.self, capacity: machineSize) {
+            String(cString: $0)
+        }
+    }
+    #else
+    return ""
+    #endif
 }
