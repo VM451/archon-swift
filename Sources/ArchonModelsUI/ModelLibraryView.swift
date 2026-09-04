@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import ArchonCore
 import ArchonModels
 
@@ -14,6 +15,7 @@ public struct ModelLibraryView: View {
     @State private var errorMessage: String?
     @State private var isRefreshing = false
     @State private var isCheckingUpdates = false
+    @State private var isImporting = false
 
     public init(
         library: ModelLibrary = .makeDefault(),
@@ -79,6 +81,12 @@ public struct ModelLibraryView: View {
         .navigationTitle("Model Library")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
+                Button("Import Model", systemImage: "square.and.arrow.down") {
+                    isImporting = true
+                }
+                .disabled(isRefreshing)
+            }
+            ToolbarItem(placement: .primaryAction) {
                 Button("Refresh", systemImage: "arrow.clockwise") {
                     Task { await refresh() }
                 }
@@ -92,6 +100,27 @@ public struct ModelLibraryView: View {
                     .disabled(isCheckingUpdates || isRefreshing)
                 }
             }
+        }
+        .fileImporter(
+            isPresented: $isImporting,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true
+        ) { result in
+            switch result {
+            case .success(let urls):
+                Task { @MainActor in
+                    await importArtifacts(urls)
+                }
+            case .failure(let error):
+                errorMessage = error.localizedDescription
+            }
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            guard !urls.isEmpty else { return false }
+            Task { @MainActor in
+                await importArtifacts(urls)
+            }
+            return true
         }
         .task {
             await refresh()
@@ -116,6 +145,37 @@ public struct ModelLibraryView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    @MainActor
+    private func importArtifacts(_ urls: [URL]) async {
+        isRefreshing = true
+        defer { isRefreshing = false }
+
+        var importedCount = 0
+        var failures: [String] = []
+        for url in urls {
+            let hasSecurityScope = url.startAccessingSecurityScopedResource()
+            defer {
+                if hasSecurityScope {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
+
+            do {
+                _ = try await library.importArtifact(at: url)
+                importedCount += 1
+            } catch {
+                failures.append("\(url.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+
+        await refresh()
+        guard !failures.isEmpty else { return }
+        let summary = failures.joined(separator: "\n")
+        errorMessage = importedCount == 0
+            ? summary
+            : "Imported \(importedCount) model(s).\n\(summary)"
     }
 
     @MainActor

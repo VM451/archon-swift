@@ -379,6 +379,7 @@ struct ArchonModelsTests {
           "cardData": {"license": "apache-2.0", "language": ["en", "zh"]},
           "siblings": [
             {"rfilename": "qwen.safetensors", "size": 100},
+            {"rfilename": "pytorch_model.bin", "size": 110},
             {"rfilename": "qwen.aimodel", "size": 90}
           ]
         }]
@@ -394,7 +395,7 @@ struct ArchonModelsTests {
 
         #expect(model.license?.identifier == "apache-2.0")
         #expect(model.supportedLanguages == ["en", "zh"])
-        #expect(model.variants.map(\.format) == [.safetensors, .aimodel])
+        #expect(model.variants.map(\.format) == [.safetensors, .transformers, .aimodel])
         #expect(model.variants.last?.runtime == .coreAI)
         #expect(try await catalog.search(ModelSearchRequest(query: "Qwen", task: .vision)).isEmpty)
     }
@@ -542,7 +543,7 @@ struct ArchonModelsTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let artifact = root.appendingPathComponent("example", isDirectory: true)
         try FileManager.default.createDirectory(at: artifact, withIntermediateDirectories: true)
-        try Data(#"{"architectures":["ExampleForCausalLM"]}"#.utf8)
+        try Data(#"{"architectures":["ExampleForCausalLM"],"quantization":{"bits":4,"group_size":64}}"#.utf8)
             .write(to: artifact.appendingPathComponent("config.json"))
         try Data("weights".utf8).write(to: artifact.appendingPathComponent("model.safetensors"))
         try Data("tokenizer".utf8).write(to: artifact.appendingPathComponent("tokenizer.json"))
@@ -559,6 +560,25 @@ struct ArchonModelsTests {
         #expect(installed.manifest.architecture == "ExampleForCausalLM")
         #expect(installed.manifest.supportedDeviceArchitectures == ["arm64"])
         #expect(installed.manifest.modelResources.contains { $0.relativePath == "config.json" })
+    }
+
+    @Test("Generic Transformers directories remain conversion-required")
+    func detectsRawTransformersDirectory() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("archon-detected-transformers-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let artifact = root.appendingPathComponent("example", isDirectory: true)
+        try FileManager.default.createDirectory(at: artifact, withIntermediateDirectories: true)
+        try Data(#"{"architectures":["ExampleForCausalLM"]}"#.utf8)
+            .write(to: artifact.appendingPathComponent("config.json"))
+        try Data("weights".utf8).write(to: artifact.appendingPathComponent("model.safetensors"))
+        try Data("tokenizer".utf8).write(to: artifact.appendingPathComponent("tokenizer.json"))
+
+        let inspection = try ModelArtifactInspector.inspect(at: artifact)
+        #expect(inspection.format == .transformers)
+        #expect(inspection.runtime == .unknown)
+        #expect(inspection.requiresConversion)
+        #expect(inspection.modelArchitecture == "ExampleForCausalLM")
     }
 
     @Test("Raw local files are identified but never imported as runnable models")

@@ -57,9 +57,14 @@ host-integration boundaries for App Intents, lifecycle and memory-pressure
 forwarding, semantic Computer Use observations, and OS-managed background
 URLSession transfers. Those boundaries are intentionally public and fail closed
 until the consuming app supplies its platform objects.
-`ArchonModels` App Intents use the same host-registered `ModelLibrary` actor as
-the model UI for list, storage, and delete actions; they do not maintain a
-second model store.
+`ArchonModels` App Intents and `InstalledModelEntity` queries use the same
+host-registered `ModelLibrary` actor as the model UI for list, storage, and
+delete actions; they do not maintain a second model store.
+`ArchonSandbox` renders workspace HTML/CSS/JavaScript/WASM through a virtual
+`sandbox://` scheme. Its `SandboxConfiguration.allowedPermissions` set is
+empty by default and gates network, storage, clipboard, camera, microphone,
+location, and external-URL access through CSP, WebKit delegates, nonpersistent
+data stores, and document-start JavaScript guards.
 The same fail-closed rule applies to built-in web/research, sandbox, persistent
 memory, and Apple platform services: production defaults do not return
 synthetic search results, reports, writes, telemetry, or framework records.

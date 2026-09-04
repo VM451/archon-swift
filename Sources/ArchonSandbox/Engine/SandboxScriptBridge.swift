@@ -1,4 +1,5 @@
 import Foundation
+import ArchonCore
 
 /// Injected JavaScript runtime bridge establishing bidirectional communication between native Swift and the WebKit sandbox.
 public enum SandboxScriptBridge: Sendable {
@@ -6,11 +7,91 @@ public enum SandboxScriptBridge: Sendable {
     public static let handlerName = "sandboxBridge"
     
     /// Generates the bootstrap JavaScript injected into the WKWebView at document start.
-    public static func generateBootstrapScript() -> String {
+    public static func generateBootstrapScript(configuration: SandboxConfiguration = .default) -> String {
+        let storageDenied = !configuration.allows(.storage)
+        let clipboardDenied = !configuration.allows(.clipboard)
+        let mediaDenied = !configuration.allows(.camera) && !configuration.allows(.microphone)
+        let locationDenied = !configuration.allows(.location)
+        let externalURLDenied = !configuration.allows(.externalURL)
+
+        let storageGuard = storageDenied ? """
+            (function() {
+                const denyStorage = function() { throw deniedError('Sandbox storage is not enabled.'); };
+                try { Object.defineProperty(window, 'localStorage', { configurable: false, get: denyStorage }); } catch (e) {}
+                try { Object.defineProperty(window, 'sessionStorage', { configurable: false, get: denyStorage }); } catch (e) {}
+                try { Object.defineProperty(window, 'indexedDB', { configurable: false, get: denyStorage }); } catch (e) {}
+                try { Object.defineProperty(window, 'caches', { configurable: false, get: denyStorage }); } catch (e) {}
+                try {
+                    Object.defineProperty(Document.prototype, 'cookie', {
+                        configurable: false,
+                        get: denyStorage,
+                        set: denyStorage
+                    });
+                } catch (e) {}
+            })();
+            """ : ""
+        let clipboardGuard = clipboardDenied ? """
+            (function() {
+                const deniedClipboard = {
+                    read: rejectedCapability('Sandbox clipboard is not enabled.'),
+                    readText: rejectedCapability('Sandbox clipboard is not enabled.'),
+                    write: rejectedCapability('Sandbox clipboard is not enabled.'),
+                    writeText: rejectedCapability('Sandbox clipboard is not enabled.')
+                };
+                try { Object.defineProperty(Navigator.prototype, 'clipboard', { configurable: false, get: () => deniedClipboard }); } catch (e) {}
+            })();
+            """ : ""
+        let mediaGuard = mediaDenied ? """
+            (function() {
+                try {
+                    if (navigator.mediaDevices) {
+                        const restrictedMediaDevices = Object.create(navigator.mediaDevices);
+                        restrictedMediaDevices.getUserMedia = rejectedCapability('Sandbox camera and microphone access is not enabled.');
+                        Object.defineProperty(Navigator.prototype, 'mediaDevices', { configurable: false, get: () => restrictedMediaDevices });
+                    }
+                } catch (e) {}
+            })();
+            """ : ""
+        let locationGuard = locationDenied ? """
+            (function() {
+                const deniedGeolocation = {
+                    getCurrentPosition: function(success, error) {
+                        if (typeof error === 'function') setTimeout(() => error({ code: 1, message: 'Sandbox location is not enabled.' }), 0);
+                    },
+                    watchPosition: function(success, error) {
+                        if (typeof error === 'function') setTimeout(() => error({ code: 1, message: 'Sandbox location is not enabled.' }), 0);
+                        return -1;
+                    },
+                    clearWatch: function() {}
+                };
+                try { Object.defineProperty(Navigator.prototype, 'geolocation', { configurable: false, get: () => deniedGeolocation }); } catch (e) {}
+            })();
+            """ : ""
+        let externalURLGuard = externalURLDenied ? """
+            try { window.open = function() { return null; }; } catch (e) {}
+            """ : ""
+        let capabilityGuards = """
+            // Default-deny capability guards. Native delegates remain the final
+            // authority for navigation and media permission decisions.
+            function deniedError(message) {
+                return new DOMException(message, 'NotAllowedError');
+            }
+            function rejectedCapability(message) {
+                return function() { return Promise.reject(deniedError(message)); };
+            }
+            \(storageGuard)
+            \(clipboardGuard)
+            \(mediaGuard)
+            \(locationGuard)
+            \(externalURLGuard)
+            """
+
         return """
         (function() {
             if (window.__SwiftSandboxInitialized) return;
             window.__SwiftSandboxInitialized = true;
+
+            \(capabilityGuards)
             
             const originalConsole = {
                 log: console.log.bind(console),

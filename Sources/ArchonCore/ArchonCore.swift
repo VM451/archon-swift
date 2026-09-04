@@ -28,7 +28,7 @@ public struct NoOpArchonLogger: ArchonLogger, Sendable {
     public func log(_ level: ArchonLogLevel, message: String) {}
 }
 
-public enum ArchonPermission: String, Codable, CaseIterable, Sendable {
+public enum ArchonPermission: String, Codable, CaseIterable, Hashable, Sendable {
     case network
     case storage
     case clipboard

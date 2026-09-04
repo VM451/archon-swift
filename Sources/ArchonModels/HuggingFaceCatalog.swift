@@ -241,6 +241,9 @@ public struct HuggingFaceCatalog: ModelCatalogProvider, Sendable {
             } else if lowercased.hasSuffix(".safetensors") {
                 format = .safetensors
                 runtime = .unknown
+            } else if [".bin", ".pt", ".pth", ".ckpt"].contains(where: { lowercased.hasSuffix($0) }) {
+                format = .transformers
+                runtime = .unknown
             } else {
                 return nil
             }

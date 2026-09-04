@@ -120,7 +120,7 @@ public enum ModelArtifactInspector {
             }
 
             let filenames = Set(files.map { $0.lastPathComponent.lowercased() })
-            let hasWeights = files.contains { $0.pathExtension.lowercased() == "safetensors" }
+            let hasWeights = files.contains { isModelWeightFile($0) }
             let hasConfiguration = filenames.contains("config.json")
             let hasTokenizer = filenames.contains("tokenizer.json") ||
                 filenames.contains("tokenizer.model") ||
@@ -129,12 +129,13 @@ public enum ModelArtifactInspector {
                 let architecture = try modelArchitecture(from: url.appendingPathComponent("config.json"))
                 let tokenizer = relativeFiles.filter { isTokenizerResource($0.relativePath) }
                 let weights = relativeFiles.filter { !isTokenizerResource($0.relativePath) }
+                let isMLX = isLikelyMLXDirectory(at: url)
                 return ModelArtifactInspection(
-                    format: .mlx,
-                    runtime: .mlx,
+                    format: isMLX ? .mlx : .transformers,
+                    runtime: isMLX ? .mlx : .unknown,
                     modelName: name,
                     modelArchitecture: architecture,
-                    supportedDeviceArchitectures: ["arm64"],
+                    supportedDeviceArchitectures: isMLX ? ["arm64"] : [],
                     modelSizeBytes: totalSize,
                     modelResources: weights,
                     tokenizerResources: tokenizer
@@ -161,6 +162,9 @@ public enum ModelArtifactInspector {
             runtime = .unknown
         case "safetensors":
             format = .safetensors
+            runtime = .unknown
+        case "bin", "pt", "pth", "ckpt":
+            format = .transformers
             runtime = .unknown
         default:
             format = .unknown
@@ -248,6 +252,31 @@ public enum ModelArtifactInspector {
             lowercased.hasSuffix("merges.txt") ||
             lowercased.hasSuffix("special_tokens_map.json") ||
             lowercased.hasSuffix("tokenizer_config.json")
+    }
+
+    private static func isModelWeightFile(_ url: URL) -> Bool {
+        ["safetensors", "bin", "pt", "pth", "ckpt"].contains(url.pathExtension.lowercased())
+    }
+
+    /// MLX-LM's on-disk contract includes a top-level quantization object in
+    /// quantized exports. A generic Transformers directory often has the same
+    /// weights/config/tokenizer filenames, so it remains conversion-required
+    /// unless this runtime-specific marker or an explicit `.mlx` package name
+    /// is present.
+    private static func isLikelyMLXDirectory(at url: URL) -> Bool {
+        let lowercasedName = url.lastPathComponent.lowercased()
+        if lowercasedName.hasSuffix(".mlx") {
+            return true
+        }
+
+        guard let data = try? Data(contentsOf: url.appendingPathComponent("config.json")),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let quantization = object["quantization"] as? [String: Any],
+              let bits = quantization["bits"] as? NSNumber,
+              let groupSize = quantization["group_size"] as? NSNumber else {
+            return false
+        }
+        return bits.intValue > 0 && groupSize.intValue > 0
     }
 }
 

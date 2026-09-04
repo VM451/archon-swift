@@ -14,6 +14,8 @@ public struct NativeSandboxRepresentable: UIViewRepresentable {
     
     public func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = controller.configuration.allows(.storage) ? .default() : .nonPersistent()
+        configuration.preferences.javaScriptCanOpenWindowsAutomatically = controller.configuration.allows(.externalURL)
         let workspace = controller.workspace
         let schemeHandler = SandboxURLSchemeHandler(
             workspaceProvider: { workspace },
@@ -22,7 +24,7 @@ public struct NativeSandboxRepresentable: UIViewRepresentable {
         configuration.setURLSchemeHandler(schemeHandler, forURLScheme: SandboxURLSchemeHandler.scheme)
         
         let contentController = WKUserContentController()
-        let scriptSource = SandboxScriptBridge.generateBootstrapScript()
+        let scriptSource = SandboxScriptBridge.generateBootstrapScript(configuration: controller.configuration)
         let userScript = WKUserScript(source: scriptSource, injectionTime: .atDocumentStart, forMainFrameOnly: true)
         contentController.addUserScript(userScript)
         
@@ -31,6 +33,7 @@ public struct NativeSandboxRepresentable: UIViewRepresentable {
         
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
+        webView.uiDelegate = context.coordinator
         webView.isOpaque = false
         webView.backgroundColor = .clear
         webView.isInspectable = controller.configuration.isInspectable
@@ -68,7 +71,7 @@ public struct NativeSandboxRepresentable: UIViewRepresentable {
         Coordinator(controller: controller)
     }
     
-    public final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
+    public final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
         private let controller: SandboxViewController
         
         init(controller: SandboxViewController) {
@@ -93,11 +96,28 @@ public struct NativeSandboxRepresentable: UIViewRepresentable {
             decisionHandler(isAllowed(navigationAction.request.url) ? .allow : .cancel)
         }
 
+        @available(iOS 15.0, *)
+        public func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin, initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType, decisionHandler: @escaping @MainActor @Sendable (WKPermissionDecision) -> Void) {
+            let allowed: Bool
+            switch type {
+            case .camera:
+                allowed = controller.configuration.allows(.camera)
+            case .microphone:
+                allowed = controller.configuration.allows(.microphone)
+            case .cameraAndMicrophone:
+                allowed = controller.configuration.allows(.camera) && controller.configuration.allows(.microphone)
+            @unknown default:
+                allowed = false
+            }
+            decisionHandler(allowed ? .grant : .deny)
+        }
+
         private func isAllowed(_ url: URL?) -> Bool {
             guard let url, let scheme = url.scheme?.lowercased() else { return false }
             let configuration = controller.configuration
-            guard configuration.allowedSchemes.map({ $0.lowercased() }).contains(scheme) else { return false }
-            if (scheme == "http" || scheme == "https") && !configuration.allowNetworkAccess { return false }
+            guard configuration.allowsURLScheme(scheme) else { return false }
+            if (scheme == "http" || scheme == "https" || scheme == "ws" || scheme == "wss"), !configuration.allows(.network) { return false }
+            if scheme != SandboxURLSchemeHandler.scheme, !configuration.allows(.externalURL) { return false }
             return scheme != SandboxURLSchemeHandler.scheme || url.host?.lowercased() == SandboxURLSchemeHandler.host
         }
     }
@@ -115,6 +135,8 @@ public struct NativeSandboxRepresentable: NSViewRepresentable {
     
     public func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = controller.configuration.allows(.storage) ? .default() : .nonPersistent()
+        configuration.preferences.javaScriptCanOpenWindowsAutomatically = controller.configuration.allows(.externalURL)
         let workspace = controller.workspace
         let schemeHandler = SandboxURLSchemeHandler(
             workspaceProvider: { workspace },
@@ -123,7 +145,7 @@ public struct NativeSandboxRepresentable: NSViewRepresentable {
         configuration.setURLSchemeHandler(schemeHandler, forURLScheme: SandboxURLSchemeHandler.scheme)
         
         let contentController = WKUserContentController()
-        let scriptSource = SandboxScriptBridge.generateBootstrapScript()
+        let scriptSource = SandboxScriptBridge.generateBootstrapScript(configuration: controller.configuration)
         let userScript = WKUserScript(source: scriptSource, injectionTime: .atDocumentStart, forMainFrameOnly: true)
         contentController.addUserScript(userScript)
         
@@ -132,6 +154,7 @@ public struct NativeSandboxRepresentable: NSViewRepresentable {
         
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
+        webView.uiDelegate = context.coordinator
         webView.setValue(false, forKey: "drawsBackground")
         webView.isInspectable = controller.configuration.isInspectable
         
@@ -168,7 +191,7 @@ public struct NativeSandboxRepresentable: NSViewRepresentable {
         Coordinator(controller: controller)
     }
     
-    public final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
+    public final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
         private let controller: SandboxViewController
         
         init(controller: SandboxViewController) {
@@ -193,11 +216,28 @@ public struct NativeSandboxRepresentable: NSViewRepresentable {
             decisionHandler(isAllowed(navigationAction.request.url) ? .allow : .cancel)
         }
 
+        @available(macOS 12.0, *)
+        public func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin, initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType, decisionHandler: @escaping @MainActor @Sendable (WKPermissionDecision) -> Void) {
+            let allowed: Bool
+            switch type {
+            case .camera:
+                allowed = controller.configuration.allows(.camera)
+            case .microphone:
+                allowed = controller.configuration.allows(.microphone)
+            case .cameraAndMicrophone:
+                allowed = controller.configuration.allows(.camera) && controller.configuration.allows(.microphone)
+            @unknown default:
+                allowed = false
+            }
+            decisionHandler(allowed ? .grant : .deny)
+        }
+
         private func isAllowed(_ url: URL?) -> Bool {
             guard let url, let scheme = url.scheme?.lowercased() else { return false }
             let configuration = controller.configuration
-            guard configuration.allowedSchemes.map({ $0.lowercased() }).contains(scheme) else { return false }
-            if (scheme == "http" || scheme == "https") && !configuration.allowNetworkAccess { return false }
+            guard configuration.allowsURLScheme(scheme) else { return false }
+            if (scheme == "http" || scheme == "https" || scheme == "ws" || scheme == "wss"), !configuration.allows(.network) { return false }
+            if scheme != SandboxURLSchemeHandler.scheme, !configuration.allows(.externalURL) { return false }
             return scheme != SandboxURLSchemeHandler.scheme || url.host?.lowercased() == SandboxURLSchemeHandler.host
         }
     }

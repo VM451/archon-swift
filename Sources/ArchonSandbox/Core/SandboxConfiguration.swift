@@ -1,10 +1,20 @@
 import Foundation
 import CoreGraphics
+import ArchonCore
 
 /// Configuration parameters governing the sandbox execution perimeter, security policy, and UI rendering.
 public struct SandboxConfiguration: Sendable, Equatable {
     /// Determines whether the sandbox can make outbound HTTP/HTTPS network requests. Defaults to `false` for zero-trust local isolation.
+    ///
+    /// This property is retained for source compatibility. New code should prefer
+    /// `allowedPermissions`, which is the single capability policy used by the
+    /// WebKit bridge and navigation delegates.
     public var allowNetworkAccess: Bool
+
+    /// Explicit capabilities granted to the sandbox. The default is empty
+    /// (network, storage, clipboard, camera, microphone, location, and external
+    /// URLs are all denied).
+    public var allowedPermissions: Set<ArchonPermission>
     
     /// Enables or disables WebAssembly (.wasm) execution within the JavaScript environment. Defaults to `true`.
     public var enableWebAssembly: Bool
@@ -35,6 +45,7 @@ public struct SandboxConfiguration: Sendable, Equatable {
     
     public init(
         allowNetworkAccess: Bool = false,
+        allowedPermissions: Set<ArchonPermission> = [],
         enableWebAssembly: Bool = true,
         enableWebGPU: Bool = true,
         cornerRadius: CGFloat = 12.0,
@@ -46,6 +57,7 @@ public struct SandboxConfiguration: Sendable, Equatable {
         watchdogCheckIntervalSeconds: TimeInterval = 5.0
     ) {
         self.allowNetworkAccess = allowNetworkAccess
+        self.allowedPermissions = allowedPermissions
         self.enableWebAssembly = enableWebAssembly
         self.enableWebGPU = enableWebGPU
         self.cornerRadius = cornerRadius
@@ -58,6 +70,39 @@ public struct SandboxConfiguration: Sendable, Equatable {
     }
     
     public static let `default` = SandboxConfiguration()
+
+    /// Returns whether a capability is enabled for this sandbox.
+    ///
+    /// `allowNetworkAccess` is treated as a compatibility alias for the network
+    /// permission so existing clients do not silently lose access when adopting
+    /// the capability-based policy.
+    public func allows(_ permission: ArchonPermission) -> Bool {
+        permission == .network
+            ? allowNetworkAccess || allowedPermissions.contains(.network)
+            : allowedPermissions.contains(permission)
+    }
+
+    /// Returns whether a URL scheme is allowed by both the scheme allowlist and
+    /// the capability policy. The legacy network flag preserves the historical
+    /// `https`/`wss` defaults for clients that have not adopted permissions.
+    public func allowsURLScheme(_ scheme: String) -> Bool {
+        let normalizedScheme = scheme.lowercased()
+        if allowedSchemes.map({ $0.lowercased() }).contains(normalizedScheme) {
+            return true
+        }
+        return allowedPermissions.isEmpty
+            && allowNetworkAccess
+            && ["https", "wss"].contains(normalizedScheme)
+    }
+
+    /// Normalized URL schemes used when generating the enforced CSP.
+    public var effectiveAllowedSchemes: Set<String> {
+        var schemes = Set(allowedSchemes.map { $0.lowercased() })
+        if allowedPermissions.isEmpty && allowNetworkAccess {
+            schemes.formUnion(["https", "wss"])
+        }
+        return schemes
+    }
     
     /// High-security configuration with network fully disabled, strict memory limits, and tight CSP.
     public static let secure = SandboxConfiguration(

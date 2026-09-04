@@ -11,9 +11,15 @@ public enum SandboxCSPBuilder: Sendable {
         
         var connectSrc = "'self' sandbox: data: blob:"
         var imgSrc = "'self' sandbox: data: blob:"
-        if configuration.allowNetworkAccess {
-            connectSrc += " https: wss:"
-            imgSrc += " https:"
+        if configuration.allows(.network) {
+            let schemes = configuration.effectiveAllowedSchemes
+            for scheme in ["http", "https"] where schemes.contains(scheme) {
+                connectSrc += " \(scheme):"
+                imgSrc += " \(scheme):"
+            }
+            for scheme in ["ws", "wss"] where schemes.contains(scheme) {
+                connectSrc += " \(scheme):"
+            }
         }
         
         var scriptSrc = "'self' sandbox: 'unsafe-inline' 'unsafe-eval' blob:"
