@@ -113,6 +113,34 @@ struct ArchonConnectTests {
         #expect(contents.first?.text == "hello")
     }
 
+    @Test("HTTP MCP JSON responses containing data text are not mistaken for SSE")
+    func preservesJSONResponseContainingDataText() async throws {
+        StubURLProtocol.responseBodies = [
+            Data(#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18"}}"#.utf8),
+            Data(),
+            Data(#"{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"metadata: data: chunk"}]}}"#.utf8)
+        ]
+        defer {
+            StubURLProtocol.responseBodies = []
+            StubURLProtocol.responseContentTypes = []
+        }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let transport = MCPHTTPTransport(endpoint: URL(string: "https://mcp.example.test")!, session: session)
+
+        try await transport.connect()
+        let result = try await transport.callTool(name: "metadata", arguments: [:])
+
+        guard case .object(let value) = result.content.first,
+              case .string(let text) = value["text"] else {
+            Issue.record("Expected a text content item.")
+            return
+        }
+        #expect(text == "metadata: data: chunk")
+    }
+
     @Test("HTTP MCP transport streams server notifications before the final tool result")
     func streamsJSONRPCMessages() async throws {
         StubURLProtocol.responseBodies = [

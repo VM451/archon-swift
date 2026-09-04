@@ -558,7 +558,7 @@ public actor MCPHTTPTransport: MCPTransport {
 
     private func decodeResponse(_ data: Data) throws -> MCPWireResponse {
         let payload: Data
-        if let text = String(data: data, encoding: .utf8), text.contains("data:") {
+        if let text = String(data: data, encoding: .utf8) {
             let eventPayloads = text
                 .split(whereSeparator: \ .isNewline)
                 .compactMap { line -> String? in
@@ -566,8 +566,11 @@ public actor MCPHTTPTransport: MCPTransport {
                     return value.hasPrefix("data:") ? String(value.dropFirst(5)).trimmingCharacters(in: .whitespaces) : nil
                 }
                 .filter { !$0.isEmpty && $0 != "[DONE]" }
-            guard let last = eventPayloads.last else { throw MCPTransportError.invalidResponse }
-            payload = Data(last.utf8)
+            if let last = eventPayloads.last {
+                payload = Data(last.utf8)
+            } else {
+                payload = data
+            }
         } else {
             payload = data
         }
