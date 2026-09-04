@@ -63,11 +63,6 @@ public final class StealthScraper: NSObject, WKNavigationDelegate, Sendable {
         }
         let config = WKWebViewConfiguration()
         
-        // Private Access Tokens (PATs) config if available natively on the target WebKit preferences.
-        if config.preferences.responds(to: Selector(("isPrivateAccessTokensEnabled"))) {
-            config.preferences.setValue(true, forKey: "isPrivateAccessTokensEnabled")
-        }
-        
         // Inject JS to spoof human behavior
         let behaviorScript = WKUserScript(
             source: getHumanBehaviorJavaScript(),
