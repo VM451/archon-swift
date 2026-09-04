@@ -123,33 +123,35 @@ consuming app's explicit adapter and permission boundary.
 
 ## Competitive comparison
 
-This matrix is intentionally concise. It compares local, in-process Apple Swift
-qualification, not overall product quality or market share. Detailed evidence,
-user-pull signals, decisions, and quality gates live in the [competitor
-registry](context/competitor-signature-features.md), [adoption
-backlog](context/feature-adoption-backlog.md), and [quality
+This matrix is intentionally concise. Each competitor column names the
+reference set being compared; it does not imply identical scope or market
+share. The `Native Swift / local in-process core` row is the strict local
+qualification gate. Detailed evidence, user-pull signals, decisions, and
+quality gates live in the [competitor registry](context/competitor-signature-features.md),
+[adoption backlog](context/feature-adoption-backlog.md), and [quality
 scorecard](context/quality-scorecard.md).
 
-| Capability | Archon | Apple native | Agent frameworks | Memory/RAG services | Search/research services | Sandbox/browser services | MCP Swift SDK |
-| --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| Native Swift / local in-process core | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ |
-| On-device model runtime | ✅ | ✅ | ⚠️ | ❌ | ❌ | ❌ | ❌ |
-| Model catalog and lifecycle | ✅ | ⚠️ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Agent graphs | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Durable checkpoints and replay | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Tools and handoffs | ✅ | ⚠️ | ✅ | ⚠️ | ⚠️ | ⚠️ | ✅ |
-| Durable memory and RAG | ✅ | ❌ | ⚠️ | ✅ | ⚠️ | ❌ | ❌ |
-| Web research and citations | ✅ | ❌ | ⚠️ | ❌ | ✅ | ⚠️ | ❌ |
-| Offline local-corpus search | ✅ | ⚠️ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Secure execution boundary | ⚠️ | ⚠️ | ⚠️ | ❌ | ❌ | ✅ | ❌ |
-| Semantic host actions | ⚠️ | ✅ | ⚠️ | ❌ | ❌ | ✅ | ⚠️ |
-| MCP tools, resources, and prompts | ✅ | ❌ | ⚠️ | ❌ | ❌ | ⚠️ | ✅ |
-| CloudKit synchronization | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| SwiftUI and App Intents surfaces | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Network and isolation disclosure | ✅ | ⚠️ | ❌ | ❌ | ❌ | ⚠️ | ⚠️ |
+| Capability | Archon | Apple<br>Foundation Models<br>Core ML<br>WebKit<br>CloudKit<br>SwiftUI<br>App Intents | Memory<br>Mem0<br>Supermemory<br>Zep<br>Letta<br>CrewAI Memory | Agents<br>LangGraph<br>CrewAI<br>OpenAI Agents SDK<br>LlamaIndex<br>PydanticAI | Search/research<br>Tavily<br>Exa<br>Firecrawl<br>Brave Search<br>Perplexity<br>ChatGPT Search<br>SerpAPI<br>SearXNG<br>Perplexica | Sandbox/browser<br>E2B<br>Modal<br>Daytona<br>Deno Sandbox<br>Browserbase<br>Stagehand<br>TinyFish<br>OpenAI Computer Use<br>Anthropic Computer Use | Models/runtimes<br>MLX Swift<br>Hugging Face Swift<br>AnyLanguageModel<br>Conduit<br>SwiftAgent<br>AgentRunKit<br>Swarm | Protocols<br>MCP Swift SDK<br>A2A<br>AG-UI |
+| --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| Native Swift / local in-process core | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ | ⚠️ |
+| On-device model runtime | ✅ | ✅ | ❌ | ⚠️ | ❌ | ❌ | ✅ | ❌ |
+| Model catalog and lifecycle | ✅ | ⚠️ | ❌ | ❌ | ❌ | ❌ | ⚠️ | ❌ |
+| Agent graphs | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ | ⚠️ | ❌ |
+| Durable checkpoints and replay | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ | ⚠️ | ❌ |
+| Tools and handoffs | ✅ | ✅ | ⚠️ | ✅ | ⚠️ | ✅ | ⚠️ | ✅ |
+| Durable memory and RAG | ✅ | ❌ | ✅ | ⚠️ | ⚠️ | ❌ | ⚠️ | ❌ |
+| Web research and citations | ✅ | ⚠️ | ❌ | ⚠️ | ✅ | ⚠️ | ❌ | ❌ |
+| Offline local-corpus search | ✅ | ⚠️ | ❌ | ❌ | ⚠️ | ❌ | ❌ | ❌ |
+| Secure execution boundary | ⚠️ | ⚠️ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
+| Semantic host actions | ⚠️ | ✅ | ❌ | ⚠️ | ❌ | ✅ | ⚠️ | ❌ |
+| MCP tools, resources, and prompts | ✅ | ❌ | ❌ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ✅ |
+| CloudKit synchronization | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| SwiftUI and App Intents surfaces | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ⚠️ | ❌ |
+| Network and isolation disclosure | ✅ | ⚠️ | ❌ | ❌ | ⚠️ | ✅ | ⚠️ | ⚠️ |
 
-Legend: ✅ available and qualifying · ⚠️ partial, optional, adapter-owned, or
-host-dependent · ❌ no local-native equivalent in the referenced product class.
+Legend: ✅ strong or qualifying support · ⚠️ mixed, partial, hosted, optional,
+adapter-owned, or host-dependent · ❌ no meaningful equivalent in the named
+reference set. For provider-by-provider evidence, use the linked registry.
 
 ### What Archon promises
 
