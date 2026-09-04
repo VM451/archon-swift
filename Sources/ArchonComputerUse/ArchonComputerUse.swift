@@ -161,7 +161,7 @@ public actor ComputerUseController {
         do {
             let snapshot = try await observationProvider.captureSnapshot()
             lastSnapshot = snapshot
-            state = .idle
+            if state == .observing { state = .idle }
             return snapshot
         } catch {
             if state == .observing { state = .idle }
@@ -233,7 +233,7 @@ public actor ComputerUseController {
     }
 
     public func pause() {
-        guard state == .executing else { return }
+        guard state == .executing || state == .observing else { return }
         state = .paused
         currentTask?.cancel()
     }

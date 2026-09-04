@@ -7,6 +7,46 @@ private struct MockObservationProvider: ComputerUseObservationProvider {
     func captureSnapshot() async throws -> SemanticSnapshot { snapshot }
 }
 
+private actor ObservationGate {
+    private let snapshot: SemanticSnapshot
+    private var requestContinuation: CheckedContinuation<Void, Never>?
+    private var resultContinuation: CheckedContinuation<SemanticSnapshot, Never>?
+    private var requested = false
+
+    init(snapshot: SemanticSnapshot) {
+        self.snapshot = snapshot
+    }
+
+    func waitUntilRequested() async {
+        if requested { return }
+        await withCheckedContinuation { continuation in
+            requestContinuation = continuation
+        }
+    }
+
+    func capture() async -> SemanticSnapshot {
+        requested = true
+        requestContinuation?.resume()
+        requestContinuation = nil
+        return await withCheckedContinuation { continuation in
+            resultContinuation = continuation
+        }
+    }
+
+    func release() {
+        resultContinuation?.resume(returning: snapshot)
+        resultContinuation = nil
+    }
+}
+
+private struct GatedObservationProvider: ComputerUseObservationProvider {
+    let gate: ObservationGate
+
+    func captureSnapshot() async throws -> SemanticSnapshot {
+        await gate.capture()
+    }
+}
+
 private struct AllowAllComputerUsePolicy: ComputerUsePermissionPolicy {
     func allows(_ risk: ComputerUseRisk, action: SemanticAction) async -> Bool {
         _ = (risk, action)
@@ -148,6 +188,41 @@ struct ArchonComputerUseTests {
             Issue.record("A stopped action must not return a successful result.")
         } catch let error as ComputerUseError {
             #expect(error == .actionCancelled("record.save"))
+        }
+        #expect(await controller.state == .stopped)
+    }
+
+    @Test("Stop during semantic observation preserves the stopped state")
+    func stopDuringObservationPreservesStoppedState() async throws {
+        let gate = ObservationGate(snapshot: SemanticSnapshot(
+            screenID: "home",
+            elements: [SemanticElement(id: "compose", role: "button", label: "Compose")]
+        ))
+        let controller = ComputerUseController(
+            observationProvider: GatedObservationProvider(gate: gate),
+            permissionPolicy: AllowAllComputerUsePolicy()
+        )
+        await controller.register(SemanticAction(
+            id: "compose.open",
+            description: "Open composer",
+            risk: .navigate,
+            targetElementID: "compose"
+        ) {
+            SemanticActionResult(actionID: "compose.open", succeeded: true)
+        })
+
+        let execution = Task {
+            try await controller.execute(actionID: "compose.open")
+        }
+        await gate.waitUntilRequested()
+        await controller.stop()
+        await gate.release()
+
+        do {
+            _ = try await execution.value
+            Issue.record("A stopped observation must not return a successful action.")
+        } catch let error as ComputerUseError {
+            #expect(error == .actionCancelled("compose.open"))
         }
         #expect(await controller.state == .stopped)
     }
