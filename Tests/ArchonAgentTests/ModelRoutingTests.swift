@@ -54,6 +54,36 @@ struct ModelRoutingTests {
         }
     }
 
+    @Test("Core AI lifecycle adapter delegates imported Core AI bundles to the runtime")
+    func acceptsCoreAIBundleArtifact() async throws {
+        let variant = ModelVariant(
+            id: "coreai-bundle",
+            name: "model.coreai",
+            modelID: "example/model",
+            source: .localImport,
+            format: .coreAIBundle,
+            runtime: .coreAI
+        )
+        let model = InstalledModel(
+            id: "coreai-bundle",
+            directoryURL: .temporaryDirectory,
+            manifest: ArchonModelManifest(variant: variant, modelName: "Example")
+        )
+        let adapter = CoreAIModelRuntimeAdapter()
+
+        do {
+            try await adapter.load(model: model)
+            Issue.record("An invalid temporary directory must not load as a Core AI model.")
+        } catch let error as ArchonModelsError {
+            #expect(error != .unsupportedArtifact("Only installed Core AI artifacts can be loaded by CoreAIModelRuntimeAdapter."))
+        } catch is CoreAIProviderError {
+            // The adapter reached the public Core AI runtime, which may be unavailable
+            // or reject the fixture because this package test has no signed model asset.
+        } catch {
+            Issue.record("Unexpected Core AI lifecycle error: \(error)")
+        }
+    }
+
     @Test("Prefer-local policy selects Apple's system model when available")
     func prefersAppleSystemModel() {
         let device = ArchonDeviceCapabilities(

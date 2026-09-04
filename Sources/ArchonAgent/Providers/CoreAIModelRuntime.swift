@@ -249,7 +249,8 @@ public actor CoreAIModelRuntimeAdapter: ModelRuntimeAdapter {
     }
 
     public func load(model: InstalledModel) async throws {
-        guard model.manifest.runtime == .coreAI, model.manifest.format == .aimodel else {
+        guard model.manifest.runtime == .coreAI,
+              model.manifest.format == .aimodel || model.manifest.format == .coreAIBundle else {
             throw ArchonModelsError.unsupportedArtifact(
                 "Only installed Core AI artifacts can be loaded by CoreAIModelRuntimeAdapter."
             )

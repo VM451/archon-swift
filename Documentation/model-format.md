@@ -74,10 +74,10 @@ copies a validated file or directory artifact as-is. Older manifests without
 
 `archon-model benchmark` applies the same manifest and artifact validation, then
 measures monotonic-clock preparation samples with an unload between samples for
-directly runnable Core AI `.aimodel` and MLX `.mlx` artifacts. Use `--artifact`
-to supply an artifact when `artifactPath` is absent. Other runtime/format pairs
-fail closed until a concrete adapter exists; the command never invents token or
-inference-throughput measurements.
+directly runnable Core AI `.aimodel`/`.coreAIBundle` and MLX `.mlx` artifacts.
+Use `--artifact` to supply an artifact when `artifactPath` is absent. Other
+runtime/format pairs fail closed until a concrete adapter exists; the command
+never invents token or inference-throughput measurements.
 
 `MLXModelRuntimeAdapter` is the concrete runtime-management adapter for
 manifests declaring the `mlx` format and runtime. It loads the installed

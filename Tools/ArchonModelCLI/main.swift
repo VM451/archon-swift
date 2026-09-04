@@ -317,7 +317,7 @@ private struct Benchmark: AsyncParsableCommand {
 
         let adapter: any ModelPreparationBenchmarkAdapter
         switch (manifest.runtime, manifest.format) {
-        case (.coreAI, .aimodel):
+        case (.coreAI, .aimodel), (.coreAI, .coreAIBundle):
             adapter = CoreAIPreparationAdapter(artifactURL: artifactURL)
         case (.mlx, .mlx):
             adapter = MLXPreparationAdapter(artifactURL: artifactURL)
