@@ -45,6 +45,9 @@ Keychain-backed token service when resuming a paused transfer. After a host
 recreates `ModelDownloadManager`, it supplies the original `ModelDownloadRequest`
 to `resumeInBackground` so model metadata and installation policy are restored;
 the API rejects a request whose variant ID does not match the persisted transfer.
+Explicit catalog updates carry the existing installation identity through the
+same atomic commit boundary, so a changed catalog variant ID cannot leave the
+previous revision installed beside its replacement.
 
 The package is a SwiftPM library family with a buildable SwiftUI example host,
 rather than a signed Xcode application target. It therefore exposes

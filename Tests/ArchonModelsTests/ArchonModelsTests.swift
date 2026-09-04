@@ -1286,6 +1286,77 @@ struct ArchonModelsTests {
         #expect(updates[0].variant?.id == variant.id)
     }
 
+    @Test("Model update replaces the selected installation when the catalog variant ID changes")
+    func updateUsesExistingInstallationIdentity() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("archon-update-identity-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        let oldArtifact = root.appendingPathComponent("old.aimodel")
+        let newArtifact = root.appendingPathComponent("new.aimodel")
+        try Data("old-model".utf8).write(to: oldArtifact)
+        try Data("new-model".utf8).write(to: newArtifact)
+
+        let oldVariant = ModelVariant(
+            id: "old-variant",
+            name: "model.aimodel",
+            modelID: "example/update-identity",
+            source: .directURL,
+            format: .aimodel,
+            runtime: .coreAI,
+            sizeBytes: 9
+        )
+        let library = ModelLibrary(rootURL: root.appendingPathComponent("library"))
+        let installed = try await library.install(
+            downloadedArtifactAt: oldArtifact,
+            request: ModelDownloadRequest(variant: oldVariant, modelName: "Update Identity")
+        )
+
+        let newVariant = ModelVariant(
+            id: "new-variant",
+            name: "model.aimodel",
+            modelID: oldVariant.modelID,
+            source: .directURL,
+            downloadURL: URL(string: "https://models.example.test/new.aimodel"),
+            format: .aimodel,
+            runtime: .coreAI,
+            sizeBytes: 9
+        )
+        let streamProvider: ModelByteStreamProvider = { request in
+            let (stream, continuation) = AsyncThrowingStream<UInt8, Error>.makeStream()
+            Task {
+                for byte in Data("new-model".utf8) {
+                    continuation.yield(byte)
+                }
+                continuation.finish()
+            }
+            return (stream, HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Length": "9"]
+            )!)
+        }
+        let manager = ModelDownloadManager(tokenStore: nil, byteStreamProvider: streamProvider)
+        let candidate = ModelUpdateCandidate(
+            id: installed.id,
+            installedModelID: installed.id,
+            sourceRepository: oldVariant.modelID,
+            currentRevision: "old-revision",
+            availableRevision: "new-revision",
+            variant: newVariant
+        )
+
+        let events = try await manager.update(candidate, into: library)
+        for try await _ in events {}
+
+        let replaced = try #require(try await library.installedModel(id: installed.id))
+        #expect(replaced.id == installed.id)
+        #expect(String(data: try Data(contentsOf: replaced.artifactURL), encoding: .utf8) == "new-model")
+        #expect(try await library.installedModels().count == 1)
+    }
+
     @Test("Background download records survive store recreation")
     func persistsBackgroundDownloadRecord() async throws {
         let root = FileManager.default.temporaryDirectory

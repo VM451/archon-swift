@@ -33,19 +33,25 @@ public struct ModelDownloadRequest: Sendable {
     public let license: ModelLicenseMetadata?
     public let sourceRepository: String?
     public let sourceRevision: String?
+    /// Existing managed-library installation to replace at the atomic commit
+    /// boundary. This is set for explicit model updates; ordinary downloads
+    /// derive their installation identity from the model and variant IDs.
+    public let replacementInstallationID: String?
 
     public init(
         variant: ModelVariant,
         modelName: String,
         license: ModelLicenseMetadata? = nil,
         sourceRepository: String? = nil,
-        sourceRevision: String? = nil
+        sourceRevision: String? = nil,
+        replacementInstallationID: String? = nil
     ) {
         self.variant = variant
         self.modelName = modelName
         self.license = license
         self.sourceRepository = sourceRepository
         self.sourceRevision = sourceRevision
+        self.replacementInstallationID = replacementInstallationID
     }
 }
 
@@ -460,7 +466,7 @@ public actor ModelLibrary {
         return try install(
             artifactAt: artifactURL,
             manifest: normalizedManifest,
-            installationID: request.variant.modelID + "-" + request.variant.id
+            installationID: request.replacementInstallationID ?? (request.variant.modelID + "-" + request.variant.id)
         )
     }
 
@@ -850,7 +856,8 @@ public actor ModelDownloadManager {
             modelName: installed.manifest.modelName,
             license: installed.manifest.license,
             sourceRepository: candidate.sourceRepository,
-            sourceRevision: candidate.availableRevision
+            sourceRevision: candidate.availableRevision,
+            replacementInstallationID: installed.id
         )
         return try download(request, into: library)
     }
