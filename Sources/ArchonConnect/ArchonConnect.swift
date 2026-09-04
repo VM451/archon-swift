@@ -92,6 +92,14 @@ public struct MCPToolResult: Codable, Equatable, Sendable {
     }
 }
 
+/// One message observed while consuming an MCP streamable-HTTP response.
+/// Progress and other server notifications are surfaced instead of being
+/// discarded while the client waits for the final tool result.
+public enum MCPStreamEvent: Equatable, Sendable {
+    case result(MCPToolResult)
+    case notification(method: String, params: JSONValue?)
+}
+
 /// A resource advertised by an MCP server. The wire protocol identifies a
 /// resource by URI; `id` is a stable local identity for Swift collection APIs.
 public struct MCPResource: Codable, Equatable, Sendable, Identifiable {
@@ -153,11 +161,24 @@ public protocol MCPTransport: Sendable {
     func disconnect() async
     func listTools() async throws -> [MCPTool]
     func callTool(name: String, arguments: [String: JSONValue]) async throws -> MCPToolResult
+    func streamTool(name: String, arguments: [String: JSONValue]) async -> AsyncThrowingStream<MCPStreamEvent, Error>
     func listResources() async throws -> [MCPResource]
     func readResource(uri: String) async throws -> [MCPResourceContent]
 }
 
 public extension MCPTransport {
+    /// Adapts a transport with no native stream to a one-result stream.
+    func streamTool(name: String, arguments: [String: JSONValue]) async -> AsyncThrowingStream<MCPStreamEvent, Error> {
+        let (stream, continuation) = AsyncThrowingStream<MCPStreamEvent, Error>.makeStream()
+        do {
+            continuation.yield(.result(try await callTool(name: name, arguments: arguments)))
+            continuation.finish()
+        } catch {
+            continuation.finish(throwing: error)
+        }
+        return stream
+    }
+
     func listResources() async throws -> [MCPResource] { [] }
 
     func readResource(uri: String) async throws -> [MCPResourceContent] {
@@ -283,6 +304,84 @@ public actor MCPHTTPTransport: MCPTransport {
         return MCPToolResult(content: content, isError: isError)
     }
 
+    /// Streams server notifications and the final tool result from an MCP
+    /// streamable-HTTP response. Non-SSE JSON responses are surfaced as one
+    /// `.result` event.
+    public func streamTool(name: String, arguments: [String: JSONValue]) async -> AsyncThrowingStream<MCPStreamEvent, Error> {
+        let (stream, continuation) = AsyncThrowingStream<MCPStreamEvent, Error>.makeStream()
+        guard connected else {
+            continuation.finish(throwing: MCPTransportError.notConnected)
+            return stream
+        }
+
+        let requestID = nextRequestID
+        nextRequestID += 1
+        let wireRequest = MCPWireRequest(
+            jsonrpc: "2.0",
+            id: requestID,
+            method: "tools/call",
+            params: .object([
+                "name": .string(name),
+                "arguments": .object(arguments)
+            ])
+        )
+
+        do {
+            let data = try JSONEncoder().encode(wireRequest)
+            let request = makeRequest(data: data)
+            let session = self.session
+            let timeout = requestTimeout
+            let task = Task { [weak self] in
+                do {
+                    try await withThrowingTaskGroup(of: Void.self) { group in
+                        group.addTask {
+                            let (bytes, response) = try await session.bytes(for: request)
+                            guard let httpResponse = response as? HTTPURLResponse else {
+                                throw MCPTransportError.invalidResponse
+                            }
+                            guard (200...299).contains(httpResponse.statusCode) else {
+                                throw MCPTransportError.httpFailure(httpResponse.statusCode)
+                            }
+                            if let newSessionID = httpResponse.value(forHTTPHeaderField: "Mcp-Session-Id") {
+                                await self?.recordSessionID(newSessionID)
+                            }
+
+                            let contentType = httpResponse.value(forHTTPHeaderField: "Content-Type")?.lowercased() ?? ""
+                            if contentType.contains("text/event-stream") {
+                                try await Self.consumeSSE(bytes: bytes, continuation: continuation)
+                            } else {
+                                var body = Data()
+                                for try await byte in bytes {
+                                    try Task.checkCancellation()
+                                    body.append(byte)
+                                }
+                                guard let event = try Self.decodeStreamEvent(body) else {
+                                    throw MCPTransportError.invalidResponse
+                                }
+                                continuation.yield(event)
+                            }
+                        }
+                        if let timeout, timeout > 0 {
+                            group.addTask {
+                                try await Task.sleep(for: .seconds(timeout))
+                                throw MCPTransportError.timeout(timeout)
+                            }
+                        }
+                        _ = try await group.next()
+                        group.cancelAll()
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        } catch {
+            continuation.finish(throwing: error)
+        }
+        return stream
+    }
+
     public func listResources() async throws -> [MCPResource] {
         guard connected else { throw MCPTransportError.notConnected }
         let result = try await sendRequest(method: "resources/list", params: .object([:]))
@@ -334,17 +433,7 @@ public actor MCPHTTPTransport: MCPTransport {
     }
 
     private func send(data: Data) async throws -> Data {
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.httpBody = data
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
-        for (field, value) in headers {
-            request.setValue(value, forHTTPHeaderField: field)
-        }
-        if let sessionID {
-            request.setValue(sessionID, forHTTPHeaderField: "Mcp-Session-Id")
-        }
+        let request = makeRequest(data: data)
 
         let session = self.session
         let requestForSend = request
@@ -376,6 +465,95 @@ public actor MCPHTTPTransport: MCPTransport {
             sessionID = newSessionID
         }
         return data
+    }
+
+    private func makeRequest(data: Data) -> URLRequest {
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.httpBody = data
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
+        for (field, value) in headers {
+            request.setValue(value, forHTTPHeaderField: field)
+        }
+        if let sessionID {
+            request.setValue(sessionID, forHTTPHeaderField: "Mcp-Session-Id")
+        }
+        return request
+    }
+
+    private func recordSessionID(_ value: String) {
+        sessionID = value
+    }
+
+    private static func consumeSSE(
+        bytes: URLSession.AsyncBytes,
+        continuation: AsyncThrowingStream<MCPStreamEvent, Error>.Continuation
+    ) async throws {
+        var line = Data()
+        var eventData = Data()
+
+        for try await byte in bytes {
+            try Task.checkCancellation()
+            if byte == 10 {
+                let text = String(decoding: line, as: UTF8.self)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if text.isEmpty {
+                    if !eventData.isEmpty {
+                        if let event = try decodeStreamEvent(eventData) {
+                            continuation.yield(event)
+                        }
+                        eventData.removeAll(keepingCapacity: true)
+                    }
+                } else if text.hasPrefix("data:") {
+                    let payload = String(text.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+                    if !payload.isEmpty {
+                        if !eventData.isEmpty { eventData.append(10) }
+                        eventData.append(contentsOf: Data(payload.utf8))
+                    }
+                }
+                line.removeAll(keepingCapacity: true)
+            } else if byte != 13 {
+                line.append(byte)
+            }
+        }
+
+        if !line.isEmpty {
+            let text = String(decoding: line, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if text.hasPrefix("data:") {
+                eventData.append(contentsOf: Data(String(text.dropFirst(5)).trimmingCharacters(in: .whitespaces).utf8))
+            }
+        }
+        if !eventData.isEmpty, let event = try decodeStreamEvent(eventData) {
+            continuation.yield(event)
+        }
+    }
+
+    private static func decodeStreamEvent(_ data: Data) throws -> MCPStreamEvent? {
+        let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, text != "[DONE]" else { return nil }
+        let message = try JSONDecoder().decode(MCPWireMessage.self, from: Data(text.utf8))
+        if let error = message.error {
+            throw MCPTransportError.serverError(code: error.code, message: error.message)
+        }
+        if let result = message.result {
+            guard case .object(let object) = result,
+                  case .array(let content) = object["content"] else {
+                throw MCPTransportError.invalidResponse
+            }
+            let isError: Bool
+            if case .bool(let value) = object["isError"] {
+                isError = value
+            } else {
+                isError = false
+            }
+            return .result(MCPToolResult(content: content, isError: isError))
+        }
+        if let method = message.method {
+            return .notification(method: method, params: message.params)
+        }
+        throw MCPTransportError.invalidResponse
     }
 
     private func decodeResponse(_ data: Data) throws -> MCPWireResponse {
@@ -412,6 +590,13 @@ private struct MCPWireNotification: Encodable {
 private struct MCPWireResponse: Decodable {
     let result: JSONValue?
     let error: MCPWireError?
+}
+
+private struct MCPWireMessage: Decodable {
+    let result: JSONValue?
+    let error: MCPWireError?
+    let method: String?
+    let params: JSONValue?
 }
 
 private struct MCPWireError: Decodable {
@@ -551,4 +736,39 @@ public actor MCPClient {
         }
         return try await transport.callTool(name: name, arguments: arguments)
     }
+
+    /// Streams MCP server notifications and the final result while preserving
+    /// the same local schema and permission checks as `callTool`.
+    public func streamTool(name: String, arguments: [String: JSONValue] = [:]) -> AsyncThrowingStream<MCPStreamEvent, Error> {
+        guard connected, let tool = toolsByName[name] else {
+            return failedMCPStream(ArchonCoreError.invalidConfiguration("MCP client is not connected or tool is unavailable."))
+        }
+        let transport = self.transport
+        let permissionPolicy = self.permissionPolicy
+        let (stream, continuation) = AsyncThrowingStream<MCPStreamEvent, Error>.makeStream()
+        let task = Task {
+            do {
+                try tool.validate(arguments: arguments)
+                guard await permissionPolicy.allows(tool.risk, tool: tool) else {
+                    throw ArchonCoreError.invalidConfiguration("MCP permission policy denied tool \(name).")
+                }
+                let remoteStream = await transport.streamTool(name: name, arguments: arguments)
+                for try await event in remoteStream {
+                    try Task.checkCancellation()
+                    continuation.yield(event)
+                }
+                continuation.finish()
+            } catch {
+                continuation.finish(throwing: error)
+            }
+        }
+        continuation.onTermination = { _ in task.cancel() }
+        return stream
+    }
+}
+
+private func failedMCPStream(_ error: Error) -> AsyncThrowingStream<MCPStreamEvent, Error> {
+    let (stream, continuation) = AsyncThrowingStream<MCPStreamEvent, Error>.makeStream()
+    continuation.finish(throwing: error)
+    return stream
 }

@@ -28,7 +28,9 @@ prewarm, cancellation, idle unload, memory pressure, app background, and
 thermal pressure behavior to the host.
 
 The MCP boundary validates the common JSON Schema subset in-process before
-remote tool calls and applies a bounded HTTP request timeout. Computer Use
+remote tool calls and applies a bounded HTTP request timeout. Its streamable
+HTTP API exposes progress/notification messages and the final tool result via
+`MCPStreamEvent`. Computer Use
 actions are semantic host actions; optional postconditions can re-observe the
 host's semantic tree and reject an action whose intended state was not reached.
 
