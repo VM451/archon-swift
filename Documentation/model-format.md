@@ -57,7 +57,9 @@ staging/validation/install contract through `ModelDownloadManager`. When the
 manager itself is recreated, the host rehydrates the original
 `ModelDownloadRequest` through the manager's `resumeInBackground` overload;
 transport persistence alone does not contain model metadata needed for final
-installation.
+installation. Reconnect also reconciles persisted `queued` or `downloading`
+records whose URLSession task no longer exists into a resumable failed state,
+so a process relaunch cannot leave a transfer permanently stuck as active.
 
 The manifest's optional `artifactPath` names the runnable artifact child inside
 the managed directory. `modelResources` and `tokenizerResources` are relative

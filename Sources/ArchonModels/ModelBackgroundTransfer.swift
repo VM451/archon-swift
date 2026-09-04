@@ -477,15 +477,32 @@ public actor ModelBackgroundTransferCoordinator {
     public func reconnect() async throws -> [ModelBackgroundDownloadRecord] {
         let tasks = await sessionTaskSnapshots()
         var records = try await store.allRecords()
+        var reconnectedIdentifiers = Set<String>()
         for task in tasks {
             guard let identifier = task.taskDescription,
                   let index = records.firstIndex(where: { $0.request.identifier == identifier }),
                   let downloadTask = delegate.task(withIdentifier: task.taskIdentifier) else { continue }
+            reconnectedIdentifiers.insert(identifier)
             taskIdentifiers[identifier] = task.taskIdentifier
             identifiersByTask[task.taskIdentifier] = identifier
             delegate.register(task: downloadTask, destinationURL: records[index].request.destinationURL)
             records[index].taskIdentifier = task.taskIdentifier
             if records[index].status == .queued { records[index].status = .downloading }
+            try await store.save(records[index])
+        }
+
+        // A process can be relaunched after the persisted record is written
+        // but before URLSession has adopted the task, or after the OS has
+        // discarded a task. Do not leave those records permanently stuck in
+        // an active state: mark them failed so the normal resume path can
+        // create a fresh transfer while preserving the staged artifact.
+        let recoveryMessage = "Background transfer was not found after reconnect."
+        for index in records.indices where
+            (records[index].status == .queued || records[index].status == .downloading) &&
+            !reconnectedIdentifiers.contains(records[index].request.identifier) {
+            records[index].taskIdentifier = nil
+            records[index].status = .failed
+            records[index].lastError = recoveryMessage
             try await store.save(records[index])
         }
         return try await store.allRecords()

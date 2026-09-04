@@ -1121,6 +1121,37 @@ struct ArchonModelsTests {
         #expect(await coordinator.isActive(identifier: identifier) == false)
     }
 
+    @Test("Reconnect marks missing active background tasks resumable")
+    func reconnectRecoversMissingBackgroundTask() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("archon-background-reconnect-missing-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let identifier = "background-reconnect-missing"
+        let request = ModelBackgroundDownloadRequest(
+            identifier: identifier,
+            url: URL(string: "https://models.example.test/model.aimodel")!,
+            destinationURL: root.appendingPathComponent("model.part")
+        )
+        let store = InMemoryModelBackgroundDownloadStore()
+        try await store.save(ModelBackgroundDownloadRecord(
+            request: request,
+            taskIdentifier: 42,
+            status: .downloading,
+            bytesDownloaded: 128,
+            totalBytes: 256
+        ))
+        let coordinator = ModelBackgroundTransferCoordinator(
+            sessionIdentifier: "com.archon.tests.background-reconnect-missing.\(UUID().uuidString)",
+            store: store
+        )
+
+        _ = try await coordinator.reconnect()
+        let record = try await coordinator.record(for: identifier)
+        #expect(record?.status == .failed)
+        #expect(record?.taskIdentifier == nil)
+        #expect(record?.lastError == "Background transfer was not found after reconnect.")
+    }
+
     @Test("Cancelling a background download consumer cancels the manager job")
     func cancelsBackgroundDownloadWhenEventConsumerStops() async throws {
         let root = FileManager.default.temporaryDirectory
