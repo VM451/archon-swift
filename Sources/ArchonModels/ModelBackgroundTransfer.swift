@@ -590,10 +590,16 @@ public actor ModelBackgroundTransferCoordinator {
         guard let identifier = identifiersByTask[taskIdentifier] ?? delegate.taskDescription(withIdentifier: taskIdentifier) else { return }
         finishedTaskIdentifiers.insert(taskIdentifier)
         guard var record = try? await store.record(for: identifier) else { return }
+        let cancellationWasRequested = cancelRequested.remove(identifier) != nil
         record.taskIdentifier = nil
         taskIdentifiers[identifier] = nil
         identifiersByTask[taskIdentifier] = nil
         delegate.unregister(taskIdentifier: taskIdentifier)
+        if cancellationWasRequested {
+            try? FileManager.default.removeItem(at: destinationURL ?? record.request.destinationURL)
+            await finish(identifier: identifier, status: .cancelled, state: .cancelled, errorMessage: nil)
+            return
+        }
         if let errorMessage {
             record.status = .failed
             record.lastError = errorMessage
@@ -632,6 +638,9 @@ public actor ModelBackgroundTransferCoordinator {
     private func receiveResumeData(identifier: String, resumeData: Data?) async {
         guard pauseRequested.remove(identifier) != nil,
               var record = try? await store.record(for: identifier) else { return }
+        // A completion callback can win while URLSession is producing resume
+        // data. Never move an already terminal transfer back to Paused.
+        guard record.status == .queued || record.status == .downloading else { return }
         let taskIdentifier = taskIdentifiers.removeValue(forKey: identifier)
         if let taskIdentifier {
             identifiersByTask[taskIdentifier] = nil
@@ -653,6 +662,8 @@ public actor ModelBackgroundTransferCoordinator {
         errorMessage: String?
     ) async {
         guard var record = try? await store.record(for: identifier) else { return }
+        pauseRequested.remove(identifier)
+        cancelRequested.remove(identifier)
         let taskIdentifier = taskIdentifiers.removeValue(forKey: identifier)
         if let taskIdentifier {
             identifiersByTask[taskIdentifier] = nil

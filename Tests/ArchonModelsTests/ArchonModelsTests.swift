@@ -1094,6 +1094,33 @@ struct ArchonModelsTests {
         #expect(!FileManager.default.fileExists(atPath: destination.path))
     }
 
+    @Test("Background cancellation wins over a late completion callback")
+    func backgroundCancellationWinsOverLateCompletion() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("archon-background-late-completion-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let identifier = "background-late-completion"
+        let destination = root.appendingPathComponent("model.part")
+        let request = ModelBackgroundDownloadRequest(
+            identifier: identifier,
+            url: URL(string: "https://models.example.test/model.aimodel")!,
+            destinationURL: destination
+        )
+        let coordinator = ModelBackgroundTransferCoordinator(
+            sessionIdentifier: "com.archon.tests.background-late-completion.\(UUID().uuidString)"
+        )
+        _ = try await coordinator.start(request)
+        let taskIdentifier = try #require(try await coordinator.record(for: identifier)?.taskIdentifier)
+
+        try await coordinator.cancel(identifier: identifier)
+        // Exercise the callback ordering that can occur when cancellation and
+        // didFinishDownloadingTo are delivered almost simultaneously.
+        await coordinator.receiveFinished(taskIdentifier: taskIdentifier, destinationURL: destination, errorMessage: nil)
+
+        #expect(try await coordinator.record(for: identifier)?.status == .cancelled)
+        #expect(await coordinator.isActive(identifier: identifier) == false)
+    }
+
     @Test("Cancelling a background download consumer cancels the manager job")
     func cancelsBackgroundDownloadWhenEventConsumerStops() async throws {
         let root = FileManager.default.temporaryDirectory
