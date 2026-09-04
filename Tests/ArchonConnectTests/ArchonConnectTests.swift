@@ -44,6 +44,41 @@ private actor MockTransport: MCPTransport {
     }
 }
 
+private actor CancellableMockTransport: MCPTransport {
+    private var streamContinuation: AsyncThrowingStream<MCPStreamEvent, Error>.Continuation?
+    private var streamWaiters: [CheckedContinuation<Void, Never>] = []
+    private var terminationObserved = false
+
+    func connect() async throws {}
+    func disconnect() async {}
+    func listTools() async throws -> [MCPTool] { [MCPTool(name: "stream")] }
+    func callTool(name: String, arguments: [String: JSONValue]) async throws -> MCPToolResult {
+        MCPToolResult(content: [.string(name)])
+    }
+
+    func streamTool(name: String, arguments: [String: JSONValue]) async -> AsyncThrowingStream<MCPStreamEvent, Error> {
+        let (stream, continuation) = AsyncThrowingStream<MCPStreamEvent, Error>.makeStream()
+        streamContinuation = continuation
+        for waiter in streamWaiters { waiter.resume() }
+        streamWaiters.removeAll()
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.markTermination() }
+        }
+        return stream
+    }
+
+    func waitForStream() async {
+        if streamContinuation != nil { return }
+        await withCheckedContinuation { streamWaiters.append($0) }
+    }
+
+    func didObserveTermination() -> Bool { terminationObserved }
+
+    private func markTermination() {
+        terminationObserved = true
+    }
+}
+
 struct ArchonConnectTests {
     @Test("HTTP MCP transport performs initialize, tool discovery, and tool calls")
     func usesJSONRPCTransport() async throws {
@@ -118,6 +153,29 @@ struct ArchonConnectTests {
 
         #expect(sawProgress)
         #expect(resultText == "done")
+    }
+
+    @Test("Cancelling an MCP stream consumer terminates the underlying transport stream")
+    func cancelsStreamConsumer() async throws {
+        let transport = CancellableMockTransport()
+        let client = MCPClient(transport: transport)
+        try await client.connect()
+
+        let stream = await client.streamTool(name: "stream")
+        let consumer = Task {
+            do {
+                for try await _ in stream {}
+            } catch {
+                // Cancellation is asserted through the transport below.
+            }
+        }
+
+        await transport.waitForStream()
+        consumer.cancel()
+        _ = await consumer.result
+        try await Task.sleep(for: .milliseconds(20))
+
+        #expect(await transport.didObserveTermination())
     }
 
     @Test("HTTP MCP transport fails requests that exceed its timeout")
