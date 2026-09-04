@@ -894,6 +894,50 @@ struct ArchonModelsTests {
         #expect(try await library.diskUsageBytes() == 0)
     }
 
+    @Test("Cancelling an event-stream consumer cancels the model download")
+    func cancelsDownloadWhenEventConsumerStops() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("archon-download-stream-cancel-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transfer = ControlledModelByteTransfer(payload: Data(repeating: 0x43, count: 64 * 1024))
+        let variant = ModelVariant(
+            id: "stream-cancelled-model",
+            name: "model.aimodel",
+            modelID: "example/stream-cancelled",
+            source: .directURL,
+            downloadURL: URL(string: "https://models.example.test/stream-cancelled.aimodel"),
+            format: .aimodel,
+            runtime: .coreAI,
+            sizeBytes: 64 * 1024
+        )
+        let library = ModelLibrary(rootURL: root.appendingPathComponent("library"))
+        let manager = ModelDownloadManager(
+            tokenStore: nil,
+            policy: ModelDownloadPolicy(maxAttempts: 1, initialBackoff: 0),
+            byteStreamProvider: { request in await transfer.stream(for: request) }
+        )
+        let events = try await manager.download(
+            ModelDownloadRequest(variant: variant, modelName: "Stream Cancelled"),
+            into: library
+        )
+        let consumer = Task {
+            do {
+                for try await _ in events {}
+            } catch {
+                // Cancellation is asserted through the manager state below.
+            }
+        }
+
+        await transfer.waitForRequest()
+        consumer.cancel()
+        _ = await consumer.result
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(await manager.isDownloading(variantID: variant.id) == false)
+        #expect(try await library.contains(modelID: variant.modelID) == false)
+        await transfer.finishCurrent()
+    }
+
     @Test("Model downloads retry transient HTTP failures with bounded backoff")
     func retriesTransientDownloadFailure() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("archon-retry-(UUID().uuidString)")

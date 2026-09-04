@@ -726,6 +726,12 @@ public actor ModelDownloadManager {
             await self.run(request: request, library: library, continuation: continuation)
         }
         activeTasks[id] = task
+        continuation.onTermination = { [weak self] termination in
+            guard case .cancelled = termination else { return }
+            Task {
+                await self?.cancel(variantID: id)
+            }
+        }
         return stream
     }
 
