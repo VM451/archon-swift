@@ -41,16 +41,27 @@ public struct ModelArtifactInspection: Codable, Equatable, Sendable {
     }
 
     public var requiresConversion: Bool { format.requiresConversion }
-    public var isRunnable: Bool { !requiresConversion && runtime != .unknown }
+    public var isRunnable: Bool {
+        !requiresConversion && runtime != .unknown && !(manifest?.isExperimental ?? false)
+    }
 
     /// Creates a manifest for an artifact that has no sidecar manifest. The
     /// caller still must validate the resulting manifest against the artifact.
-    public func makeManifest(modelID: String) -> ArchonModelManifest {
+    public func makeManifest(
+        modelID: String,
+        sourceRepository: String? = nil,
+        sourceRevision: String? = nil,
+        license: ModelLicenseMetadata? = nil,
+        isExperimental: Bool = false
+    ) -> ArchonModelManifest {
         if let manifest { return manifest }
         let estimatedMemory = modelSizeBytes.map { Int64(Double($0) * 1.15) }
         return ArchonModelManifest(
             modelID: modelID,
             modelName: modelName,
+            sourceRepository: sourceRepository,
+            sourceRevision: sourceRevision,
+            license: license,
             runtime: runtime,
             format: format,
             architecture: modelArchitecture,
@@ -59,7 +70,8 @@ public struct ModelArtifactInspection: Codable, Equatable, Sendable {
             tokenizerResources: tokenizerResources,
             checksum: checksum,
             modelSizeBytes: modelSizeBytes,
-            estimatedMemoryBytes: estimatedMemory
+            estimatedMemoryBytes: estimatedMemory,
+            isExperimental: isExperimental
         )
     }
 }

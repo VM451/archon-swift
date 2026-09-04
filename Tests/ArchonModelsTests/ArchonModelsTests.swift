@@ -178,6 +178,44 @@ struct ArchonModelsTests {
         #expect(result.canLoad)
     }
 
+    @Test("Experimental Core AI exports remain visibly blocked until validation")
+    func blocksExperimentalCoreAIExport() throws {
+        let variant = ModelVariant(
+            id: "experimental-coreai",
+            name: "experimental.aimodel",
+            modelID: "example/experimental",
+            source: .localImport,
+            format: .aimodel,
+            runtime: .coreAI,
+            estimatedMemoryBytes: 100,
+            isExperimental: true
+        )
+
+        let compatibility = ModelCompatibilityAnalyzer.analyze(variant: variant, device: device)
+        #expect(compatibility.status == .experimental)
+        #expect(compatibility.canLoad == false)
+        #expect(ModelCompatibilityAnalyzer.recommendedVariant(
+            for: ModelDescriptor(
+                id: "example/experimental",
+                name: "Experimental",
+                publisher: "Example",
+                source: .localImport,
+                variants: [variant]
+            ),
+            device: device
+        ) == nil)
+
+        let manifest = ArchonModelManifest(variant: variant, modelName: "Experimental")
+        let decoded = try JSONDecoder().decode(
+            ArchonModelManifest.self,
+            from: JSONEncoder().encode(manifest)
+        )
+        #expect(decoded.isExperimental)
+        #expect(ModelManifestValidator.validate(decoded).warnings.contains {
+            $0.contains("Experimental")
+        })
+    }
+
     @Test("Thermal pressure blocks model loading with an explicit compatibility state")
     func blocksThermallyConstrainedModel() {
         let variant = ModelVariant(
@@ -599,6 +637,43 @@ struct ArchonModelsTests {
 
         try await library.delete(modelID: "local/example")
         #expect(try await library.contains(modelID: "local/example") == false)
+    }
+
+    @Test("Embedded experimental manifests stay blocked after library import")
+    func importsExperimentalManifestWithoutMakingItLoadable() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("archon-experimental-import-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let artifact = root.appendingPathComponent("experimental.aimodel", isDirectory: true)
+        try FileManager.default.createDirectory(at: artifact, withIntermediateDirectories: true)
+        try Data("experimental-core-ai".utf8).write(to: artifact.appendingPathComponent("weights.bin"))
+
+        let manifest = ArchonModelManifest(
+            modelID: "example/experimental",
+            modelName: "Experimental",
+            sourceRepository: "example/experimental",
+            runtime: .coreAI,
+            format: .coreAIBundle,
+            supportedDeviceArchitectures: ["arm64"],
+            platforms: [.iOS],
+            isExperimental: true
+        )
+        try JSONEncoder().encode(manifest).write(
+            to: artifact.appendingPathComponent(ArchonModelManifest.filename),
+            options: .atomic
+        )
+
+        let library = ModelLibrary(rootURL: root.appendingPathComponent("library"))
+        let installed = try await library.importArtifact(at: artifact)
+        #expect(installed.manifest.isExperimental)
+        #expect(try await library.installedModels().first?.manifest.isExperimental == true)
+
+        do {
+            try await ModelLoadManager().load(installed, on: device)
+            Issue.record("Experimental model unexpectedly loaded.")
+        } catch let error as ArchonModelsError {
+            #expect(error == .incompatible(.experimental))
+        }
     }
 
     @Test("Artifact inspector detects MLX resources while preserving model architecture separately")

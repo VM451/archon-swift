@@ -130,6 +130,13 @@ public struct ModelDetailView: View {
                         .textSelection(.enabled)
                 }
             }
+
+            if model.variants.contains(where: \.isExperimental) {
+                Section("Experimental") {
+                    Text("This export is Experimental until runtime, output, and device validation have passed. It cannot be selected for local inference yet.")
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
         .navigationTitle(model.name)
         .task {
@@ -421,7 +428,7 @@ public struct ModelStorageView: View {
                     ForEach(models) { model in
                         VStack(alignment: .leading, spacing: 3) {
                             Text(model.manifest.modelName)
-                            Text("\(model.manifest.runtime.rawValue) · \(model.manifest.format.rawValue)")
+                            Text("\(model.manifest.runtime.rawValue) · \(model.manifest.format.rawValue)\(model.manifest.isExperimental ? " · Experimental" : "")")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }

@@ -39,7 +39,7 @@ public struct ModelLibraryView: View {
                                 VStack(alignment: .leading) {
                                     Text(model.manifest.modelName)
                                         .font(.headline)
-                                    Text(model.manifest.runtime.rawValue + " · " + model.manifest.format.rawValue)
+                                    Text(model.manifest.runtime.rawValue + " · " + model.manifest.format.rawValue + (model.manifest.isExperimental ? " · Experimental" : ""))
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }

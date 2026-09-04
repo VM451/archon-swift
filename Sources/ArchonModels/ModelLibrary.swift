@@ -219,7 +219,8 @@ public actor ModelLoadManager {
             sha256: model.manifest.checksum,
             resources: model.manifest.modelResources,
             tokenizerResources: model.manifest.tokenizerResources,
-            capabilities: model.manifest.capabilities
+            capabilities: model.manifest.capabilities,
+            isExperimental: model.manifest.isExperimental
         )
         let residentMemory = models.reduce(into: UInt64(0)) { total, entry in
             guard entry.key != model.id,

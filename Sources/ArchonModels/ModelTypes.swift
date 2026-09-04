@@ -151,6 +151,10 @@ public struct ModelVariant: Codable, Equatable, Sendable, Identifiable {
     public let tokenizerResources: [ModelResource]
     public let capabilities: ArchonModelCapabilities
     public let requiresAuthentication: Bool
+    /// True when the artifact came from an export path that has not yet passed
+    /// runtime, output, and device validation. Experimental variants are never
+    /// treated as loadable by Archon.
+    public let isExperimental: Bool
 
     public init(
         id: String,
@@ -177,7 +181,8 @@ public struct ModelVariant: Codable, Equatable, Sendable, Identifiable {
         resources: [ModelResource] = [],
         tokenizerResources: [ModelResource] = [],
         capabilities: ArchonModelCapabilities = ArchonModelCapabilities(),
-        requiresAuthentication: Bool = false
+        requiresAuthentication: Bool = false,
+        isExperimental: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -204,6 +209,50 @@ public struct ModelVariant: Codable, Equatable, Sendable, Identifiable {
         self.tokenizerResources = tokenizerResources
         self.capabilities = capabilities
         self.requiresAuthentication = requiresAuthentication
+        self.isExperimental = isExperimental
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, modelID, source, downloadURL, format, runtime, architecture
+        case supportedDeviceArchitectures, supportedPlatforms, minimumOS
+        case parameterCount, contextLength, precision, quantization
+        case kvCacheBytesPerToken, sizeBytes, estimatedMemoryBytes
+        case estimatedQualityScore, estimatedTokensPerSecond, sha256
+        case resources, tokenizerResources, capabilities, requiresAuthentication
+        case isExperimental
+    }
+
+    /// Keeps catalogs written before the experimental marker readable.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try container.decode(String.self, forKey: .id),
+            name: try container.decode(String.self, forKey: .name),
+            modelID: try container.decode(String.self, forKey: .modelID),
+            source: try container.decode(ArchonModelSource.self, forKey: .source),
+            downloadURL: try container.decodeIfPresent(URL.self, forKey: .downloadURL),
+            format: try container.decode(ArchonModelFormat.self, forKey: .format),
+            runtime: try container.decode(ArchonModelRuntime.self, forKey: .runtime),
+            architecture: try container.decodeIfPresent(String.self, forKey: .architecture),
+            supportedDeviceArchitectures: try container.decodeIfPresent(Set<String>.self, forKey: .supportedDeviceArchitectures) ?? ["arm64"],
+            supportedPlatforms: try container.decodeIfPresent(Set<ArchonPlatform>.self, forKey: .supportedPlatforms) ?? Set(ArchonPlatform.allCases),
+            minimumOS: try container.decodeIfPresent(ArchonOSVersion.self, forKey: .minimumOS),
+            parameterCount: try container.decodeIfPresent(Int64.self, forKey: .parameterCount),
+            contextLength: try container.decodeIfPresent(Int.self, forKey: .contextLength),
+            precision: try container.decodeIfPresent(String.self, forKey: .precision),
+            quantization: try container.decodeIfPresent(String.self, forKey: .quantization),
+            kvCacheBytesPerToken: try container.decodeIfPresent(Int64.self, forKey: .kvCacheBytesPerToken),
+            sizeBytes: try container.decodeIfPresent(Int64.self, forKey: .sizeBytes),
+            estimatedMemoryBytes: try container.decodeIfPresent(Int64.self, forKey: .estimatedMemoryBytes),
+            estimatedQualityScore: try container.decodeIfPresent(Double.self, forKey: .estimatedQualityScore),
+            estimatedTokensPerSecond: try container.decodeIfPresent(Double.self, forKey: .estimatedTokensPerSecond),
+            sha256: try container.decodeIfPresent(String.self, forKey: .sha256),
+            resources: try container.decodeIfPresent([ModelResource].self, forKey: .resources) ?? [],
+            tokenizerResources: try container.decodeIfPresent([ModelResource].self, forKey: .tokenizerResources) ?? [],
+            capabilities: try container.decodeIfPresent(ArchonModelCapabilities.self, forKey: .capabilities) ?? ArchonModelCapabilities(),
+            requiresAuthentication: try container.decodeIfPresent(Bool.self, forKey: .requiresAuthentication) ?? false,
+            isExperimental: try container.decodeIfPresent(Bool.self, forKey: .isExperimental) ?? false
+        )
     }
 }
 
@@ -489,7 +538,8 @@ public struct LocalModelCatalog: ModelCatalogProvider, Sendable {
             sha256: manifest.checksum,
             resources: manifest.modelResources,
             tokenizerResources: manifest.tokenizerResources,
-            capabilities: manifest.capabilities
+            capabilities: manifest.capabilities,
+            isExperimental: manifest.isExperimental
         )
         return ModelDescriptor(
             id: "local://\(directory.lastPathComponent)",
@@ -607,6 +657,7 @@ public enum ModelCompatibilityStatus: String, Codable, CaseIterable, Sendable {
     case requiresNewerOS
     case requiresAuthentication
     case thermalConstrained
+    case experimental
 
     public var displayName: String {
         switch self {
@@ -622,6 +673,7 @@ public enum ModelCompatibilityStatus: String, Codable, CaseIterable, Sendable {
         case .requiresNewerOS: "Requires newer OS"
         case .requiresAuthentication: "Authentication required"
         case .thermalConstrained: "Thermally constrained"
+        case .experimental: "Experimental"
         }
     }
 }
@@ -711,6 +763,14 @@ public enum ModelCompatibilityAnalyzer {
                 status: .conversionRequired,
                 fit: .cannotRun,
                 reasons: ["\(variant.format.rawValue) is not a directly runnable Archon artifact; convert it to a supported runtime representation first."]
+            )
+        }
+
+        if variant.isExperimental {
+            return ModelCompatibility(
+                status: .experimental,
+                fit: .cannotRun,
+                reasons: ["This export is Experimental until runtime, output, and device validation have passed."]
             )
         }
 
@@ -901,6 +961,10 @@ public struct ArchonModelManifest: Codable, Equatable, Sendable {
     public let estimatedQualityScore: Double?
     public let estimatedTokensPerSecond: Double?
     public let capabilities: ArchonModelCapabilities
+    /// Marks exports that still require runtime, output, and device validation.
+    /// Experimental manifests remain discoverable for developer workflows but
+    /// are not eligible for local model loading.
+    public let isExperimental: Bool
 
     public init(variant: ModelVariant, modelName: String, license: ModelLicenseMetadata? = nil, sourceRepository: String? = nil, sourceRevision: String? = nil) {
         self.init(
@@ -928,7 +992,8 @@ public struct ArchonModelManifest: Codable, Equatable, Sendable {
             estimatedMemoryBytes: variant.estimatedMemoryBytes,
             estimatedQualityScore: variant.estimatedQualityScore,
             estimatedTokensPerSecond: variant.estimatedTokensPerSecond,
-            capabilities: variant.capabilities
+            capabilities: variant.capabilities,
+            isExperimental: variant.isExperimental
         )
     }
 
@@ -958,7 +1023,8 @@ public struct ArchonModelManifest: Codable, Equatable, Sendable {
         estimatedMemoryBytes: Int64? = nil,
         estimatedQualityScore: Double? = nil,
         estimatedTokensPerSecond: Double? = nil,
-        capabilities: ArchonModelCapabilities = ArchonModelCapabilities()
+        capabilities: ArchonModelCapabilities = ArchonModelCapabilities(),
+        isExperimental: Bool = false
     ) {
         self.schemaVersion = schemaVersion
         self.modelID = modelID
@@ -986,6 +1052,7 @@ public struct ArchonModelManifest: Codable, Equatable, Sendable {
         self.estimatedQualityScore = estimatedQualityScore
         self.estimatedTokensPerSecond = estimatedTokensPerSecond
         self.capabilities = capabilities
+        self.isExperimental = isExperimental
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -995,7 +1062,7 @@ public struct ArchonModelManifest: Codable, Equatable, Sendable {
         case modelSizeBytes, parameterCount, platforms, minimumOS, contextLength
         case precision, quantization, kvCacheBytesPerToken, estimatedMemoryBytes
         case estimatedQualityScore, estimatedTokensPerSecond
-        case capabilities
+        case capabilities, isExperimental
     }
 
     /// Decodes older manifests that predate `supportedDeviceArchitectures`.
@@ -1029,7 +1096,8 @@ public struct ArchonModelManifest: Codable, Equatable, Sendable {
             estimatedMemoryBytes: try container.decodeIfPresent(Int64.self, forKey: .estimatedMemoryBytes),
             estimatedQualityScore: try container.decodeIfPresent(Double.self, forKey: .estimatedQualityScore),
             estimatedTokensPerSecond: try container.decodeIfPresent(Double.self, forKey: .estimatedTokensPerSecond),
-            capabilities: try container.decodeIfPresent(ArchonModelCapabilities.self, forKey: .capabilities) ?? ArchonModelCapabilities()
+            capabilities: try container.decodeIfPresent(ArchonModelCapabilities.self, forKey: .capabilities) ?? ArchonModelCapabilities(),
+            isExperimental: try container.decodeIfPresent(Bool.self, forKey: .isExperimental) ?? false
         )
     }
 
@@ -1061,7 +1129,41 @@ public struct ArchonModelManifest: Codable, Equatable, Sendable {
             estimatedMemoryBytes: estimatedMemoryBytes,
             estimatedQualityScore: estimatedQualityScore,
             estimatedTokensPerSecond: estimatedTokensPerSecond,
-            capabilities: capabilities
+            capabilities: capabilities,
+            isExperimental: isExperimental
+        )
+    }
+
+    /// Returns a copy with the developer-validation gate explicitly set.
+    public func withExperimental(_ isExperimental: Bool) -> ArchonModelManifest {
+        ArchonModelManifest(
+            schemaVersion: schemaVersion,
+            modelID: modelID,
+            modelName: modelName,
+            sourceRepository: sourceRepository,
+            sourceRevision: sourceRevision,
+            license: license,
+            runtime: runtime,
+            format: format,
+            architecture: architecture,
+            supportedDeviceArchitectures: supportedDeviceArchitectures,
+            artifactPath: artifactPath,
+            modelResources: modelResources,
+            tokenizerResources: tokenizerResources,
+            checksum: checksum,
+            modelSizeBytes: modelSizeBytes,
+            parameterCount: parameterCount,
+            platforms: platforms,
+            minimumOS: minimumOS,
+            contextLength: contextLength,
+            precision: precision,
+            quantization: quantization,
+            kvCacheBytesPerToken: kvCacheBytesPerToken,
+            estimatedMemoryBytes: estimatedMemoryBytes,
+            estimatedQualityScore: estimatedQualityScore,
+            estimatedTokensPerSecond: estimatedTokensPerSecond,
+            capabilities: capabilities,
+            isExperimental: isExperimental
         )
     }
 }
@@ -1166,6 +1268,9 @@ public enum ModelManifestValidator {
         }
         if manifest.format.requiresConversion {
             errors.append("\(manifest.format.rawValue) requires conversion before it can be packaged.")
+        }
+        if manifest.isExperimental {
+            warnings.append("This artifact is Experimental until runtime, output, and device validation have passed.")
         }
         if manifest.platforms.isEmpty {
             errors.append("platforms must contain at least one supported platform.")

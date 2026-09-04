@@ -17,6 +17,12 @@ uses them only as deterministic tie-breakers after compatibility and fit.
 
 `ArchonModels` distinguishes directly runnable Core AI/MLX artifacts from raw `GGUF`, `SafeTensors`, and Transformers artifacts. Raw artifacts are catalogued as `conversionRequired` and cannot be atomically installed as `Ready` models. Conversion belongs in a developer-side preparation tool; application targets contain no Python or Node conversion runtime.
 
+An export made with `archon-model convert --experimental` embeds an
+`archon-model.json` marker with `isExperimental: true` inside the `.aimodel`
+bundle and prints `status: Experimental`. The artifact remains discoverable for
+developer validation, but compatibility analysis and `ModelLoadManager` refuse
+to load it until a new manifest or catalog entry records a validated result.
+
 Catalog discovery is provider-based. `RemoteModelCatalog` can query an HTTP
 registry using the same task, runtime, format, compatibility, and limit filters
 as local catalogs, and can obtain a bearer token from an injected Keychain-backed
@@ -64,8 +70,9 @@ The `archon-model convert` command is a macOS developer-tool wrapper around
 Apple's `coreai-models` exporter. It requires a caller-supplied checkout and
 `uv`, passes through the official platform/compression/experimental/context
 options, and moves only the exporter-produced `.aimodel` bundle into the
-requested destination. It never runs in an iOS runtime target and fails closed
-if the official tool is unavailable.
+requested destination. Experimental exports are explicitly marked inside that
+bundle and never presented as guaranteed compatibility. It never runs in an iOS
+runtime target and fails closed if the official tool is unavailable.
 
 The `archon-model validate` command performs the same conservative checks before
 packaging. `archon-model package` refuses to overwrite an existing output and

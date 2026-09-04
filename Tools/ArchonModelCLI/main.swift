@@ -282,7 +282,31 @@ private struct Convert: ParsableCommand {
         guard let artifact = findAimodelArtifact(in: scratchRoot) else {
             throw ValidationError("Apple Core AI conversion completed without producing a .aimodel artifact.")
         }
+
+        if experimental {
+            let inspection = try ModelArtifactInspector.inspect(at: artifact)
+            let manifest = inspection
+                .makeManifest(
+                    modelID: input,
+                    sourceRepository: input,
+                    isExperimental: true
+                )
+                .withExperimental(true)
+            let report = ModelManifestValidator.validate(manifest, artifactAt: artifact)
+            guard report.isValid else {
+                throw ValidationError("Experimental Core AI conversion produced an invalid manifest: \(report.errors.joined(separator: " "))")
+            }
+            let manifestURL = artifact.appendingPathComponent(ArchonModelManifest.filename)
+            guard !fileManager.fileExists(atPath: manifestURL.path) else {
+                throw ValidationError("The exporter already produced an Archon manifest; refusing to overwrite it.")
+            }
+            try encodeJSON(manifest).write(to: manifestURL, options: .atomic)
+        }
+
         try fileManager.moveItem(at: artifact, to: destination)
+        if experimental {
+            print("status: Experimental")
+        }
         print("converted: \(destination.path)")
     }
 }

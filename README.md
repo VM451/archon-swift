@@ -111,13 +111,28 @@ partial, adapter-owned, or varies between the competitors in that group.
 | Feature | [Archon Swift](https://github.com/VM451/archon-swift) | Apple-native SDKs<br/>[Apple FM](https://developer.apple.com/documentation/foundationmodels) | Agent frameworks<br/>[LangGraph](https://langchain-ai.github.io/langgraph/) · [LlamaIndex](https://www.llamaindex.ai/) | Memory / RAG<br/>[Mem0](https://docs.mem0.ai/introduction) · LlamaIndex | Search / research<br/>ChatGPT Search · Brave Search · Perplexity · [Tavily](https://docs.tavily.com/) · [Firecrawl](https://docs.firecrawl.dev/) · [Exa](https://exa.ai/docs) · [SerpAPI](https://serpapi.com/) · [SearXNG](https://docs.searxng.org/) · [Perplexica](https://github.com/ItzCrazyKns/Perplexica) · [TinyFish](https://docs.tinyfish.ai/) | Protocol / connectivity<br/>[MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk) | Browser / action agents<br/>TinyFish · Stagehand |
 | --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | Apple-native Swift | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ |
+| Swift 6 strict concurrency | ✅ | ⚠️ | ❌ | ❌ | ❌ | ⚠️ | ❌ |
 | On-device model lifecycle | ✅ | ✅ | ⚠️ | ❌ | ❌ | ❌ | ❌ |
+| Model catalogs & discovery | ✅ | ❌ | ⚠️ | ❌ | ❌ | ❌ | ❌ |
+| Artifact integrity & atomic install | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Resumable/background downloads | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | Agent graphs | ✅ | ⚠️ | ✅ | ⚠️ | ⚠️ | ❌ | ⚠️ |
+| Checkpoints & state replay | ✅ | ❌ | ⚠️ | ❌ | ❌ | ❌ | ⚠️ |
+| Human approval / interrupts | ✅ | ⚠️ | ⚠️ | ❌ | ⚠️ | ⚠️ | ⚠️ |
+| Multi-agent / subgraphs | ✅ | ⚠️ | ✅ | ⚠️ | ⚠️ | ❌ | ⚠️ |
+| Evaluation / tracing / cost | ✅ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ❌ | ⚠️ |
+| Structured output / extraction | ✅ | ✅ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
 | App-owned memory / RAG | ✅ | ❌ | ⚠️ | ✅ | ⚠️ | ❌ | ❌ |
+| Document ingestion / multimodal | ✅ | ✅ | ⚠️ | ✅ | ⚠️ | ⚠️ | ⚠️ |
 | Web research | ✅ | ❌ | ⚠️ | ❌ | ✅ | ❌ | ⚠️ |
+| Citation / provenance | ✅ | ❌ | ⚠️ | ⚠️ | ⚠️ | ❌ | ❌ |
+| Search monitoring | ✅ | ❌ | ⚠️ | ❌ | ⚠️ | ❌ | ⚠️ |
 | MCP | ✅ | ❌ | ⚠️ | ⚠️ | ⚠️ | ✅ | ⚠️ |
 | Host semantic actions | ✅ | ⚠️ | ❌ | ❌ | ⚠️ | ❌ | ✅ |
 | Restricted sandbox | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| CloudKit / offline sync | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| App Intents | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Permission / fail-closed policies | ✅ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
 | SwiftUI surfaces | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
 Archon’s distinction is the integrated Apple application boundary: specialist
