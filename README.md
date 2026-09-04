@@ -105,18 +105,20 @@ Legend: ✅ first-class in the project · ⚠️ adjacent, partial, or adapter-o
 ❌ outside the product’s core scope. This is a concise positioning snapshot,
 not a performance ranking; there is no uniform market-share ranking for these
 different categories.
+Grouped competitor columns summarize the category; `⚠️` means coverage is
+partial, adapter-owned, or varies between the competitors in that group.
 
-| Feature | [Archon Swift](https://github.com/VM451/archon-swift) | [Apple FM](https://developer.apple.com/documentation/foundationmodels) | [LangGraph](https://langchain-ai.github.io/langgraph/) | [LlamaIndex](https://www.llamaindex.ai/) | [Mem0](https://docs.mem0.ai/introduction) | [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk) | [Tavily](https://docs.tavily.com/) | [Firecrawl](https://docs.firecrawl.dev/) | [Exa](https://exa.ai/docs) | [SerpAPI](https://serpapi.com/) | [SearXNG](https://docs.searxng.org/) | [Perplexica](https://github.com/ItzCrazyKns/Perplexica) | [TinyFish](https://docs.tinyfish.ai/) |
-| --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| Apple-native Swift | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| On-device model lifecycle | ✅ | ✅ | ⚠️ | ⚠️ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ⚠️ | ❌ |
-| Agent graphs | ✅ | ⚠️ | ✅ | ✅ | ⚠️ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ⚠️ |
-| App-owned memory / RAG | ✅ | ❌ | ⚠️ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Web research | ✅ | ❌ | ⚠️ | ⚠️ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ |
-| MCP | ✅ | ❌ | ⚠️ | ⚠️ | ⚠️ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
-| Host semantic actions | ✅ | ⚠️ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
-| Restricted sandbox | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| SwiftUI surfaces | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Feature | [Archon Swift](https://github.com/VM451/archon-swift) | Apple-native SDKs<br/>[Apple FM](https://developer.apple.com/documentation/foundationmodels) | Agent frameworks<br/>[LangGraph](https://langchain-ai.github.io/langgraph/) · [LlamaIndex](https://www.llamaindex.ai/) | Memory / RAG<br/>[Mem0](https://docs.mem0.ai/introduction) · LlamaIndex | Search / research<br/>ChatGPT Search · Brave Search · Perplexity · [Tavily](https://docs.tavily.com/) · [Firecrawl](https://docs.firecrawl.dev/) · [Exa](https://exa.ai/docs) · [SerpAPI](https://serpapi.com/) · [SearXNG](https://docs.searxng.org/) · [Perplexica](https://github.com/ItzCrazyKns/Perplexica) · [TinyFish](https://docs.tinyfish.ai/) | Protocol / connectivity<br/>[MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk) | Browser / action agents<br/>TinyFish · Stagehand |
+| --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| Apple-native Swift | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ |
+| On-device model lifecycle | ✅ | ✅ | ⚠️ | ❌ | ❌ | ❌ | ❌ |
+| Agent graphs | ✅ | ⚠️ | ✅ | ⚠️ | ⚠️ | ❌ | ⚠️ |
+| App-owned memory / RAG | ✅ | ❌ | ⚠️ | ✅ | ⚠️ | ❌ | ❌ |
+| Web research | ✅ | ❌ | ⚠️ | ❌ | ✅ | ❌ | ⚠️ |
+| MCP | ✅ | ❌ | ⚠️ | ⚠️ | ⚠️ | ✅ | ⚠️ |
+| Host semantic actions | ✅ | ⚠️ | ❌ | ❌ | ⚠️ | ❌ | ✅ |
+| Restricted sandbox | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| SwiftUI surfaces | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
 Archon’s distinction is the integrated Apple application boundary: specialist
 tools can still be used behind Archon protocols or host adapters.
