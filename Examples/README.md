@@ -15,7 +15,7 @@ swift run archon-example-app
 - Files import and macOS drag-and-drop of compatible model artifacts;
 - Hugging Face discovery, filters, compatibility, and revision checks;
 - real download lifecycle: pause, resume, retry, redownload, delete, and select;
-- model-library App Intents and installed-model entity registration;
+- model-library App Intents, discoverable App Shortcuts, and installed-model entity registration;
 - Apple Foundation Model chat when the host device supports it.
 
 ## Boundary

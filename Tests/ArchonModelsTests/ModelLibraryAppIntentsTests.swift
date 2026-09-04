@@ -3,6 +3,11 @@ import Testing
 @testable import ArchonModels
 
 struct ModelLibraryAppIntentsTests {
+    @Test("Model library actions are published as discoverable App Shortcuts")
+    func publishesAppShortcuts() {
+        #expect(ArchonModelAppShortcuts.appShortcuts.count == 2)
+    }
+
     @Test("Installed model App Entity resolves through the registered library")
     func resolvesInstalledModelEntity() async throws {
         let fileManager = FileManager.default

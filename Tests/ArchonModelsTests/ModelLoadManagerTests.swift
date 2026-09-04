@@ -140,6 +140,49 @@ struct ModelLoadManagerTests {
         #expect(await manager.state(for: model.id) == .cancelled)
     }
 
+    @Test("Unloading during a load cannot be overwritten by the suspended load")
+    func unloadDuringLoadDoesNotResurrectModel() async throws {
+        let variant = ModelVariant(
+            id: "model-unload-during-load",
+            name: "model.aimodel",
+            modelID: "example/model-unload-during-load",
+            source: .localImport,
+            format: .aimodel,
+            runtime: .coreAI,
+            sizeBytes: 1,
+            estimatedMemoryBytes: 1
+        )
+        let model = InstalledModel(
+            id: "model-unload-during-load",
+            directoryURL: .temporaryDirectory,
+            manifest: ArchonModelManifest(variant: variant, modelName: "Example")
+        )
+        let manager = ModelLoadManager(adapter: DelayedRuntimeAdapter())
+        let device = ArchonDeviceCapabilities(
+            platform: .iOS,
+            osVersion: ArchonOSVersion(major: 27),
+            physicalMemoryBytes: 8_000_000_000,
+            availableMemoryBytes: 6_000_000_000,
+            processorCount: 6,
+            deviceArchitecture: "arm64",
+            supportsAppleFoundationModels: false,
+            supportsCoreAI: true
+        )
+
+        let loading = Task { try await manager.load(model, on: device) }
+        try await Task.sleep(for: .milliseconds(50))
+        await manager.unload(model)
+
+        do {
+            try await loading.value
+            Issue.record("Expected unloading to cancel the in-flight model load.")
+        } catch let error as ArchonModelsError {
+            #expect(error == .cancelled)
+        }
+        #expect(await manager.state(for: model.id) == .unloaded)
+        #expect(await manager.loadedModel(id: model.id) == nil)
+    }
+
     @Test("Model manager unloads resident models on critical pressure")
     func unloadsOnCriticalPressure() async throws {
         let variant = ModelVariant(

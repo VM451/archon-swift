@@ -153,6 +153,7 @@ public actor ModelLoadManager {
     private let adapter: any ModelRuntimeAdapter
     private var states: [String: ManagedModelState] = [:]
     private var loadingTasks: [String: Task<Void, Error>] = [:]
+    private var loadingOperationIDs: [String: UUID] = [:]
     private var models: [String: InstalledModel] = [:]
     private var lastUsedAt: [String: Date] = [:]
 
@@ -244,6 +245,8 @@ public actor ModelLoadManager {
         models[model.id] = model
         lastUsedAt[model.id] = Date()
         let adapter = self.adapter
+        let operationID = UUID()
+        loadingOperationIDs[model.id] = operationID
         let task = Task {
             try await adapter.load(model: model)
             try Task.checkCancellation()
@@ -251,15 +254,28 @@ public actor ModelLoadManager {
         loadingTasks[model.id] = task
         do {
             try await task.value
+            guard loadingOperationIDs[model.id] == operationID else {
+                throw ArchonModelsError.cancelled
+            }
             loadingTasks[model.id] = nil
+            loadingOperationIDs[model.id] = nil
+            guard states[model.id] == .warming else { return }
             states[model.id] = .ready
             lastUsedAt[model.id] = Date()
         } catch is CancellationError {
+            guard loadingOperationIDs[model.id] == operationID else {
+                throw ArchonModelsError.cancelled
+            }
             loadingTasks[model.id] = nil
+            loadingOperationIDs[model.id] = nil
+            guard states[model.id] == .warming else { return }
             states[model.id] = .cancelled
             throw ArchonModelsError.cancelled
         } catch {
+            guard loadingOperationIDs[model.id] == operationID else { throw error }
             loadingTasks[model.id] = nil
+            loadingOperationIDs[model.id] = nil
+            guard states[model.id] == .warming else { throw error }
             states[model.id] = .failed
             throw error
         }
@@ -293,6 +309,9 @@ public actor ModelLoadManager {
     /// Gives the host app a safe hook for `UIApplication`/`NSApplication`
     /// background transitions. Apps may keep warm models or unload all of them.
     public func handleApplicationDidEnterBackground(unloadAll: Bool = false) async {
+        if unloadAll {
+            await cancelWarmingLoads()
+        }
         await unloadLoadedModels(where: { state in unloadAll || state == .idle })
     }
 
@@ -329,6 +348,7 @@ public actor ModelLoadManager {
 
     public func unload(_ model: InstalledModel) async {
         if let loadingTask = loadingTasks[model.id] {
+            loadingOperationIDs[model.id] = nil
             loadingTask.cancel()
             _ = try? await loadingTask.value
             loadingTasks[model.id] = nil

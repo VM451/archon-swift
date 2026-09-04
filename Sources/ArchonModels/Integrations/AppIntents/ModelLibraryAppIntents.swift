@@ -122,6 +122,26 @@ public struct ModelLibraryStorageIntent: AppIntent {
     }
 }
 
+/// Publishes the model-library actions as discoverable App Shortcuts. The
+/// package provides the intents; the host still owns model-library
+/// registration and therefore remains the source of truth for execution.
+public struct ArchonModelAppShortcuts: AppShortcutsProvider {
+    public static var appShortcuts: [AppShortcut] {
+        AppShortcut(
+            intent: ListInstalledModelsIntent(),
+            phrases: ["List installed AI models in \(.applicationName)"],
+            shortTitle: "List AI Models",
+            systemImageName: "shippingbox"
+        )
+        AppShortcut(
+            intent: ModelLibraryStorageIntent(),
+            phrases: ["Check AI model storage in \(.applicationName)"],
+            shortTitle: "Check Model Storage",
+            systemImageName: "internaldrive"
+        )
+    }
+}
+
 /// Deletes one installed model through the same guarded library API used by the UI.
 public struct DeleteInstalledModelIntent: AppIntent {
     public static let title: LocalizedStringResource = "Delete Installed AI Model"

@@ -57,9 +57,10 @@ host-integration boundaries for App Intents, lifecycle and memory-pressure
 forwarding, semantic Computer Use observations, and OS-managed background
 URLSession transfers. Those boundaries are intentionally public and fail closed
 until the consuming app supplies its platform objects.
-`ArchonModels` App Intents and `InstalledModelEntity` queries use the same
-host-registered `ModelLibrary` actor as the model UI for list, storage, and
-delete actions; they do not maintain a second model store.
+`ArchonModels` App Intents, discoverable App Shortcuts, and
+`InstalledModelEntity` queries use the same host-registered `ModelLibrary`
+actor as the model UI for list, storage, and delete actions; they do not
+maintain a second model store.
 `ArchonSandbox` renders workspace HTML/CSS/JavaScript/WASM through a virtual
 `sandbox://` scheme. Its `SandboxConfiguration.allowedPermissions` set is
 empty by default and gates network, storage, clipboard, camera, microphone,
