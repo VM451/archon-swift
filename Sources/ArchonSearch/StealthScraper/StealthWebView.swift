@@ -50,6 +50,7 @@ public final class StealthScraper: NSObject, WKNavigationDelegate, Sendable {
     
     private var continuation: CheckedContinuation<Void, any Error>?
     private var webView: WKWebView?
+    private var navigationID: UUID?
     
     public override init() {
         super.init()
@@ -61,6 +62,7 @@ public final class StealthScraper: NSObject, WKNavigationDelegate, Sendable {
         guard SearchURLPolicy.validateRemoteOrLocalFile(url) else {
             throw SearchError.extractionFailed(reason: "Only public HTTP(S) URLs or bounded local files are supported.")
         }
+        try Task.checkCancellation()
         let config = WKWebViewConfiguration()
         
         // Inject JS to spoof human behavior
@@ -75,27 +77,47 @@ public final class StealthScraper: NSObject, WKNavigationDelegate, Sendable {
         let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 1024, height: 768), configuration: config)
         self.webView = webView
         webView.navigationDelegate = self
+        let navigationID = UUID()
+        self.navigationID = navigationID
+        defer {
+            self.webView = nil
+            self.continuation = nil
+            self.navigationID = nil
+        }
         
         // Custom rotated User-Agent
         webView.customUserAgent = StealthHeaders.randomUserAgent()
         
         // Load URL
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
-            self.continuation = continuation
-            webView.load(URLRequest(url: url.isFileURL ? url.resolvingSymlinksInPath() : url))
-        }
+        try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                guard !Task.isCancelled else {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                self.continuation = continuation
+                webView.load(URLRequest(url: url.isFileURL ? url.resolvingSymlinksInPath() : url))
+            }
+        }, onCancel: {
+            Task { @MainActor [weak self] in
+                self?.cancelPendingNavigation(id: navigationID)
+            }
+        })
+        try Task.checkCancellation()
         
         // Allow initial settle time
         try await Task.sleep(nanoseconds: 1_500_000_000) // 1.5 seconds
         
         // Execute custom user actions sequentially
         for action in configuration.actions {
+            try Task.checkCancellation()
             switch action {
             case .scroll(let times):
                 for _ in 0..<min(max(times, 0), 20) {
+                    try Task.checkCancellation()
                     let js = "window.scrollBy(0, window.innerHeight * 0.8);"
                     _ = try? await webView.evaluateJavaScript(js)
-                    try? await Task.sleep(nanoseconds: 300_000_000) // 300ms sleep
+                    try await Task.sleep(nanoseconds: 300_000_000) // 300ms sleep
                 }
             case .click(let selector):
                 let selectorLiteral = Self.javascriptStringLiteral(selector)
@@ -109,8 +131,9 @@ public final class StealthScraper: NSObject, WKNavigationDelegate, Sendable {
                     return false;
                 })()
                 """
+                try Task.checkCancellation()
                 _ = try? await webView.evaluateJavaScript(js)
-                try? await Task.sleep(nanoseconds: 500_000_000) // Allow 500ms for UI click events
+                try await Task.sleep(nanoseconds: 500_000_000) // Allow 500ms for UI click events
             case .fill(let selector, let text):
                 let selectorLiteral = Self.javascriptStringLiteral(selector)
                 let textLiteral = Self.javascriptStringLiteral(text)
@@ -126,21 +149,24 @@ public final class StealthScraper: NSObject, WKNavigationDelegate, Sendable {
                     return false;
                 })()
                 """
+                try Task.checkCancellation()
                 _ = try? await webView.evaluateJavaScript(js)
             case .waitForSelector(let selector, let timeout):
                 let selectorLiteral = Self.javascriptStringLiteral(selector)
                 let startTime = Date()
                 while Date().timeIntervalSince(startTime) < min(max(timeout, 0), 30) {
+                    try Task.checkCancellation()
                     let checkJS = "document.querySelector(\(selectorLiteral)) !== null"
                     if let exists = try? await webView.evaluateJavaScript(checkJS) as? Bool, exists {
                         break
                     }
-                    try? await Task.sleep(nanoseconds: 100_000_000) // 100ms interval
+                    try await Task.sleep(nanoseconds: 100_000_000) // 100ms interval
                 }
             }
         }
         
         // Extract standard text and HTML
+        try Task.checkCancellation()
         let html = try await webView.evaluateJavaScript("document.documentElement.outerHTML") as? String ?? ""
         let title = try await webView.evaluateJavaScript("document.title") as? String ?? ""
         
@@ -155,6 +181,7 @@ public final class StealthScraper: NSObject, WKNavigationDelegate, Sendable {
         } else {
             bodyText = try await webView.evaluateJavaScript("document.body.innerText") as? String ?? ""
         }
+        try Task.checkCancellation()
         
         // Try OCR fallback
         var finalocrText = ""
@@ -220,16 +247,28 @@ public final class StealthScraper: NSObject, WKNavigationDelegate, Sendable {
     public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         continuation?.resume()
         continuation = nil
+        navigationID = nil
     }
     
     public func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
         continuation?.resume(throwing: error)
         continuation = nil
+        navigationID = nil
     }
     
     public func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
         continuation?.resume(throwing: error)
         continuation = nil
+        navigationID = nil
+    }
+
+    private func cancelPendingNavigation(id: UUID) {
+        guard navigationID == id else { return }
+        webView?.stopLoading()
+        let pendingContinuation = continuation
+        continuation = nil
+        navigationID = nil
+        pendingContinuation?.resume(throwing: CancellationError())
     }
     
     // MARK: - OCR & Snapshot Helpers
