@@ -178,6 +178,29 @@ struct ArchonConnectTests {
         #expect(await transport.didObserveTermination())
     }
 
+    @Test("Disconnecting an MCP client terminates active streams")
+    func disconnectsActiveStream() async throws {
+        let transport = CancellableMockTransport()
+        let client = MCPClient(transport: transport)
+        try await client.connect()
+
+        let stream = await client.streamTool(name: "stream")
+        let consumer = Task {
+            do {
+                for try await _ in stream {}
+            } catch {
+                // Disconnect is asserted through the transport below.
+            }
+        }
+
+        await transport.waitForStream()
+        await client.disconnect()
+        _ = await consumer.result
+        try await Task.sleep(for: .milliseconds(20))
+
+        #expect(await transport.didObserveTermination())
+    }
+
     @Test("HTTP MCP transport fails requests that exceed its timeout")
     func enforcesRequestTimeout() async throws {
         StubURLProtocol.responseBodies = [

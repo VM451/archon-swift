@@ -675,6 +675,7 @@ public actor MCPClient {
     private var connected = false
     private var toolsByName: [String: MCPTool] = [:]
     private var resourcesByURI: [String: MCPResource] = [:]
+    private var streamTasks: [UUID: Task<Void, Never>] = [:]
 
     public init(transport: any MCPTransport, permissionPolicy: any MCPPermissionPolicy = AllowReadOnlyMCPPolicy()) {
         self.transport = transport
@@ -705,6 +706,8 @@ public actor MCPClient {
     }
 
     public func disconnect() async {
+        for task in streamTasks.values { task.cancel() }
+        streamTasks.removeAll()
         await transport.disconnect()
         connected = false
         toolsByName.removeAll()
@@ -746,7 +749,12 @@ public actor MCPClient {
         let transport = self.transport
         let permissionPolicy = self.permissionPolicy
         let (stream, continuation) = AsyncThrowingStream<MCPStreamEvent, Error>.makeStream()
-        let task = Task {
+        let streamID = UUID()
+        let owner = self
+        let task = Task { [owner] in
+            defer {
+                Task { await owner.removeStreamTask(streamID) }
+            }
             do {
                 try tool.validate(arguments: arguments)
                 guard await permissionPolicy.allows(tool.risk, tool: tool) else {
@@ -762,8 +770,16 @@ public actor MCPClient {
                 continuation.finish(throwing: error)
             }
         }
-        continuation.onTermination = { _ in task.cancel() }
+        streamTasks[streamID] = task
+        continuation.onTermination = { [weak self] _ in
+            task.cancel()
+            Task { await self?.removeStreamTask(streamID) }
+        }
         return stream
+    }
+
+    private func removeStreamTask(_ streamID: UUID) {
+        streamTasks[streamID] = nil
     }
 }
 
