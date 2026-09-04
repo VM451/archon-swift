@@ -1,4 +1,5 @@
 import Foundation
+import ArchonCore
 
 #if canImport(Darwin)
 import Darwin
@@ -80,6 +81,9 @@ public struct DeviceHardwareProfile: Sendable, Equatable {
     /// Whether Apple Intelligence / Apple Foundation Models are supported and available on this hardware.
     public let isAppleFoundationModelSupported: Bool
 
+    /// Whether the public Apple Core AI runtime is available for custom model assets on this hardware.
+    public let isCoreAISupported: Bool
+
     /// Creates a hardware profile with explicit parameters (ideal for testing, diagnostics, or simulated devices).
     public init(
         platform: ApplePlatformKind = .iOS,
@@ -88,12 +92,14 @@ public struct DeviceHardwareProfile: Sendable, Equatable {
         availableProcessMemoryBytes: UInt64? = nil,
         modelMemoryBudgetFraction: Double = 0.50,
         processorCount: Int,
-        isAppleFoundationModelSupported: Bool
+        isAppleFoundationModelSupported: Bool,
+        isCoreAISupported: Bool = false
     ) {
         self.platform = platform
         self.physicalMemoryBytes = physicalMemoryBytes
         self.processorCount = processorCount
         self.isAppleFoundationModelSupported = isAppleFoundationModelSupported
+        self.isCoreAISupported = isCoreAISupported
         self.modelMemoryBudgetFraction = max(0.10, min(0.90, modelMemoryBudgetFraction))
 
         let gigabytes = Double(physicalMemoryBytes) / 1_073_741_824.0
@@ -166,7 +172,8 @@ public struct DeviceHardwareProfile: Sendable, Equatable {
             availableProcessMemoryBytes: availableBytes,
             modelMemoryBudgetFraction: 0.50, // 50% model / 50% host app headroom
             processorCount: cores,
-            isAppleFoundationModelSupported: appleModelAvailable
+            isAppleFoundationModelSupported: appleModelAvailable,
+            isCoreAISupported: ArchonDeviceCapabilities.current.supportsCoreAI
         )
     }
 

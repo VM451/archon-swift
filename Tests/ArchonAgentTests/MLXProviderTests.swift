@@ -60,7 +60,11 @@ struct OnDeviceProviderTests {
 
     @Test("Automatic provider uses MLX when Apple Foundation Models are unavailable")
     func selectsMLXWhenAppleModelIsUnavailable() {
-        let provider = OnDeviceProvider(appleFoundationModelAvailable: false)
+        let provider = OnDeviceProvider(
+            strategy: .adaptive(preference: .adaptive),
+            hardwareProfile: .iPhone12Base,
+            appleFoundationModelAvailable: false
+        )
 
         #expect(provider.backend == .mlx)
         #expect(provider.id.hasPrefix("mlx."))

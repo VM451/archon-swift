@@ -230,7 +230,7 @@ public final class OnDeviceProvider: LLMProvider, @unchecked Sendable {
                 preference: preference
             )
 
-            if runtimePref == .preferCoreAI {
+            if runtimePref == .preferCoreAI || (runtimePref == .auto && hardwareProfile.isCoreAISupported) {
                 return (CoreAIProvider(variant: variant), .coreAI, variant)
             } else {
                 return (MLXLocalProvider(variant: variant), .mlx, variant)

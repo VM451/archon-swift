@@ -103,6 +103,27 @@ struct OnDeviceModelSelectorTests {
         #expect(provider.capabilities.isOnDevice)
     }
 
+    @Test("Adaptive routing prefers Core AI for custom models when the runtime is available")
+    func routesToCoreAIWhenAvailable() {
+        let profile = DeviceHardwareProfile(
+            platform: .macOS,
+            physicalMemoryBytes: 16 * 1024 * 1024 * 1024,
+            appProcessMemoryLimitBytes: 12 * 1024 * 1024 * 1024,
+            availableProcessMemoryBytes: 10 * 1024 * 1024 * 1024,
+            processorCount: 10,
+            isAppleFoundationModelSupported: false,
+            isCoreAISupported: true
+        )
+        let provider = OnDeviceProvider(
+            strategy: .adaptive(preference: .adaptive),
+            hardwareProfile: profile
+        )
+
+        #expect(provider.backend == .coreAI)
+        #expect(provider.selectedGemmaVariant != nil)
+        #expect(provider.capabilities.isOnDevice)
+    }
+
     @Test("iPhone 14 Pro routes to MLX with Gemma 4 E2B in adaptive and E4B in intelligenceFirst mode")
     func routesToMLXGemma4OnIPhone14Pro() {
         let adaptiveProvider = OnDeviceProvider(
