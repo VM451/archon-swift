@@ -183,6 +183,38 @@ struct ArchonConnectTests {
         #expect(resultText == "done")
     }
 
+    @Test("Disconnecting the HTTP transport cancels an active stream")
+    func disconnectsHTTPTransportStream() async throws {
+        StubURLProtocol.responseBodies = [
+            Data(#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18"}}"#.utf8),
+            Data(),
+            Data(#"{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"late"}]}}"#.utf8)
+        ]
+        defer {
+            StubURLProtocol.responseBodies = []
+            StubURLProtocol.responseContentTypes = []
+            StubURLProtocol.delay = 0
+        }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let transport = MCPHTTPTransport(endpoint: URL(string: "https://mcp.example.test")!, session: session)
+        try await transport.connect()
+
+        StubURLProtocol.delay = 0.05
+        let events = await transport.streamTool(name: "slow_tool", arguments: [:])
+        await transport.disconnect()
+
+        var receivedEvents: [MCPStreamEvent] = []
+        do {
+            for try await event in events { receivedEvents.append(event) }
+        } catch is CancellationError {
+            // Disconnect is expected to cancel the active URLSession stream.
+        }
+        #expect(receivedEvents.isEmpty)
+    }
+
     @Test("Cancelling an MCP stream consumer terminates the underlying transport stream")
     func cancelsStreamConsumer() async throws {
         let transport = CancellableMockTransport()

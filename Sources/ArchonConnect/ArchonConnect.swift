@@ -233,6 +233,7 @@ public actor MCPHTTPTransport: MCPTransport {
     private var nextRequestID = 1
     private var sessionID: String?
     private var connected = false
+    private var streamTasks: [UUID: Task<Void, Never>] = [:]
 
     public init(
         endpoint: URL,
@@ -267,6 +268,8 @@ public actor MCPHTTPTransport: MCPTransport {
     }
 
     public func disconnect() async {
+        for task in streamTasks.values { task.cancel() }
+        streamTasks.removeAll()
         connected = false
         sessionID = nil
     }
@@ -331,7 +334,12 @@ public actor MCPHTTPTransport: MCPTransport {
             let request = makeRequest(data: data)
             let session = self.session
             let timeout = requestTimeout
-            let task = Task { [weak self] in
+            let streamID = UUID()
+            let owner = self
+            let task = Task { [owner] in
+                defer {
+                    Task { await owner.removeStreamTask(streamID) }
+                }
                 do {
                     try await withThrowingTaskGroup(of: Void.self) { group in
                         group.addTask {
@@ -343,7 +351,7 @@ public actor MCPHTTPTransport: MCPTransport {
                                 throw MCPTransportError.httpFailure(httpResponse.statusCode)
                             }
                             if let newSessionID = httpResponse.value(forHTTPHeaderField: "Mcp-Session-Id") {
-                                await self?.recordSessionID(newSessionID)
+                                await owner.recordSessionID(newSessionID)
                             }
 
                             let contentType = httpResponse.value(forHTTPHeaderField: "Content-Type")?.lowercased() ?? ""
@@ -375,7 +383,11 @@ public actor MCPHTTPTransport: MCPTransport {
                     continuation.finish(throwing: error)
                 }
             }
-            continuation.onTermination = { _ in task.cancel() }
+            streamTasks[streamID] = task
+            continuation.onTermination = { [weak self] _ in
+                task.cancel()
+                Task { await self?.removeStreamTask(streamID) }
+            }
         } catch {
             continuation.finish(throwing: error)
         }
@@ -484,6 +496,10 @@ public actor MCPHTTPTransport: MCPTransport {
 
     private func recordSessionID(_ value: String) {
         sessionID = value
+    }
+
+    private func removeStreamTask(_ streamID: UUID) {
+        streamTasks[streamID] = nil
     }
 
     private static func consumeSSE(
