@@ -152,4 +152,42 @@ struct ModelRoutingTests {
             Issue.record("Expected a compatible catalog variant to be offered for download.")
         }
     }
+
+    @Test("Model routing does not select an experimental installed export")
+    func rejectsExperimentalInstalledModel() {
+        let device = ArchonDeviceCapabilities(
+            platform: .iOS,
+            osVersion: ArchonOSVersion(major: 27),
+            physicalMemoryBytes: 8_000_000_000,
+            availableMemoryBytes: 6_000_000_000,
+            processorCount: 6,
+            deviceArchitecture: "arm64",
+            supportsAppleFoundationModels: false,
+            supportsCoreAI: true
+        )
+        let variant = ModelVariant(
+            id: "experimental-coreai",
+            name: "experimental.aimodel",
+            modelID: "example/experimental",
+            source: .localImport,
+            format: .aimodel,
+            runtime: .coreAI,
+            sizeBytes: 100,
+            estimatedMemoryBytes: 100,
+            isExperimental: true
+        )
+        let installed = InstalledModel(
+            id: variant.id,
+            directoryURL: .temporaryDirectory,
+            manifest: ArchonModelManifest(variant: variant, modelName: "Experimental")
+        )
+
+        let selection = AgentModelRouter.select(
+            policy: ModelPolicy(privacy: .localOnly),
+            device: device,
+            installed: [installed]
+        )
+
+        #expect(selection == .unavailable("No compatible local model satisfies the requested policy."))
+    }
 }

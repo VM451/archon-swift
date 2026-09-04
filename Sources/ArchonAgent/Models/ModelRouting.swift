@@ -84,7 +84,8 @@ public enum AgentModelRouter {
                 sha256: model.manifest.checksum,
                 resources: model.manifest.modelResources,
                 tokenizerResources: model.manifest.tokenizerResources,
-                capabilities: model.manifest.capabilities
+                capabilities: model.manifest.capabilities,
+                isExperimental: model.manifest.isExperimental
             )
         }
 
