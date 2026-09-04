@@ -115,7 +115,7 @@ public struct HuggingFaceCatalog: ModelCatalogProvider, Sendable {
 
     /// Fetches a single repository's complete metadata and artifact inventory.
     public func inspect(repositoryID: String, revision: String? = nil) async throws -> ModelDescriptor {
-        guard repositoryID.isEmpty == false, repositoryID.contains("..") == false else {
+        guard Self.isValidRepositoryID(repositoryID) else {
             throw ArchonModelsError.invalidModelIdentifier(repositoryID)
         }
         var url = baseURL.appendingPathComponent("api/models").appendingPathComponent(repositoryID)
@@ -329,6 +329,20 @@ public struct HuggingFaceCatalog: ModelCatalogProvider, Sendable {
         let components = trimmed.split(separator: "/").map(String.init)
         guard components.count == 2, !components.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) else { return nil }
         return trimmed
+    }
+
+    private static func isValidRepositoryID(_ repositoryID: String) -> Bool {
+        let components = repositoryID.split(separator: "/", omittingEmptySubsequences: false)
+        guard components.count == 2 else { return false }
+        let forbidden = CharacterSet.whitespacesAndNewlines
+            .union(.controlCharacters)
+            .union(CharacterSet(charactersIn: "?#\\"))
+        return components.allSatisfy { component in
+            !component.isEmpty &&
+                component != "." &&
+                component != ".." &&
+                component.unicodeScalars.allSatisfy { !forbidden.contains($0) }
+        }
     }
 
     private func task(for pipelineTag: String?) -> ArchonModelTask {

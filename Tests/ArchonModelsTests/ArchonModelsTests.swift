@@ -449,6 +449,21 @@ struct ArchonModelsTests {
         #expect(queryItems.first(where: { $0.name == "full" })?.value == "true")
     }
 
+    @Test("Hugging Face inspection rejects unsafe repository paths before requesting them")
+    func rejectsUnsafeHuggingFaceRepositoryIDs() async throws {
+        let catalog = HuggingFaceCatalog(
+            baseURL: URL(string: "https://example.com")!,
+            session: MockHTTPClient(payload: Data("[]".utf8)),
+            tokenStore: nil
+        )
+
+        for repositoryID in ["org/model/extra", "org/../model", "org/model?revision=main", "org/model\\name"] {
+            await #expect(throws: ArchonModelsError.invalidModelIdentifier(repositoryID)) {
+                _ = try await catalog.inspect(repositoryID: repositoryID)
+            }
+        }
+    }
+
     @Test("Model license policy separates allowed, confirmation, and denied licenses")
     func evaluatesLicensePolicy() {
         let policy = ModelLicensePolicy(
