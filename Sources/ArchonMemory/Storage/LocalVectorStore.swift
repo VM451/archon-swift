@@ -253,14 +253,18 @@ public actor LocalVectorStore: VectorStore {
     }
 
     public func fetchAll(filters: MemoryFilter?, limit: Int? = nil, offset: Int? = nil) async throws -> [MemoryItem] {
-        try await dbQueue.read { db in
+        let filtersMetadata = filters?.metadata?.isEmpty == false
+        let items = try await dbQueue.read { db in
             var sql = "SELECT * FROM memories WHERE 1=1"
             var args: [DatabaseValueConvertible] = []
             
             Self.appendFilterConditions(filters: filters, sql: &sql, args: &args)
             sql += " ORDER BY createdAt DESC"
             
-            if let limit = limit {
+            // Metadata is stored as a portable JSON blob rather than relying on
+            // SQLite's optional JSON1 extension. Apply limit/offset after the
+            // in-memory metadata predicate so pagination remains correct.
+            if !filtersMetadata, let limit = limit {
                 sql += " LIMIT \(limit)"
                 if let offset = offset {
                     sql += " OFFSET \(offset)"
@@ -270,6 +274,21 @@ public actor LocalVectorStore: VectorStore {
             let rows = try Row.fetchAll(db, sql: sql, arguments: StatementArguments(args))
             return try rows.map { try Self.rowToMemoryItem($0) }
         }
+
+        guard let requiredMetadata = filters?.metadata, !requiredMetadata.isEmpty else {
+            return items
+        }
+
+        let matchingItems = items.filter { item in
+            requiredMetadata.allSatisfy { key, value in
+                item.metadata[key] == value
+            }
+        }
+        guard let limit else { return matchingItems }
+
+        let start = max(offset ?? 0, 0)
+        let count = max(limit, 0)
+        return Array(matchingItems.dropFirst(start).prefix(count))
     }
 
     public func delete(id: UUID) async throws {
@@ -290,24 +309,37 @@ public actor LocalVectorStore: VectorStore {
     public func deleteAll(userId: String?, agentId: String?, runId: String?) async throws {
         try await dbQueue.write { db in
             let now = Date().timeIntervalSince1970
-            var sql = "UPDATE memories SET isDeleted = 1, syncState = 'pendingUpload', updatedAt = ? WHERE 1=1"
-            var args: [DatabaseValueConvertible] = [now]
+            var predicates = ["1=1"]
+            var scopeArgs: [DatabaseValueConvertible] = []
             
             if let userId = userId {
-                sql += " AND userId = ?"
-                args.append(userId)
+                predicates.append("userId = ?")
+                scopeArgs.append(userId)
             }
             if let agentId = agentId {
-                sql += " AND agentId = ?"
-                args.append(agentId)
+                predicates.append("agentId = ?")
+                scopeArgs.append(agentId)
             }
             if let runId = runId {
-                sql += " AND runId = ?"
-                args.append(runId)
+                predicates.append("runId = ?")
+                scopeArgs.append(runId)
             }
             
-            try db.execute(sql: sql, arguments: StatementArguments(args))
-            try db.execute(sql: "DELETE FROM memories_fts")
+            let predicate = predicates.joined(separator: " AND ")
+            var updateArgs: [DatabaseValueConvertible] = [now]
+            updateArgs.append(contentsOf: scopeArgs)
+            try db.execute(
+                sql: "UPDATE memories SET isDeleted = 1, syncState = 'pendingUpload', updatedAt = ? WHERE \(predicate)",
+                arguments: StatementArguments(updateArgs)
+            )
+
+            // Delete only the FTS rows belonging to the same scope. Clearing
+            // the whole virtual table would make another user's memories
+            // temporarily unsearchable after a scoped delete.
+            try db.execute(
+                sql: "DELETE FROM memories_fts WHERE id IN (SELECT id FROM memories WHERE \(predicate))",
+                arguments: StatementArguments(scopeArgs)
+            )
         }
     }
 
@@ -829,6 +861,9 @@ public actor LocalVectorStore: VectorStore {
             sql += " AND runId = ?"
             args.append(runId)
         }
+        // Metadata filtering is applied after decoding the portable JSON blob
+        // in fetchAll(). Keeping it out of SQL avoids requiring SQLite JSON1
+        // and ensures limit/offset are applied to the filtered result set.
         if let activeAt = filters.activeAt {
             let activeDouble = activeAt.timeIntervalSince1970
             sql += " AND validFrom <= ? AND (validTo IS NULL OR validTo > ?)"

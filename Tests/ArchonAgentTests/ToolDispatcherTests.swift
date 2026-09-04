@@ -150,13 +150,12 @@ struct SecurityGuardrailsTests {
 
     @Test("ZeroCloudMode throws when active and external provider is invoked")
     func testZeroCloudModeEnforcement() async throws {
-        ZeroCloudMode.isEnabled = true
-        defer { ZeroCloudMode.isEnabled = false }
-
         let provider = OpenAIProvider(apiKey: "fake-key")
 
-        await #expect(throws: GraphError.self) {
-            _ = try await provider.generate(prompt: [ChatMessage.user("hello")])
+        await ZeroCloudMode.withEnabled {
+            await #expect(throws: GraphError.self) {
+                _ = try await provider.generate(prompt: [ChatMessage.user("hello")])
+            }
         }
     }
 

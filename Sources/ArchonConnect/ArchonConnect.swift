@@ -7,13 +7,25 @@ public struct MCPTool: Codable, Equatable, Sendable, Identifiable {
     public let description: String
     public let inputSchema: [String: JSONValue]
     public let risk: MCPRisk
+    public let title: String?
+    public let outputSchema: [String: JSONValue]?
 
-    public init(id: String = UUID().uuidString, name: String, description: String = "", inputSchema: [String: JSONValue] = [:], risk: MCPRisk = .read) {
+    public init(
+        id: String = UUID().uuidString,
+        name: String,
+        description: String = "",
+        inputSchema: [String: JSONValue] = [:],
+        risk: MCPRisk = .read,
+        title: String? = nil,
+        outputSchema: [String: JSONValue]? = nil
+    ) {
         self.id = id
         self.name = name
         self.description = description
         self.inputSchema = inputSchema
         self.risk = risk
+        self.title = title
+        self.outputSchema = outputSchema
     }
 
     public init(from decoder: Decoder) throws {
@@ -24,12 +36,14 @@ public struct MCPTool: Codable, Equatable, Sendable, Identifiable {
             name: name,
             description: try container.decodeIfPresent(String.self, forKey: .description) ?? "",
             inputSchema: try container.decodeIfPresent([String: JSONValue].self, forKey: .inputSchema) ?? [:],
-            risk: try container.decodeIfPresent(MCPRisk.self, forKey: .risk) ?? .read
+            risk: try container.decodeIfPresent(MCPRisk.self, forKey: .risk) ?? .read,
+            title: try container.decodeIfPresent(String.self, forKey: .title),
+            outputSchema: try container.decodeIfPresent([String: JSONValue].self, forKey: .outputSchema)
         )
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, description, inputSchema, risk
+        case id, name, description, inputSchema, risk, title, outputSchema
     }
 
     /// Validates the common JSON Schema subset used by MCP tool definitions
@@ -85,15 +99,21 @@ public enum JSONValue: Codable, Equatable, Sendable {
 public struct MCPToolResult: Codable, Equatable, Sendable {
     public let content: [JSONValue]
     public let isError: Bool
+    public let structuredContent: JSONValue?
 
-    public init(content: [JSONValue], isError: Bool = false) {
+    public init(
+        content: [JSONValue],
+        isError: Bool = false,
+        structuredContent: JSONValue? = nil
+    ) {
         self.content = content
         self.isError = isError
+        self.structuredContent = structuredContent
     }
 }
 
 /// One message observed while consuming an MCP streamable-HTTP response.
-/// Progress and other server notifications are surfaced instead of being
+/// Progress and supported server notifications are surfaced instead of being
 /// discarded while the client waits for the final tool result.
 public enum MCPStreamEvent: Equatable, Sendable {
     case result(MCPToolResult)
@@ -156,6 +176,67 @@ public struct MCPResourceContent: Codable, Equatable, Sendable {
     }
 }
 
+public struct MCPPromptArgument: Codable, Equatable, Sendable {
+    public let name: String
+    public let title: String?
+    public let description: String?
+    public let required: Bool?
+
+    public init(
+        name: String,
+        title: String? = nil,
+        description: String? = nil,
+        required: Bool? = nil
+    ) {
+        self.name = name
+        self.title = title
+        self.description = description
+        self.required = required
+    }
+}
+
+public struct MCPPrompt: Codable, Equatable, Sendable, Identifiable {
+    public let id: String
+    public let name: String
+    public let title: String?
+    public let description: String
+    public let arguments: [MCPPromptArgument]
+
+    public init(
+        id: String? = nil,
+        name: String,
+        title: String? = nil,
+        description: String = "",
+        arguments: [MCPPromptArgument] = []
+    ) {
+        self.id = id ?? name
+        self.name = name
+        self.title = title
+        self.description = description
+        self.arguments = arguments
+    }
+}
+
+public struct MCPPromptMessage: Codable, Equatable, Sendable {
+    public let role: String
+    public let content: JSONValue
+
+    public init(role: String, content: JSONValue) {
+        self.role = role
+        self.content = content
+    }
+}
+
+public struct MCPPromptResult: Codable, Equatable, Sendable {
+    public let description: String?
+    public let messages: [MCPPromptMessage]
+
+    public init(description: String? = nil, messages: [MCPPromptMessage] = []) {
+        self.description = description
+        self.messages = messages
+    }
+}
+
 public protocol MCPTransport: Sendable {
     func connect() async throws
     func disconnect() async
@@ -164,6 +245,8 @@ public protocol MCPTransport: Sendable {
     func streamTool(name: String, arguments: [String: JSONValue]) async -> AsyncThrowingStream<MCPStreamEvent, Error>
     func listResources() async throws -> [MCPResource]
     func readResource(uri: String) async throws -> [MCPResourceContent]
+    func listPrompts() async throws -> [MCPPrompt]
+    func getPrompt(name: String, arguments: [String: String]) async throws -> MCPPromptResult
 }
 
 public extension MCPTransport {
@@ -184,6 +267,14 @@ public extension MCPTransport {
     func readResource(uri: String) async throws -> [MCPResourceContent] {
         throw MCPTransportError.unsupported("resources/read")
     }
+
+    func listPrompts() async throws -> [MCPPrompt] {
+        throw MCPTransportError.unsupported("prompts/list")
+    }
+
+    func getPrompt(name: String, arguments: [String: String]) async throws -> MCPPromptResult {
+        throw MCPTransportError.unsupported("prompts/get")
+    }
 }
 
 public protocol MCPPermissionPolicy: Sendable {
@@ -198,6 +289,7 @@ public enum MCPTransportError: Error, LocalizedError, Equatable, Sendable {
     case unsupported(String)
     case timeout(TimeInterval)
     case invalidArguments(String)
+    case sdkFailure(String)
 
     public var errorDescription: String? {
         switch self {
@@ -208,6 +300,7 @@ public enum MCPTransportError: Error, LocalizedError, Equatable, Sendable {
         case .unsupported(let operation): "This MCP transport does not support \(operation)."
         case .timeout(let seconds): "MCP request timed out after \(seconds) seconds."
         case .invalidArguments(let reason): "MCP tool arguments are invalid: \(reason)"
+        case .sdkFailure(let reason): "The official MCP Swift SDK failed: \(reason)"
         }
     }
 
@@ -304,7 +397,11 @@ public actor MCPHTTPTransport: MCPTransport {
         } else {
             isError = false
         }
-        return MCPToolResult(content: content, isError: isError)
+        return MCPToolResult(
+            content: content,
+            isError: isError,
+            structuredContent: object["structuredContent"]
+        )
     }
 
     /// Streams server notifications and the final tool result from an MCP
@@ -564,7 +661,13 @@ public actor MCPHTTPTransport: MCPTransport {
             } else {
                 isError = false
             }
-            return .result(MCPToolResult(content: content, isError: isError))
+            return .result(
+                MCPToolResult(
+                    content: content,
+                    isError: isError,
+                    structuredContent: object["structuredContent"]
+                )
+            )
         }
         if let method = message.method {
             return .notification(method: method, params: message.params)
@@ -694,6 +797,7 @@ public actor MCPClient {
     private var connected = false
     private var toolsByName: [String: MCPTool] = [:]
     private var resourcesByURI: [String: MCPResource] = [:]
+    private var promptsByName: [String: MCPPrompt] = [:]
     private var streamTasks: [UUID: Task<Void, Never>] = [:]
 
     public init(transport: any MCPTransport, permissionPolicy: any MCPPermissionPolicy = AllowReadOnlyMCPPolicy()) {
@@ -712,14 +816,24 @@ public actor MCPClient {
                 // Resource support is optional in MCP servers.
                 discoveredResources = []
             }
+            let discoveredPrompts: [MCPPrompt]
+            do {
+                discoveredPrompts = try await transport.listPrompts()
+            } catch let error as MCPTransportError
+                where error.isMethodNotFound || error == .unsupported("prompts/list") {
+                // Prompt support is optional in MCP servers and transports.
+                discoveredPrompts = []
+            }
             toolsByName = Dictionary(discoveredTools.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
             resourcesByURI = Dictionary(discoveredResources.map { ($0.uri, $0) }, uniquingKeysWith: { first, _ in first })
+            promptsByName = Dictionary(discoveredPrompts.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
             connected = true
         } catch {
             await transport.disconnect()
             connected = false
             toolsByName.removeAll()
             resourcesByURI.removeAll()
+            promptsByName.removeAll()
             throw error
         }
     }
@@ -731,6 +845,7 @@ public actor MCPClient {
         connected = false
         toolsByName.removeAll()
         resourcesByURI.removeAll()
+        promptsByName.removeAll()
     }
 
     public func tools() -> [MCPTool] {
@@ -741,11 +856,22 @@ public actor MCPClient {
         resourcesByURI.values.sorted { $0.uri < $1.uri }
     }
 
+    public func prompts() -> [MCPPrompt] {
+        promptsByName.values.sorted { $0.name < $1.name }
+    }
+
     public func readResource(uri: String) async throws -> [MCPResourceContent] {
         guard connected, resourcesByURI[uri] != nil else {
             throw ArchonCoreError.invalidConfiguration("MCP client is not connected or resource is unavailable.")
         }
         return try await transport.readResource(uri: uri)
+    }
+
+    public func getPrompt(name: String, arguments: [String: String] = [:]) async throws -> MCPPromptResult {
+        guard connected, promptsByName[name] != nil else {
+            throw ArchonCoreError.invalidConfiguration("MCP client is not connected or prompt is unavailable.")
+        }
+        return try await transport.getPrompt(name: name, arguments: arguments)
     }
 
     public func callTool(name: String, arguments: [String: JSONValue] = [:]) async throws -> MCPToolResult {

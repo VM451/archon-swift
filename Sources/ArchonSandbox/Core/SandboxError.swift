@@ -2,6 +2,7 @@ import Foundation
 
 /// Errors that can occur during sandbox lifecycle, execution, IPC bridging, or synchronization.
 public enum SandboxError: Error, Sendable, CustomStringConvertible, Equatable {
+    case invalidExecutionRequest(String)
     case serializationFailed(String)
     case executionFailed(String)
     case toolNotFound(String)
@@ -19,6 +20,8 @@ public enum SandboxError: Error, Sendable, CustomStringConvertible, Equatable {
     
     public var description: String {
         switch self {
+        case .invalidExecutionRequest(let detail):
+            return "SandboxError.invalidExecutionRequest: \(detail)"
         case .serializationFailed(let detail):
             return "SandboxError.serializationFailed: \(detail)"
         case .executionFailed(let detail):

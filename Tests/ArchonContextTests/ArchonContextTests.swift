@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import ArchonContext
 
@@ -6,6 +7,15 @@ private struct TestContributor: ContextContributor {
     let fragment: ContextFragment
 
     func makeContextFragment() async throws -> ContextFragment { fragment }
+}
+
+private struct DelayedContributor: ContextContributor {
+    let id: String
+
+    func makeContextFragment() async throws -> ContextFragment {
+        try await Task.sleep(for: .seconds(60))
+        return ContextFragment(source: id, content: "unreachable")
+    }
 }
 
 struct ArchonContextTests {
@@ -21,5 +31,65 @@ struct ArchonContextTests {
         #expect(snapshot.fragments.count == 2)
         #expect(snapshot.assembledText.hasPrefix("[app]"))
         #expect(snapshot.assembledText.contains("[memory]"))
+    }
+
+    @Test("ContextBuilder orders equal priorities deterministically and applies a byte budget")
+    func deterministicBudget() async throws {
+        let builder = ContextBuilder(contributors: [
+            TestContributor(
+                id: "zeta",
+                fragment: ContextFragment(id: "zeta", source: "zeta", content: "ignored", priority: 10)
+            ),
+            TestContributor(
+                id: "alpha",
+                fragment: ContextFragment(id: "alpha", source: "alpha", content: "abcdefgh", priority: 10)
+            )
+        ])
+        let budget = try ContextBudget(maxUTF8Bytes: 12)
+
+        let snapshot = try await builder.snapshot(budget: budget)
+
+        #expect(snapshot.fragments.map(\.id) == ["alpha"])
+        #expect(snapshot.assembledText == "[alpha]\nabcd")
+        #expect(snapshot.assembledText.utf8.count <= 12)
+    }
+
+    @Test("ContextSnapshot decoding preserves deterministic fragment order")
+    func decodingIsDeterministic() throws {
+        let snapshot = ContextSnapshot(fragments: [
+            ContextFragment(id: "zeta", source: "zeta", content: "z", priority: 1),
+            ContextFragment(id: "alpha", source: "alpha", content: "a", priority: 1)
+        ])
+        let data = try JSONEncoder().encode(snapshot)
+        let decoded = try JSONDecoder().decode(ContextSnapshot.self, from: data)
+
+        #expect(decoded.fragments.map(\.id) == ["alpha", "zeta"])
+    }
+
+    @Test("ContextBuilder rejects negative budgets")
+    func invalidBudget() {
+        #expect(throws: ContextBuilderError.invalidBudget) {
+            try ContextBudget(maxUTF8Bytes: -1)
+        }
+    }
+
+    @Test("ContextBuilder propagates task cancellation")
+    func cancellation() async {
+        let builder = ContextBuilder(contributors: [
+            DelayedContributor(id: "delayed")
+        ])
+        let task = Task {
+            try await builder.snapshot()
+        }
+        task.cancel()
+
+        do {
+            _ = try await task.value
+            Issue.record("Expected context assembly to be cancelled.")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            Issue.record("Expected CancellationError, got \(error).")
+        }
     }
 }

@@ -150,16 +150,17 @@ struct ProvidersExtendedTests {
     }
 
     @Test("ZeroCloudMode toggles enforce local execution")
-    func testZeroCloudModeToggles() {
-        ZeroCloudMode.isEnabled = true
-        #expect(ZeroCloudMode.isEnabled == true)
+    func testZeroCloudModeToggles() async {
+        let initialValue = ZeroCloudMode.isEnabled
 
-        #expect(throws: Error.self) {
-            try ZeroCloudMode.ensureAllowed(provider: "OpenAI")
+        await ZeroCloudMode.withEnabled {
+            #expect(ZeroCloudMode.isEnabled == true)
+            #expect(throws: Error.self) {
+                try ZeroCloudMode.ensureAllowed(provider: "OpenAI")
+            }
         }
 
-        ZeroCloudMode.isEnabled = false
-        #expect(ZeroCloudMode.isEnabled == false)
+        #expect(ZeroCloudMode.isEnabled == initialValue)
         #expect(throws: Never.self) {
             try ZeroCloudMode.ensureAllowed(provider: "OpenAI")
         }

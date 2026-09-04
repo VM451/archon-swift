@@ -92,6 +92,7 @@ for the deeper design notes.
 | `ArchonAgent` | Stateful graphs, routing, providers, tools, interrupts, checkpoints, evaluation, and SwiftUI chat |
 | `ArchonContext` | Request-scoped context assembly; never persists or executes actions |
 | `ArchonMemory` | Application-owned memory, graph storage, vector search, RAG, and CloudKit sync |
+| `ArchonMemoryProxima` | Optional ProximaKit dense-index adapter behind ArchonMemory's vendor-neutral `VectorIndex` contract |
 | `ArchonSearch` | Search, scraping, deep research, structured extraction, citations, and monitoring |
 | `ArchonSandbox` | Capability-restricted WebKit mini-apps, DOM/JS patches, events, and workspace sync |
 | `ArchonConnect` | MCP client, JSON-RPC HTTP transport, schema validation, and permission policy |
@@ -137,6 +138,13 @@ partial, adapter-owned, or varies between the competitors in that group.
 
 Archon’s distinction is the integrated Apple application boundary: specialist
 tools can still be used behind Archon protocols or host adapters.
+
+The maintained competitive feature registry, adoption backlog, and release
+scorecard are in [`context/competitor-signature-features.md`](context/competitor-signature-features.md),
+[`context/feature-adoption-backlog.md`](context/feature-adoption-backlog.md),
+and [`context/quality-scorecard.md`](context/quality-scorecard.md). They keep
+local qualification, user-pull evidence, reuse/adapt/build decisions, and
+open device gates explicit.
 
 ## Quick start
 

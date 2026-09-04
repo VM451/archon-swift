@@ -16,6 +16,7 @@ let package = Package(
         .library(name: "ArchonAgent", targets: ["ArchonAgent"]),
         .library(name: "ArchonContext", targets: ["ArchonContext"]),
         .library(name: "ArchonMemory", targets: ["ArchonMemory"]),
+        .library(name: "ArchonMemoryProxima", targets: ["ArchonMemoryProxima"]),
         .library(name: "ArchonSearch", targets: ["ArchonSearch"]),
         .library(name: "ArchonSandbox", targets: ["ArchonSandbox"]),
         .library(name: "ArchonConnect", targets: ["ArchonConnect"]),
@@ -33,7 +34,9 @@ let package = Package(
         .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", .upToNextMajor(from: "3.31.4")),
         .package(url: "https://github.com/huggingface/swift-huggingface.git", from: "0.9.0"),
         .package(url: "https://github.com/huggingface/swift-transformers.git", from: "1.3.0"),
+        .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.12.1"),
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "6.29.3"),
+        .package(url: "https://github.com/vivekptnk/ProximaKit.git", revision: "9074a52e28baa4fb3abbb971bbc4b43ad8a24a65"),
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.8.0")
     ],
     targets: [
@@ -56,7 +59,10 @@ let package = Package(
         ),
         .target(
             name: "ArchonConnect",
-            dependencies: ["ArchonCore"],
+            dependencies: [
+                "ArchonCore",
+                .product(name: "MCP", package: "swift-sdk")
+            ],
             path: "Sources/ArchonConnect",
             swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]
         ),
@@ -100,6 +106,15 @@ let package = Package(
             ],
             path: "Sources/ArchonMemory",
             exclude: ["Documentation.docc"],
+            swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]
+        ),
+        .target(
+            name: "ArchonMemoryProxima",
+            dependencies: [
+                "ArchonMemory",
+                .product(name: "ProximaKit", package: "ProximaKit")
+            ],
+            path: "Sources/ArchonMemoryProxima",
             swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]
         ),
         .target(
@@ -197,6 +212,12 @@ let package = Package(
             name: "ArchonMemoryTests",
             dependencies: ["ArchonMemory"],
             path: "Tests/ArchonMemoryTests",
+            swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]
+        ),
+        .testTarget(
+            name: "ArchonMemoryProximaTests",
+            dependencies: ["ArchonMemoryProxima"],
+            path: "Tests/ArchonMemoryProximaTests",
             swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]
         ),
         .testTarget(

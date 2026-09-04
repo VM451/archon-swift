@@ -48,6 +48,37 @@ struct ArchonSearchFeaturesTests {
         #expect(firstSearch.snippet.localizedCaseInsensitiveContains("Apple") == true)
         #expect(!firstSearch.highlights.isEmpty)
     }
+
+    @Test("Provider contract keeps local-only search off the network")
+    func providerNetworkPolicy() async throws {
+        let content = "Local Archon memory and offline search."
+        let tempDir = try makeTempHTMLDirectory(fileName: "local.md", content: content)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let provider = ArchonSearchProvider(engine: makeEngine())
+        let response = try await provider.search(SearchRequest(
+            query: "offline search",
+            source: .localWorkspace(directoryPath: tempDir.path)
+        ))
+        #expect(response.providerID == "archon.search")
+        #expect(response.usedNetwork == false)
+        #expect(response.results.count == 1)
+
+        await #expect(throws: SearchError.localOnlyRequiresLocalSource) {
+            _ = try await provider.search(SearchRequest(
+                query: "network must be explicit",
+                source: .duckDuckGo
+            ))
+        }
+
+        await #expect(throws: SearchError.localOnlyRequiresStaticLocalCrawl) {
+            _ = try await provider.search(SearchRequest(
+                query: "dynamic local crawl must be explicit",
+                source: .localWorkspace(directoryPath: tempDir.path),
+                livecrawl: .full(scrapeConfig: ScrapeConfiguration())
+            ))
+        }
+    }
     
     @Test("Contents returns full page text, html and highlights")
     func contentsLocalWorkspace() async throws {

@@ -4,17 +4,42 @@ import Testing
 @testable import ArchonModels
 import ArchonCore
 
+private struct ModelDownloadStubState: Sendable {
+    let body: Data
+    var statusCodes: [Int]
+}
+
 private final class ModelDownloadURLProtocol: URLProtocol, @unchecked Sendable {
-    nonisolated(unsafe) static var body = Data()
-    nonisolated(unsafe) static var bodiesByPath: [String: Data] = [:]
-    nonisolated(unsafe) static var statusCodes: [Int] = []
+    private static let stateLock = NSLock()
+    nonisolated(unsafe) private static var statesByPath: [String: ModelDownloadStubState] = [:]
+
+    static func configure(body: Data, statusCodes: [Int] = [], for url: URL) {
+        stateLock.lock()
+        statesByPath[url.path] = ModelDownloadStubState(body: body, statusCodes: statusCodes)
+        stateLock.unlock()
+    }
+
+    static func reset(for url: URL) {
+        stateLock.lock()
+        statesByPath.removeValue(forKey: url.path)
+        stateLock.unlock()
+    }
+
+    private static func nextResponse(for url: URL?) -> (body: Data, statusCode: Int) {
+        let path = url?.path ?? ""
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard var state = statesByPath[path] else { return (Data(), 200) }
+        let statusCode = state.statusCodes.isEmpty ? 200 : state.statusCodes.removeFirst()
+        statesByPath[path] = state
+        return (state.body, statusCode)
+    }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
-        let body = Self.bodiesByPath[request.url?.path ?? ""] ?? Self.body
-        let statusCode = Self.statusCodes.isEmpty ? 200 : Self.statusCodes.removeFirst()
+        let (body, statusCode) = Self.nextResponse(for: request.url)
         let response = HTTPURLResponse(
             url: request.url!,
             statusCode: statusCode,
@@ -845,11 +870,10 @@ struct ArchonModelsTests {
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let body = Data("downloaded-model".utf8)
-        ModelDownloadURLProtocol.body = body
+        let downloadURL = URL(string: "https://models.example.test/model.aimodel")!
+        ModelDownloadURLProtocol.configure(body: body, for: downloadURL)
         defer {
-            ModelDownloadURLProtocol.body = Data()
-            ModelDownloadURLProtocol.bodiesByPath = [:]
-            ModelDownloadURLProtocol.statusCodes = []
+            ModelDownloadURLProtocol.reset(for: downloadURL)
         }
 
         let configuration = URLSessionConfiguration.ephemeral
@@ -861,7 +885,7 @@ struct ArchonModelsTests {
             name: "model.aimodel",
             modelID: "example/model",
             source: .directURL,
-            downloadURL: URL(string: "https://models.example.test/model.aimodel"),
+            downloadURL: downloadURL,
             format: .aimodel,
             runtime: .coreAI,
             sizeBytes: Int64(body.count),
@@ -1227,11 +1251,10 @@ struct ArchonModelsTests {
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let body = Data("retry-model".utf8)
-        ModelDownloadURLProtocol.body = body
-        ModelDownloadURLProtocol.statusCodes = [503, 200]
+        let downloadURL = URL(string: "https://models.example.test/retry.aimodel")!
+        ModelDownloadURLProtocol.configure(body: body, statusCodes: [503, 200], for: downloadURL)
         defer {
-            ModelDownloadURLProtocol.body = Data()
-            ModelDownloadURLProtocol.statusCodes = []
+            ModelDownloadURLProtocol.reset(for: downloadURL)
         }
 
         let configuration = URLSessionConfiguration.ephemeral
@@ -1242,7 +1265,7 @@ struct ArchonModelsTests {
             name: "model.aimodel",
             modelID: "example/retry",
             source: .directURL,
-            downloadURL: URL(string: "https://models.example.test/retry.aimodel"),
+            downloadURL: downloadURL,
             format: .aimodel,
             runtime: .coreAI,
             sizeBytes: Int64(body.count)
@@ -1268,11 +1291,10 @@ struct ArchonModelsTests {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("archon-failed-download-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        ModelDownloadURLProtocol.body = Data("unavailable".utf8)
-        ModelDownloadURLProtocol.statusCodes = [404]
+        let downloadURL = URL(string: "https://models.example.test/failed.aimodel")!
+        ModelDownloadURLProtocol.configure(body: Data("unavailable".utf8), statusCodes: [404], for: downloadURL)
         defer {
-            ModelDownloadURLProtocol.body = Data()
-            ModelDownloadURLProtocol.statusCodes = []
+            ModelDownloadURLProtocol.reset(for: downloadURL)
         }
 
         let configuration = URLSessionConfiguration.ephemeral
@@ -1283,7 +1305,7 @@ struct ArchonModelsTests {
             name: "model.aimodel",
             modelID: "example/failed",
             source: .directURL,
-            downloadURL: URL(string: "https://models.example.test/failed.aimodel"),
+            downloadURL: downloadURL,
             format: .aimodel,
             runtime: .coreAI,
             sizeBytes: 11
@@ -1314,10 +1336,10 @@ struct ArchonModelsTests {
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let body = Data("actual-model".utf8)
-        ModelDownloadURLProtocol.body = body
+        let downloadURL = URL(string: "https://models.example.test/checksum.aimodel")!
+        ModelDownloadURLProtocol.configure(body: body, for: downloadURL)
         defer {
-            ModelDownloadURLProtocol.body = Data()
-            ModelDownloadURLProtocol.statusCodes = []
+            ModelDownloadURLProtocol.reset(for: downloadURL)
         }
 
         let configuration = URLSessionConfiguration.ephemeral
@@ -1329,7 +1351,7 @@ struct ArchonModelsTests {
             name: "model.aimodel",
             modelID: "example/checksum-failure",
             source: .directURL,
-            downloadURL: URL(string: "https://models.example.test/checksum.aimodel"),
+            downloadURL: downloadURL,
             format: .aimodel,
             runtime: .coreAI,
             sizeBytes: Int64(body.count),
@@ -1420,11 +1442,14 @@ struct ArchonModelsTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let weights = Data("weights".utf8)
         let config = Data(#"{"model_type":"example"}"#.utf8)
-        ModelDownloadURLProtocol.bodiesByPath = [
-            "/mlx-community/example/model.safetensors": weights,
-            "/mlx-community/example/config.json": config
-        ]
-        defer { ModelDownloadURLProtocol.bodiesByPath = [:] }
+        let weightsURL = URL(string: "https://models.example.test/mlx-community/example/model.safetensors")!
+        let configURL = URL(string: "https://models.example.test/mlx-community/example/config.json")!
+        ModelDownloadURLProtocol.configure(body: weights, for: weightsURL)
+        ModelDownloadURLProtocol.configure(body: config, for: configURL)
+        defer {
+            ModelDownloadURLProtocol.reset(for: weightsURL)
+            ModelDownloadURLProtocol.reset(for: configURL)
+        }
 
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [ModelDownloadURLProtocol.self]
@@ -1432,8 +1457,6 @@ struct ArchonModelsTests {
         let digest: (Data) -> String = { data in
             SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         }
-        let weightsURL = URL(string: "https://models.example.test/mlx-community/example/model.safetensors")!
-        let configURL = URL(string: "https://models.example.test/mlx-community/example/config.json")!
         let variant = ModelVariant(
             id: "mlx-community/example#mlx",
             name: "MLX package",

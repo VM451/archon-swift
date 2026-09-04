@@ -248,7 +248,9 @@ public struct ResearchNode: Sendable, Codable, Hashable {
 }
 
 /// Structured diagnostic errors that can occur during crawling and information extraction.
-public enum SearchError: Error, Sendable, Codable, CustomStringConvertible {
+public enum SearchError: Error, Sendable, Codable, Equatable, CustomStringConvertible {
+    case localOnlyRequiresLocalSource
+    case localOnlyRequiresStaticLocalCrawl
     case robotsDisallowed(urlString: String)
     case rateLimited(urlString: String, retryAfter: TimeInterval?)
     case extractionFailed(reason: String)
@@ -259,6 +261,10 @@ public enum SearchError: Error, Sendable, Codable, CustomStringConvertible {
     
     public var description: String {
         switch self {
+        case .localOnlyRequiresLocalSource:
+            return "LocalOnlyRequiresLocalSource: A local-only search request must use an on-device corpus source."
+        case .localOnlyRequiresStaticLocalCrawl:
+            return "LocalOnlyRequiresStaticLocalCrawl: Local-only corpus search cannot use a WebKit crawl that may load external resources."
         case .robotsDisallowed(let urlString):
             return "RobotsDisallowed: Crawl disallowed by robots.txt for URL: \(urlString)"
         case .rateLimited(let urlString, let retryAfter):

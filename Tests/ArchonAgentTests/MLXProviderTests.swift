@@ -42,15 +42,15 @@ struct MLXProviderTests {
     @Test("ZeroCloudMode blocks remote MLX model downloads")
     func zeroCloudBlocksRemoteModelDownload() async {
         let provider = MLXLocalProvider()
-        ZeroCloudMode.isEnabled = true
-        defer { ZeroCloudMode.isEnabled = false }
 
-        await #expect(throws: GraphError.self) {
-            _ = try await provider.generate(
-                prompt: [.user("hello")],
-                tools: [],
-                options: GenerationOptions()
-            )
+        await ZeroCloudMode.withEnabled {
+            await #expect(throws: GraphError.self) {
+                _ = try await provider.generate(
+                    prompt: [.user("hello")],
+                    tools: [],
+                    options: GenerationOptions()
+                )
+            }
         }
     }
 }

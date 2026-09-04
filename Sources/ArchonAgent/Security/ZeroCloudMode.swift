@@ -6,9 +6,18 @@ public struct ZeroCloudMode: Sendable {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var _isEnabled: Bool = false
 
+    /// A task-local override lets a scoped execution policy remain isolated
+    /// when independent agent tasks run concurrently in the same process.
+    @TaskLocal
+    private static var scopedOverride: Bool?
+
     /// Global toggle forcing all agent executions to run locally on-device.
     public static var isEnabled: Bool {
         get {
+            if let scopedOverride {
+                return scopedOverride
+            }
+
             lock.lock()
             defer { lock.unlock() }
             return _isEnabled
@@ -17,6 +26,18 @@ public struct ZeroCloudMode: Sendable {
             lock.lock()
             defer { lock.unlock() }
             _isEnabled = newValue
+        }
+    }
+
+    /// Runs an operation with zero-cloud enforcement scoped to the current
+    /// task tree. The process-wide setting is intentionally left unchanged.
+    /// Child tasks created with structured or inherited task context observe
+    /// the same override without racing unrelated executions.
+    public static func withEnabled<Result: Sendable>(
+        _ operation: sending () async throws -> Result
+    ) async rethrows -> Result {
+        try await $scopedOverride.withValue(true) {
+            try await operation()
         }
     }
 

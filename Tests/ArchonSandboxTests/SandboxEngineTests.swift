@@ -102,6 +102,23 @@ struct SandboxEngineTests {
         }
     }
 
+    @Test("Execution provider reports its real local isolation boundary")
+    func inProcessExecutionProvider() async throws {
+        let engine = SandboxEngine(workspace: SandboxWorkspace.defaultTemplate(name: "Execution Provider"))
+        await engine.bindEvaluator { script in "evaluated:\(script)" }
+        let provider = InProcessWebKitExecutionProvider(engine: engine)
+
+        let result = try await provider.execute(SandboxExecutionRequest(script: "1 + 1"))
+        #expect(result.output == "evaluated:1 + 1")
+        #expect(result.isolationLevel == .inProcessWebKit)
+        #expect(result.networkAccessPermitted == false)
+        #expect(provider.isNetworkDependent == false)
+
+        await #expect(throws: SandboxError.invalidExecutionRequest("Script must not be empty.")) {
+            _ = try await provider.execute(SandboxExecutionRequest(script: "   "))
+        }
+    }
+
     @Test("DOM patch selectors and style IDs are escaped as string literals")
     func testDOMPatcherEscapesSelectors() {
         let selector = "#card'); window.evil();//"

@@ -2,20 +2,114 @@ import Testing
 import ArchonConnect
 import Foundation
 
+private struct StubResponseState: Sendable {
+    var responseBodies: [Data]
+    var responseContentTypes: [String]
+    var delay: TimeInterval
+}
+
 private final class StubURLProtocol: URLProtocol, @unchecked Sendable {
-    nonisolated(unsafe) static var responseBodies: [Data] = []
-    nonisolated(unsafe) static var responseContentTypes: [String] = []
-    nonisolated(unsafe) static var delay: TimeInterval = 0
+    private static let stateLock = NSLock()
+    nonisolated(unsafe) private static var statesByEndpoint: [String: StubResponseState] = [:]
+
+    private static func key(for url: URL?) -> String {
+        guard let url else { return "" }
+        return "\(url.scheme ?? "")://\(url.host ?? "")\(url.path)"
+    }
+
+    static func configure(
+        responseBodies: [Data],
+        responseContentTypes: [String] = [],
+        delay: TimeInterval = 0,
+        for endpoint: URL
+    ) {
+        stateLock.lock()
+        statesByEndpoint[key(for: endpoint)] = StubResponseState(
+            responseBodies: responseBodies,
+            responseContentTypes: responseContentTypes,
+            delay: delay
+        )
+        stateLock.unlock()
+    }
+
+    static func setDelay(_ delay: TimeInterval, for endpoint: URL) {
+        stateLock.lock()
+        statesByEndpoint[key(for: endpoint)]?.delay = delay
+        stateLock.unlock()
+    }
+
+    static func reset(for endpoint: URL) {
+        stateLock.lock()
+        statesByEndpoint.removeValue(forKey: key(for: endpoint))
+        stateLock.unlock()
+    }
+
+    private static func nextResponse(for request: URLRequest) -> (body: Data, contentType: String, delay: TimeInterval) {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        let endpointKey = key(for: request.url)
+        guard var state = statesByEndpoint[endpointKey] else {
+            return (Data(), "application/json", 0)
+        }
+        var body = state.responseBodies.isEmpty ? Data() : state.responseBodies.removeFirst()
+        let contentType = state.responseContentTypes.isEmpty
+            ? "application/json"
+            : state.responseContentTypes.removeFirst()
+        statesByEndpoint[endpointKey] = state
+        var text = String(decoding: body, as: UTF8.self)
+        let metadata = requestMetadata(in: request)
+        if let requestID = metadata.id {
+            text = text.replacingOccurrences(of: "__REQUEST_ID__", with: requestID)
+        }
+        if let progressToken = metadata.progressToken {
+            text = text.replacingOccurrences(of: "__PROGRESS_TOKEN__", with: progressToken)
+        }
+        body = Data(text.utf8)
+        return (body, contentType, state.delay)
+    }
+
+    private static func requestMetadata(in request: URLRequest) -> (id: String?, progressToken: String?) {
+        guard
+            let body = requestBody(for: request),
+            let root = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+            let id = root["id"]
+        else {
+            return (nil, nil)
+        }
+        let progressToken: String?
+        if let params = root["params"] as? [String: Any],
+           let metadata = params["_meta"] as? [String: Any],
+           let token = metadata["progressToken"] {
+            progressToken = String(describing: token)
+        } else {
+            progressToken = nil
+        }
+        return (String(describing: id), progressToken)
+    }
+
+    private static func requestBody(for request: URLRequest) -> Data? {
+        if let body = request.httpBody {
+            return body
+        }
+        guard let stream = request.httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4_096)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            guard count > 0 else { break }
+            data.append(buffer, count: count)
+        }
+        return data.isEmpty ? nil : data
+    }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
-        if Self.delay > 0 { Thread.sleep(forTimeInterval: Self.delay) }
-        let body = Self.responseBodies.isEmpty ? Data() : Self.responseBodies.removeFirst()
-        let contentType = Self.responseContentTypes.isEmpty
-            ? "application/json"
-            : Self.responseContentTypes.removeFirst()
+        let (body, contentType, delay) = Self.nextResponse(for: request)
+        if delay > 0 { Thread.sleep(forTimeInterval: delay) }
         let response = HTTPURLResponse(
             url: request.url!,
             statusCode: body.isEmpty ? 202 : 200,
@@ -79,27 +173,44 @@ private actor CancellableMockTransport: MCPTransport {
     }
 }
 
+private struct TestTimeout: Error {}
+
+private func withTimeout<T: Sendable>(
+    _ duration: Duration,
+    operation: @escaping @Sendable () async throws -> T
+) async throws -> T {
+    try await withThrowingTaskGroup(of: T.self) { group in
+        group.addTask { try await operation() }
+        group.addTask {
+            try await Task.sleep(for: duration)
+            throw TestTimeout()
+        }
+        defer { group.cancelAll() }
+        guard let value = try await group.next() else {
+            throw TestTimeout()
+        }
+        return value
+    }
+}
+
 struct ArchonConnectTests {
     @Test("HTTP MCP transport performs initialize, tool discovery, and tool calls")
     func usesJSONRPCTransport() async throws {
-        StubURLProtocol.responseBodies = [
+        let endpoint = URL(string: "https://mcp.example.test/rpc-\(UUID().uuidString)")!
+        StubURLProtocol.configure(responseBodies: [
             Data(#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18"}}"#.utf8),
             Data(),
             Data(#"{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"read_file","description":"Read","inputSchema":{"type":"object"}}]}}"#.utf8),
             Data(#"{"jsonrpc":"2.0","id":3,"result":{"resources":[{"uri":"file:///README.md","name":"README","mimeType":"text/markdown"}]}}"#.utf8),
             Data(#"{"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"ok"}]}}"#.utf8),
             Data(#"{"jsonrpc":"2.0","id":5,"result":{"contents":[{"uri":"file:///README.md","mimeType":"text/markdown","text":"hello"}]}}"#.utf8)
-        ]
-        defer {
-            StubURLProtocol.responseBodies = []
-            StubURLProtocol.responseContentTypes = []
-            StubURLProtocol.delay = 0
-        }
+        ], for: endpoint)
+        defer { StubURLProtocol.reset(for: endpoint) }
 
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]
         let session = URLSession(configuration: configuration)
-        let transport = MCPHTTPTransport(endpoint: URL(string: "https://mcp.example.test")!, session: session)
+        let transport = MCPHTTPTransport(endpoint: endpoint, session: session)
         let client = MCPClient(transport: transport)
 
         try await client.connect()
@@ -115,20 +226,18 @@ struct ArchonConnectTests {
 
     @Test("HTTP MCP JSON responses containing data text are not mistaken for SSE")
     func preservesJSONResponseContainingDataText() async throws {
-        StubURLProtocol.responseBodies = [
+        let endpoint = URL(string: "https://mcp.example.test/rpc-\(UUID().uuidString)")!
+        StubURLProtocol.configure(responseBodies: [
             Data(#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18"}}"#.utf8),
             Data(),
             Data(#"{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"metadata: data: chunk"}]}}"#.utf8)
-        ]
-        defer {
-            StubURLProtocol.responseBodies = []
-            StubURLProtocol.responseContentTypes = []
-        }
+        ], for: endpoint)
+        defer { StubURLProtocol.reset(for: endpoint) }
 
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]
         let session = URLSession(configuration: configuration)
-        let transport = MCPHTTPTransport(endpoint: URL(string: "https://mcp.example.test")!, session: session)
+        let transport = MCPHTTPTransport(endpoint: endpoint, session: session)
 
         try await transport.connect()
         let result = try await transport.callTool(name: "metadata", arguments: [:])
@@ -143,25 +252,22 @@ struct ArchonConnectTests {
 
     @Test("HTTP MCP transport streams server notifications before the final tool result")
     func streamsJSONRPCMessages() async throws {
-        StubURLProtocol.responseBodies = [
+        let endpoint = URL(string: "https://mcp.example.test/rpc-\(UUID().uuidString)")!
+        StubURLProtocol.configure(responseBodies: [
             Data(#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18"}}"#.utf8),
             Data(),
             Data("event: message\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progress\":0.5}}\n\ndata: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}\n\n".utf8)
-        ]
-        StubURLProtocol.responseContentTypes = [
+        ], responseContentTypes: [
             "application/json",
             "application/json",
             "text/event-stream"
-        ]
-        defer {
-            StubURLProtocol.responseBodies = []
-            StubURLProtocol.responseContentTypes = []
-        }
+        ], for: endpoint)
+        defer { StubURLProtocol.reset(for: endpoint) }
 
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]
         let session = URLSession(configuration: configuration)
-        let transport = MCPHTTPTransport(endpoint: URL(string: "https://mcp.example.test")!, session: session)
+        let transport = MCPHTTPTransport(endpoint: endpoint, session: session)
         try await transport.connect()
 
         let events = await transport.streamTool(name: "progress_tool", arguments: [:])
@@ -185,24 +291,21 @@ struct ArchonConnectTests {
 
     @Test("Disconnecting the HTTP transport cancels an active stream")
     func disconnectsHTTPTransportStream() async throws {
-        StubURLProtocol.responseBodies = [
+        let endpoint = URL(string: "https://mcp.example.test/rpc-\(UUID().uuidString)")!
+        StubURLProtocol.configure(responseBodies: [
             Data(#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18"}}"#.utf8),
             Data(),
             Data(#"{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"late"}]}}"#.utf8)
-        ]
-        defer {
-            StubURLProtocol.responseBodies = []
-            StubURLProtocol.responseContentTypes = []
-            StubURLProtocol.delay = 0
-        }
+        ], for: endpoint)
+        defer { StubURLProtocol.reset(for: endpoint) }
 
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]
         let session = URLSession(configuration: configuration)
-        let transport = MCPHTTPTransport(endpoint: URL(string: "https://mcp.example.test")!, session: session)
+        let transport = MCPHTTPTransport(endpoint: endpoint, session: session)
         try await transport.connect()
 
-        StubURLProtocol.delay = 0.05
+        StubURLProtocol.setDelay(0.05, for: endpoint)
         let events = await transport.streamTool(name: "slow_tool", arguments: [:])
         await transport.disconnect()
 
@@ -261,22 +364,181 @@ struct ArchonConnectTests {
         #expect(await transport.didObserveTermination())
     }
 
+    @Test("Official MCP SDK adapter fails closed before connection")
+    func officialSDKAdapterRequiresConnection() async throws {
+        let endpoint = URL(string: "https://mcp.example.test/rpc-\(UUID().uuidString)")!
+        let transport = OfficialMCPTransport(
+            endpoint: endpoint,
+            streaming: false
+        )
+
+        do {
+            _ = try await transport.listTools()
+            Issue.record("Expected the official MCP adapter to require connection.")
+        } catch let error as MCPTransportError {
+            #expect(error == .notConnected)
+        }
+    }
+
+    @Test("Official MCP SDK adapter does not mutate caller session configuration")
+    func officialSDKAdapterCopiesSessionConfiguration() {
+        let endpoint = URL(string: "https://mcp.example.test/rpc-\(UUID().uuidString)")!
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 37
+
+        _ = OfficialMCPTransport(
+            endpoint: endpoint,
+            configuration: configuration,
+            requestTimeout: 1
+        )
+
+        #expect(configuration.timeoutIntervalForRequest == 37)
+    }
+
+    @Test("Official MCP SDK adapter maps paginated tools, resources, and structured output")
+    func officialSDKAdapterMapsStandardSemantics() async throws {
+        let endpoint = URL(string: "https://mcp.example.test/rpc-\(UUID().uuidString)")!
+        StubURLProtocol.configure(responseBodies: [
+            Data(#"{"jsonrpc":"2.0","id":"__REQUEST_ID__","result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{},"resources":{}},"serverInfo":{"name":"fixture","version":"1"}}}"#.utf8),
+            Data(),
+            Data(#"{"jsonrpc":"2.0","id":"__REQUEST_ID__","result":{"tools":[{"name":"read_file","title":"Read file","description":"Read","inputSchema":{"type":"object"},"outputSchema":{"type":"object","properties":{"answer":{"type":"string"}}},"annotations":{"readOnlyHint":true}}],"nextCursor":"tools-page-2"}}"#.utf8),
+            Data(#"{"jsonrpc":"2.0","id":"__REQUEST_ID__","result":{"tools":[{"name":"delete_file","description":"Delete","inputSchema":{"type":"object"},"annotations":{"destructiveHint":true}}]}}"#.utf8),
+            Data(#"{"jsonrpc":"2.0","id":"__REQUEST_ID__","result":{"resources":[{"uri":"file:///README.md","name":"README","mimeType":"text/markdown"}],"nextCursor":"resources-page-2"}}"#.utf8),
+            Data(#"{"jsonrpc":"2.0","id":"__REQUEST_ID__","result":{"resources":[{"uri":"file:///LICENSE","name":"LICENSE","mimeType":"text/plain"}]}}"#.utf8),
+            Data(#"{"jsonrpc":"2.0","id":"__REQUEST_ID__","result":{"content":[{"type":"text","text":"ok"}],"structuredContent":{"answer":"ok"}}}"#.utf8)
+        ], for: endpoint)
+        defer { StubURLProtocol.reset(for: endpoint) }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let transport = OfficialMCPTransport(
+            endpoint: endpoint,
+            configuration: configuration,
+            streaming: false,
+            requestTimeout: 0.5
+        )
+
+        let (tools, resources, result) = try await withTimeout(.seconds(2)) {
+            try await transport.connect()
+            let tools = try await transport.listTools()
+            let resources = try await transport.listResources()
+            let result = try await transport.callTool(name: "read_file", arguments: [:])
+            return (tools, resources, result)
+        }
+
+        #expect(tools.map(\.name) == ["read_file", "delete_file"])
+        #expect(tools.first?.title == "Read file")
+        #expect(tools.first?.outputSchema?["type"] == .string("object"))
+        #expect(tools.last?.risk == .destructive)
+        #expect(resources.map(\.uri) == ["file:///README.md", "file:///LICENSE"])
+        #expect(result.structuredContent == .object(["answer": .string("ok")]))
+    }
+
+    @Test("Official MCP SDK adapter surfaces progress notifications through Archon events")
+    func officialSDKAdapterStreamsProgress() async throws {
+        let endpoint = URL(string: "https://mcp.example.test/rpc-\(UUID().uuidString)")!
+        StubURLProtocol.configure(responseBodies: [
+            Data(#"{"jsonrpc":"2.0","id":"__REQUEST_ID__","result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"fixture","version":"1"}}}"#.utf8),
+            Data(),
+            Data("event: message\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progressToken\":\"__PROGRESS_TOKEN__\",\"progress\":0.5,\"total\":1,\"message\":\"halfway\"}}\n\ndata: {\"jsonrpc\":\"2.0\",\"id\":\"__REQUEST_ID__\",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}\n\n".utf8)
+        ], responseContentTypes: [
+            "application/json",
+            "application/json",
+            "text/event-stream"
+        ], for: endpoint)
+        defer { StubURLProtocol.reset(for: endpoint) }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let transport = OfficialMCPTransport(
+            endpoint: endpoint,
+            configuration: configuration,
+            streaming: false,
+            requestTimeout: 0.5
+        )
+
+        let (sawProgress, resultText) = try await withTimeout(.seconds(2)) {
+            try await transport.connect()
+            let events = await transport.streamTool(name: "long_task", arguments: [:])
+            var sawProgress = false
+            var resultText: String?
+            for try await event in events {
+                switch event {
+                case .notification(let method, let params):
+                    guard method == "notifications/progress",
+                          case .object(let params) = params,
+                          params["progress"] == .number(0.5),
+                          params["message"] == .string("halfway") else { continue }
+                    sawProgress = true
+                case .result(let result):
+                    if case .object(let value) = result.content.first,
+                       case .string(let text) = value["text"] {
+                        resultText = text
+                    }
+                }
+            }
+            return (sawProgress, resultText)
+        }
+
+        #expect(sawProgress)
+        #expect(resultText == "done")
+    }
+
+    @Test("Official MCP SDK adapter maps paginated prompts and prompt messages")
+    func officialSDKAdapterMapsPrompts() async throws {
+        let endpoint = URL(string: "https://mcp.example.test/rpc-\(UUID().uuidString)")!
+        StubURLProtocol.configure(responseBodies: [
+            Data(#"{"jsonrpc":"2.0","id":"__REQUEST_ID__","result":{"protocolVersion":"2025-11-25","capabilities":{"prompts":{}},"serverInfo":{"name":"fixture","version":"1"}}}"#.utf8),
+            Data(),
+            Data(#"{"jsonrpc":"2.0","id":"__REQUEST_ID__","result":{"prompts":[{"name":"summarize","title":"Summarize","description":"Summarize text","arguments":[{"name":"text","required":true}]}],"nextCursor":"prompts-page-2"}}"#.utf8),
+            Data(#"{"jsonrpc":"2.0","id":"__REQUEST_ID__","result":{"prompts":[{"name":"plan","description":"Plan work"}]}}"#.utf8),
+            Data(#"{"jsonrpc":"2.0","id":"__REQUEST_ID__","result":{"description":"A summary prompt","messages":[{"role":"user","content":{"type":"text","text":"Summarize {{text}}"}}]}}"#.utf8)
+        ], for: endpoint)
+        defer { StubURLProtocol.reset(for: endpoint) }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let transport = OfficialMCPTransport(
+            endpoint: endpoint,
+            configuration: configuration,
+            streaming: false,
+            requestTimeout: 0.5
+        )
+
+        let (prompts, result) = try await withTimeout(.seconds(2)) {
+            try await transport.connect()
+            let prompts = try await transport.listPrompts()
+            let result = try await transport.getPrompt(name: "summarize", arguments: ["text": "hello"])
+            return (prompts, result)
+        }
+
+        #expect(prompts.map(\.name) == ["summarize", "plan"])
+        #expect(prompts.first?.arguments.first?.required == true)
+        #expect(result.description == "A summary prompt")
+        #expect(result.messages.first?.role == "user")
+        #expect(result.messages.first?.content == .object([
+            "type": .string("text"),
+            "text": .string("Summarize {{text}}")
+        ]))
+    }
+
     @Test("HTTP MCP transport fails requests that exceed its timeout")
     func enforcesRequestTimeout() async throws {
-        StubURLProtocol.responseBodies = [
+        let endpoint = URL(string: "https://mcp.example.test/rpc-\(UUID().uuidString)")!
+        StubURLProtocol.configure(
+            responseBodies: [
             Data(#"{"jsonrpc":"2.0","id":1,"result":{}}"#.utf8)
-        ]
-        StubURLProtocol.delay = 0.05
-        defer {
-            StubURLProtocol.responseBodies = []
-            StubURLProtocol.delay = 0
-        }
+            ],
+            delay: 0.05,
+            for: endpoint
+        )
+        defer { StubURLProtocol.reset(for: endpoint) }
 
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]
         let session = URLSession(configuration: configuration)
         let transport = MCPHTTPTransport(
-            endpoint: URL(string: "https://mcp.example.test")!,
+            endpoint: endpoint,
             session: session,
             requestTimeout: 0.001
         )
