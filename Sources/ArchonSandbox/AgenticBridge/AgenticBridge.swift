@@ -50,11 +50,15 @@ public final class AgenticBridge: @unchecked Sendable {
         var combinedScript = "(function() {\n"
         combinedScript += "  try {\n"
         if let css = cssDelta, !css.isEmpty {
-            let escapedCSS = css.replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "\"", with: "\\\"")
-                .replacingOccurrences(of: "\n", with: "\\n")
+            let encodedCSS = String(
+                data: (try? JSONEncoder().encode(css)) ?? Data("\"\"".utf8),
+                encoding: .utf8
+            ) ?? "\"\""
+            let safeEncodedCSS = encodedCSS
+                .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
+                .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
             combinedScript += "    let style = document.createElement('style');\n"
-            combinedScript += "    style.textContent = \"\(escapedCSS)\";\n"
+            combinedScript += "    style.textContent = \(safeEncodedCSS);\n"
             combinedScript += "    document.head.appendChild(style);\n"
         }
         combinedScript += "    const patchResult = (function() {\n"

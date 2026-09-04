@@ -100,7 +100,19 @@ public actor SandboxEngine {
     
     /// Safely invokes a JavaScript function with JSON arguments.
     public func dispatchFunctionCall(name: String, args: [String]) async throws -> String {
-        let joinedArgs = args.joined(separator: ", ")
+        guard Self.isSafeJavaScriptFunctionPath(name) else {
+            throw SandboxError.securityViolation("Function name contains executable JavaScript syntax.")
+        }
+        let jsonArguments = try args.map { argument -> String in
+            guard let data = argument.data(using: .utf8),
+                  let value = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]),
+                  let normalizedData = try? JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed]),
+                  let normalized = String(data: normalizedData, encoding: .utf8) else {
+                throw SandboxError.serializationFailed("Function arguments must be valid JSON values.")
+            }
+            return Self.escapeJavaScriptLineSeparators(in: normalized)
+        }
+        let joinedArgs = jsonArguments.joined(separator: ", ")
         let script = "\(name)(\(joinedArgs));"
         return try await evaluateScript(script)
     }
@@ -225,14 +237,41 @@ public actor SandboxEngine {
     }
 
     private static func javascriptStringLiteral(_ value: String) -> String {
-        String(data: (try? JSONEncoder().encode(value)) ?? Data("\"\"".utf8), encoding: .utf8) ?? "\"\""
+        let encoded = String(data: (try? JSONEncoder().encode(value)) ?? Data("\"\"".utf8), encoding: .utf8) ?? "\"\""
+        return escapeJavaScriptLineSeparators(in: encoded)
     }
 
     private static func javascriptJSONValue(_ value: String) -> String {
         guard let data = value.data(using: .utf8),
-              (try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])) != nil else {
+              let object = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]),
+              let normalizedData = try? JSONSerialization.data(withJSONObject: object, options: [.fragmentsAllowed]),
+              let normalized = String(data: normalizedData, encoding: .utf8) else {
             return javascriptStringLiteral(value)
         }
-        return value
+        return escapeJavaScriptLineSeparators(in: normalized)
+    }
+
+    private static func isSafeJavaScriptFunctionPath(_ value: String) -> Bool {
+        let components = value.split(separator: ".", omittingEmptySubsequences: false)
+        guard !components.isEmpty else { return false }
+        return components.allSatisfy { component in
+            guard let first = component.unicodeScalars.first,
+                  isIdentifierStart(first) else { return false }
+            return component.unicodeScalars.dropFirst().allSatisfy(isIdentifierContinue)
+        }
+    }
+
+    private static func isIdentifierStart(_ scalar: UnicodeScalar) -> Bool {
+        scalar == "_" || scalar == "$" || ("A"..."Z").contains(scalar) || ("a"..."z").contains(scalar)
+    }
+
+    private static func isIdentifierContinue(_ scalar: UnicodeScalar) -> Bool {
+        isIdentifierStart(scalar) || ("0"..."9").contains(scalar)
+    }
+
+    private static func escapeJavaScriptLineSeparators(in value: String) -> String {
+        value
+            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
+            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
     }
 }
