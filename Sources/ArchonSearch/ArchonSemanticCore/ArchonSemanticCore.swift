@@ -67,6 +67,7 @@ public struct ArchonSemanticCore: Sendable {
     
     /// Ranks text chunks by semantic similarity to the query and return a concatenated context.
     public func extractRelevantContext(from text: String, query: String, maxCharacters: Int = 4000) async throws -> String {
+        try Task.checkCancellation()
         let queryVector = try await embedding.vector(for: query)
         
         // Split text by paragraphs
@@ -76,6 +77,7 @@ public struct ArchonSemanticCore: Sendable {
         
         var scoredParagraphs = [(text: String, score: Double)]()
         for paragraph in paragraphs {
+            try Task.checkCancellation()
             do {
                 let vec = try await embedding.vector(for: paragraph)
                 let score = embedding.similarity(queryVector, vec)
@@ -87,9 +89,10 @@ public struct ArchonSemanticCore: Sendable {
         
         // Sort highest similarity score first
         let sorted = scoredParagraphs.sorted { $0.score > $1.score }
-        
+
         var result = ""
         for item in sorted {
+            try Task.checkCancellation()
             if result.count + item.text.count > maxCharacters {
                 break
             }
