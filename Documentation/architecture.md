@@ -41,7 +41,10 @@ coordinator with the same URLSession identifier after relaunch. Background
 completion still hands the staged file back to `ModelLibrary` for checksum,
 resource, manifest, and atomic-install validation. File-backed transfer state
 redacts credential-bearing headers; hosts rehydrate authorization from their
-Keychain-backed token service when resuming a paused transfer.
+Keychain-backed token service when resuming a paused transfer. After a host
+recreates `ModelDownloadManager`, it supplies the original `ModelDownloadRequest`
+to `resumeInBackground` so model metadata and installation policy are restored;
+the API rejects a request whose variant ID does not match the persisted transfer.
 
 The package is a SwiftPM library family with a buildable SwiftUI example host,
 rather than a signed Xcode application target. It therefore exposes

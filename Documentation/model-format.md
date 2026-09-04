@@ -47,7 +47,11 @@ The foreground manager uses an injected `URLSession` by default and exposes a
 For OS-managed process-relaunch downloads, `ModelBackgroundTransferCoordinator` owns a
 background `URLSessionDownloadDelegate`, persists opaque resume data encrypted
 with a Keychain-held key, and reconnects task events to the same
-staging/validation/install contract through `ModelDownloadManager`.
+staging/validation/install contract through `ModelDownloadManager`. When the
+manager itself is recreated, the host rehydrates the original
+`ModelDownloadRequest` through the manager's `resumeInBackground` overload;
+transport persistence alone does not contain model metadata needed for final
+installation.
 
 The manifest's optional `artifactPath` names the runnable artifact child inside
 the managed directory. `modelResources` and `tokenizerResources` are relative

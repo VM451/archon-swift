@@ -759,6 +759,49 @@ public actor ModelDownloadManager {
         into library: ModelLibrary,
         using coordinator: ModelBackgroundTransferCoordinator
     ) async throws -> AsyncThrowingStream<ModelDownloadEvent, Error> {
+        try await resumeInBackground(
+            variantID: variantID,
+            request: nil,
+            into: library,
+            using: coordinator
+        )
+    }
+
+    /// Resumes a background-library transfer after a host recreated both the
+    /// coordinator and this manager. The coordinator persists only the
+    /// transport request; the consuming app must reconstruct the richer model
+    /// request from its catalog or app-owned metadata before verification and
+    /// installation can continue.
+    public func resumeInBackground(
+        variantID: String,
+        request reconstructedRequest: ModelDownloadRequest,
+        into library: ModelLibrary,
+        using coordinator: ModelBackgroundTransferCoordinator
+    ) async throws -> AsyncThrowingStream<ModelDownloadEvent, Error> {
+        guard reconstructedRequest.variant.id == variantID else {
+            throw ArchonModelsError.invalidModelIdentifier(variantID)
+        }
+        requests[variantID] = reconstructedRequest
+        return try await resumeInBackground(
+            variantID: variantID,
+            request: reconstructedRequest,
+            into: library,
+            using: coordinator
+        )
+    }
+
+    private func resumeInBackground(
+        variantID: String,
+        request reconstructedRequest: ModelDownloadRequest?,
+        into library: ModelLibrary,
+        using coordinator: ModelBackgroundTransferCoordinator
+    ) async throws -> AsyncThrowingStream<ModelDownloadEvent, Error> {
+        if let reconstructedRequest {
+            guard reconstructedRequest.variant.id == variantID else {
+                throw ArchonModelsError.invalidModelIdentifier(variantID)
+            }
+            requests[variantID] = reconstructedRequest
+        }
         guard let request = requests[variantID] else {
             throw ArchonModelsError.invalidModelIdentifier(variantID)
         }

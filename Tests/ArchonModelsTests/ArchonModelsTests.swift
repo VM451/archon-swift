@@ -1386,4 +1386,47 @@ struct ArchonModelsTests {
         }
         #expect(await manager.isDownloading(variantID: variant.id) == false)
     }
+
+    @Test("Background resume rejects reconstructed metadata for another variant")
+    func rejectsMismatchedReconstructedRequest() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("archon-background-relaunch-contract-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let variant = ModelVariant(
+            id: "background-relaunch-model",
+            name: "model.aimodel",
+            modelID: "example/background-relaunch",
+            source: .directURL,
+            downloadURL: URL(string: "https://models.example.test/model.aimodel"),
+            format: .aimodel,
+            runtime: .coreAI,
+            sizeBytes: 1
+        )
+        let manager = ModelDownloadManager(
+            tokenStore: nil,
+            licensePolicy: ModelLicensePolicy(unknownBehavior: .denied)
+        )
+        let coordinator = ModelBackgroundTransferCoordinator(
+            sessionIdentifier: "com.archon.tests.background-relaunch.\(UUID().uuidString)"
+        )
+        await #expect(throws: ArchonModelsError.self) {
+            _ = try await manager.resumeInBackground(
+                variantID: variant.id,
+                request: ModelDownloadRequest(
+                    variant: ModelVariant(
+                        id: "another-variant",
+                        name: variant.name,
+                        modelID: variant.modelID,
+                        source: variant.source,
+                        downloadURL: variant.downloadURL,
+                        format: variant.format,
+                        runtime: variant.runtime
+                    ),
+                    modelName: "Background Relaunch"
+                ),
+                into: ModelLibrary(rootURL: root.appendingPathComponent("library")),
+                using: coordinator
+            )
+        }
+    }
 }
