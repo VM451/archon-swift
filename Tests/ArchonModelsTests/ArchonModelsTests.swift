@@ -1136,6 +1136,7 @@ struct ArchonModelsTests {
         try await store.save(ModelBackgroundDownloadRecord(
             request: request,
             taskIdentifier: 42,
+            resumeData: Data("stale-resume-data".utf8),
             status: .downloading,
             bytesDownloaded: 128,
             totalBytes: 256
@@ -1149,6 +1150,7 @@ struct ArchonModelsTests {
         let record = try await coordinator.record(for: identifier)
         #expect(record?.status == .failed)
         #expect(record?.taskIdentifier == nil)
+        #expect(record?.resumeData == nil)
         #expect(record?.lastError == "Background transfer was not found after reconnect.")
     }
 

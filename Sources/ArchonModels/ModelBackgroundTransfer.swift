@@ -501,6 +501,7 @@ public actor ModelBackgroundTransferCoordinator {
             (records[index].status == .queued || records[index].status == .downloading) &&
             !reconnectedIdentifiers.contains(records[index].request.identifier) {
             records[index].taskIdentifier = nil
+            records[index].resumeData = nil
             records[index].status = .failed
             records[index].lastError = recoveryMessage
             try await store.save(records[index])
