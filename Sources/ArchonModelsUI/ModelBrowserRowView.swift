@@ -47,26 +47,9 @@ struct ModelBrowserRowView: View {
 
             HStack(alignment: .center, spacing: 12) {
                 modelIcon
-                    .fixedSize(horizontal: true, vertical: false)
 
                 VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 5) {
-                        Text(model.publisher)
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-
-                        if let size = variant.sizeBytes {
-                            Text("•")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                            Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                    }
+                    metadataHeader
 
                     Text(variant.name)
                         .font(.headline)
@@ -74,19 +57,8 @@ struct ModelBrowserRowView: View {
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
 
-                    HStack(spacing: 6) {
-                        fitBadge
-
-                        Text(variant.runtime.displayName)
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.secondary.opacity(0.12), in: Capsule())
-                            .fixedSize(horizontal: true, vertical: false)
-                    }
-                    .padding(.top, 1)
+                    fitBadge
+                        .padding(.top, 1)
 
                     if let progressValue = progress, phase == .downloading {
                         ProgressView(value: progressValue)
@@ -103,11 +75,33 @@ struct ModelBrowserRowView: View {
                 Spacer(minLength: 8)
 
                 actionControl
-                    .fixedSize(horizontal: true, vertical: false)
-                    .layoutPriority(2)
             }
             .padding(.vertical, 4)
         }
+    }
+
+    @ViewBuilder
+    private var metadataHeader: some View {
+        HStack(spacing: 4) {
+            Text(model.publisher)
+                .fontWeight(.semibold)
+                .lineLimit(1)
+
+            Text("•")
+                .foregroundStyle(.tertiary)
+
+            Text(variant.runtime.displayName)
+                .lineLimit(1)
+
+            if let size = variant.sizeBytes {
+                Text("•")
+                    .foregroundStyle(.tertiary)
+                Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
+                    .lineLimit(1)
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
     }
 
     @ViewBuilder
@@ -153,10 +147,9 @@ struct ModelBrowserRowView: View {
                 .lineLimit(1)
         }
         .foregroundStyle(color)
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2.5)
         .background(color.opacity(0.12), in: Capsule())
-        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func fitVisuals(_ fit: ModelFitRating) -> (String, Color) {
