@@ -32,6 +32,11 @@ loads another page only when the user reaches the bottom, and shows a
 implement `PaginatedModelCatalogProvider`; existing providers remain supported
 through their bounded `search` method.
 
+Catalog artwork is carried by `ModelDescriptor.logoURL` and persisted in the
+managed manifest when a model is downloaded. `ModelLogoView` renders HTTPS
+artwork with a native publisher-aware fallback, so unavailable logos do not
+remove model identity from browser, detail, library, or storage surfaces.
+
 `ModelLibraryViewModel` is the main-actor presentation boundary for installed
 models, compatibility/update state, download progress, offline failures, and
 deletion. It delegates storage and transfer lifecycle to `ArchonModels` rather

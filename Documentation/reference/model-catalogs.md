@@ -20,6 +20,10 @@ The lower-level contracts remain family-neutral for host integrations, and
 the complete support statement, read [Supported models and model-family
 policy](supported-models.md).
 
+`ModelDescriptor.logoURL` carries optional provider artwork through catalog
+filtering and pagination. Providers may omit it; model UI keeps a native
+publisher-aware symbol fallback visible when artwork is missing or unavailable.
+
 ## Catalog types
 
 | Catalog | Source | Network required by the catalog |

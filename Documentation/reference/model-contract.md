@@ -9,6 +9,7 @@ can execute on a device.
 An `archon-model.json` manifest records:
 
 - model identity, name, publisher, source URL, and immutable revision;
+- optional catalog artwork URL used by model-management surfaces;
 - license metadata and the consuming app's installation decision;
 - declared runtime and artifact format;
 - artifact, tokenizer, and auxiliary resource metadata;
