@@ -136,7 +136,9 @@ public final class CoreAIProvider: LLMProvider, @unchecked Sendable {
     private let mockResponses: MockResponseStore
     private let textGenerationAdapter: (any CoreAITextGenerationAdapter)?
 
-    /// Default Core AI provider configured for Gemma 4 E2B on Neural Engine.
+    /// Default Core AI provider configured for the Gemma 4 E2B compatibility
+    /// seed on Neural Engine. Use an explicit `CoreAIModelSource` for another
+    /// model family.
     public static let `default` = CoreAIProvider(
         model: "gemma-4-e2b.coreai",
         capabilities: ModelCapabilities(

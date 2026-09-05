@@ -274,8 +274,14 @@ public struct ModelBrowserView: View {
     private let library: ModelLibrary
     private let downloadManager: ModelDownloadManager
     private let deviceOverride: ArchonDeviceCapabilities?
+    private let pageSize = 20
     @State private var query = ""
     @State private var results: [ModelDescriptor] = []
+    @State private var nextOffset = 0
+    @State private var nextContinuationToken: String?
+    @State private var hasMoreResults = false
+    @State private var isInitialLoading = false
+    @State private var isLoadingMore = false
     @State private var installedModels: [InstalledModel] = []
     @State private var progress: [String: Double] = [:]
     @State private var status: [String: String] = [:]
@@ -331,6 +337,23 @@ public struct ModelBrowserView: View {
                 Toggle("Runs on This Device", isOn: $compatibleOnly)
                 TextField("Publisher", text: $publisherFilter)
                 TextField("License", text: $licenseFilter)
+            }
+
+            if isInitialLoading, results.isEmpty {
+                Section {
+                    ProgressView("Loading models…")
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
+            }
+
+            if !isInitialLoading, displayedResults.isEmpty, !hasMoreResults {
+                Section {
+                    ContentUnavailableView(
+                        "No Models Found",
+                        systemImage: "shippingbox",
+                        description: Text("Try changing the search or filters.")
+                    )
+                }
             }
 
             ForEach(displayedResults) { model in
@@ -397,11 +420,49 @@ public struct ModelBrowserView: View {
                     }
                 }
             }
+
+            if hasMoreResults {
+                Section {
+                    if isLoadingMore {
+                        ProgressView("Loading more models…")
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    } else if displayedResults.isEmpty {
+                        Button("Load more models", systemImage: "arrow.down.circle") {
+                            requestNextPage()
+                        }
+                        .frame(maxWidth: .infinity, alignment: .center)
+                    } else {
+                        Text("Scroll to load more")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    }
+                }
+                .id("model-discovery-page-\(nextOffset)-\(nextContinuationToken ?? "initial")")
+                .task {
+                    // List keeps this footer lazy, so this task starts when
+                    // the user reaches the current page boundary. Empty
+                    // filtered pages keep an explicit button so a restrictive
+                    // filter cannot trigger an unbounded network scan.
+                    guard !displayedResults.isEmpty else { return }
+                    await loadNextPage()
+                }
+            }
         }
         .searchable(text: $query, prompt: "Search models")
         .navigationTitle("Models")
         .task(id: "\(query)|\(compatibleOnly)|\(selectedTaskRaw)|\(selectedRuntimeRaw)") {
-            await search()
+            do {
+                // Search fields can change several times while the user is
+                // typing. Debounce them so each keystroke does not start a
+                // separate catalog request.
+                try await Task.sleep(for: .milliseconds(250))
+                await search()
+            } catch is CancellationError {
+                // SwiftUI cancels this task when the search identity changes.
+            } catch {
+                searchError = error.localizedDescription
+            }
         }
         .task {
             await refreshInstalledModels()
@@ -486,18 +547,77 @@ public struct ModelBrowserView: View {
 
     @MainActor
     private func search() async {
+        results = []
+        nextOffset = 0
+        nextContinuationToken = nil
+        hasMoreResults = false
+        searchError = nil
+        isInitialLoading = true
+        defer { isInitialLoading = false }
+        await loadNextPage()
+    }
+
+    @MainActor
+    private func requestNextPage() {
+        guard !isInitialLoading, !isLoadingMore, hasMoreResults else { return }
+        Task { @MainActor in
+            await loadNextPage()
+        }
+    }
+
+    @MainActor
+    private func loadNextPage() async {
+        guard !isLoadingMore else { return }
+        let isFirstPage = results.isEmpty && nextOffset == 0 && nextContinuationToken == nil
+        guard isFirstPage || !isInitialLoading else { return }
+        isLoadingMore = !isFirstPage
+        if isFirstPage { isInitialLoading = true }
+        defer {
+            isLoadingMore = false
+            if isFirstPage { isInitialLoading = false }
+        }
+
         do {
-            results = try await catalog.search(ModelSearchRequest(
+            let request = ModelSearchRequest(
                 query: query,
                 task: selectedTask,
                 runtime: selectedRuntime,
                 compatibleOnly: compatibleOnly,
                 device: compatibleOnly ? device : nil,
-                limit: 20
-            ))
+                offset: nextOffset,
+                continuationToken: nextContinuationToken,
+                limit: pageSize
+            )
+            let page: ModelCatalogPage
+            if let paginatedCatalog = catalog as? any PaginatedModelCatalogProvider {
+                page = try await paginatedCatalog.searchPage(request)
+            } else {
+                let models = try await catalog.search(request)
+                let boundedModels = Array(models.prefix(pageSize))
+                page = ModelCatalogPage(
+                    models: boundedModels,
+                    hasMore: models.count >= pageSize
+                )
+            }
+            try Task.checkCancellation()
+
+            let knownIDs = Set(results.map(\.id))
+            let newModels = page.models.filter { !knownIDs.contains($0.id) }
+            results.append(contentsOf: newModels)
+            nextOffset += page.models.count
+            nextContinuationToken = page.nextContinuationToken
+            hasMoreResults = page.hasMore && (!page.models.isEmpty || page.nextContinuationToken != nil)
+            // A custom provider that ignores pagination must not cause an
+            // infinite loop when its repeated page contains no new models.
+            if !page.models.isEmpty, newModels.isEmpty {
+                hasMoreResults = false
+            }
         } catch {
-            results = []
-            searchError = error.localizedDescription
+            if !(error is CancellationError) {
+                if isFirstPage { results = [] }
+                hasMoreResults = false
+                searchError = error.localizedDescription
+            }
         }
     }
 

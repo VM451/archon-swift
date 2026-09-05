@@ -2,8 +2,9 @@ import Foundation
 
 /// HTTP-backed catalog for Apple-curated, Archon-hosted, or developer-hosted
 /// registries. The endpoint returns either a JSON array of ModelDescriptor
-/// values or an object containing a models array.
-public struct RemoteModelCatalog: ModelCatalogProvider, Sendable {
+/// values or an object containing `models`, optional `hasMore`, and optional
+/// `nextContinuationToken` fields.
+public struct RemoteModelCatalog: PaginatedModelCatalogProvider, Sendable {
     public let id: String
     public let endpoint: URL
     private let session: any ModelHTTPClient
@@ -28,6 +29,10 @@ public struct RemoteModelCatalog: ModelCatalogProvider, Sendable {
     }
 
     public func search(_ request: ModelSearchRequest) async throws -> [ModelDescriptor] {
+        try await searchPage(request).models
+    }
+
+    public func searchPage(_ request: ModelSearchRequest) async throws -> ModelCatalogPage {
         var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)
         var queryItems = components?.queryItems ?? []
         queryItems.append(contentsOf: [
@@ -36,6 +41,8 @@ public struct RemoteModelCatalog: ModelCatalogProvider, Sendable {
             URLQueryItem(name: "runtime", value: request.runtime?.rawValue),
             URLQueryItem(name: "format", value: request.format?.rawValue),
             URLQueryItem(name: "compatibleOnly", value: request.compatibleOnly ? "true" : "false"),
+            URLQueryItem(name: "offset", value: request.offset > 0 ? String(request.offset) : nil),
+            URLQueryItem(name: "continuationToken", value: request.continuationToken),
             URLQueryItem(name: "limit", value: String(request.limit))
         ])
         components?.queryItems = queryItems.filter { $0.value != nil }
@@ -56,16 +63,20 @@ public struct RemoteModelCatalog: ModelCatalogProvider, Sendable {
         guard (200...299).contains(response.statusCode) else {
             throw ArchonModelsError.httpFailure(statusCode: response.statusCode)
         }
-        return try decodeModels(data)
+        return try decodePage(data, request: request)
     }
 
-    private func decodeModels(_ data: Data) throws -> [ModelDescriptor] {
+    private func decodePage(_ data: Data, request: ModelSearchRequest) throws -> ModelCatalogPage {
         let decoder = JSONDecoder()
         if let models = try? decoder.decode([ModelDescriptor].self, from: data) {
-            return models
+            return ModelCatalogPage(models: models, hasMore: models.count == request.limit)
         }
         if let response = try? decoder.decode(RemoteModelCatalogResponse.self, from: data) {
-            return response.models
+            return ModelCatalogPage(
+                models: response.models,
+                hasMore: response.hasMore ?? (response.models.count == request.limit),
+                nextContinuationToken: response.nextContinuationToken
+            )
         }
         throw ArchonModelsError.invalidResponse
     }
@@ -73,4 +84,12 @@ public struct RemoteModelCatalog: ModelCatalogProvider, Sendable {
 
 private struct RemoteModelCatalogResponse: Decodable {
     let models: [ModelDescriptor]
+    let hasMore: Bool?
+    let nextContinuationToken: String?
+
+    enum CodingKeys: String, CodingKey {
+        case models
+        case hasMore = "hasMore"
+        case nextContinuationToken = "nextContinuationToken"
+    }
 }

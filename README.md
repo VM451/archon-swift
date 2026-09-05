@@ -31,6 +31,37 @@ all-base-products re-export; optional adapters remain separate.
 - Permission-aware MCP, semantic host actions, and capability-restricted WebKit sandboxes.
 - No fabricated inference, extraction, search, telemetry, or platform records when a required capability is unavailable.
 
+## Supported model families
+
+Archon is **not Gemma-only**. Its model contracts are family-neutral: Qwen,
+Mistral, Llama, Phi, Gemma, and future families can be described and selected
+through the same catalog and runtime boundaries. The bundled Gemma entries are
+only a small compatibility seed used by legacy convenience APIs and the
+default adaptive catalog; they are not the complete discovery list.
+
+The model-discovery UI displays the `ModelCatalogProvider` injected by the
+consuming app. If it shows only Gemma, inspect that catalog configuration
+before assuming the package has a model-family restriction. Use a static,
+local, Hugging Face, app-owned registry, or composite catalog to expose the
+families and variants the app has approved.
+
+The discovery browser is paginated: it loads one bounded page on entry,
+fetches another page only when the user reaches the bottom, and shows a
+loading indicator during that request. Search input is lightly debounced, and
+cursor-capable catalogs use opaque continuation tokens rather than loading the
+entire registry into memory.
+
+Support is broad but validated, not an automatic promise for every checkpoint:
+`.aimodel`/Core AI bundles and `.mlx` packages can be runnable after manifest,
+resource, runtime, device, memory, license, and model-adapter checks. Raw
+`GGUF`, `SafeTensors`, and Transformers files remain discoverable but are
+`conversionRequired` until prepared into a declared runnable artifact.
+
+Read the canonical [supported models and model-family policy](Documentation/reference/supported-models.md),
+[model catalog reference](Documentation/reference/model-catalogs.md), and
+[model contract](Documentation/reference/model-contract.md) before wiring a
+discovery screen or adaptive provider.
+
 ## System design
 
 ```mermaid
@@ -223,16 +254,21 @@ import ArchonModels
 func searchHuggingFace() async throws -> [ModelDescriptor] {
     let catalog = HuggingFaceCatalog(tokenStore: KeychainModelTokenStore())
     return try await catalog.search(
-        ModelSearchRequest(query: "Qwen", compatibleOnly: true,
+        ModelSearchRequest(query: "Qwen", task: .textGeneration, runtime: .mlx,
+                           compatibleOnly: true,
                            device: ArchonDeviceCapabilities.current)
     )
 }
 ```
 
-Catalog results can be empty, and a compatible model can still require a
-model-family text adapter supplied by the consuming app. Never assume the
-first result is runnable; inspect the returned variant and run
-`ModelCompatibilityAnalyzer` before presenting an install or load action.
+For Hugging Face, specifying `runtime: .mlx` makes discovery ask the Hub for
+MLX-tagged repositories instead of only the most-downloaded generic
+checkpoints. Raw results are still useful for conversion workflows, but they
+are not directly runnable. Catalog results can be empty, and a compatible
+model can still require a model-family text adapter supplied by the consuming
+app. Never assume the first result is runnable; inspect the returned variant
+and run `ModelCompatibilityAnalyzer` before presenting an install or load
+action.
 
 The buildable example is a macOS SwiftPM executable:
 
@@ -262,6 +298,9 @@ The developer-only `archon-model` executable handles inspection, validation,
 packaging, conversion through Apple's `coreai-models` exporter, and local
 artifact preparation benchmarks.
 
+For the distinction between the Gemma compatibility seed and application-
+supplied model catalogs, see the [supported model policy](Documentation/reference/supported-models.md).
+
 ## Evidence status
 
 The maintained [competitor comparison](Documentation/reference/competitor-comparison.md)
@@ -270,7 +309,7 @@ feature is not called “user-loved” from official documentation alone. The
 [release validation guide](Documentation/how-to/validate-a-release.md) defines
 the evidence gates required before a replacement becomes the default.
 
-The package contains 340 Swift tests across 10 bundles, and the complete
+The package contains 358 Swift tests across 10 bundles, and the complete
 package-wide suite passes on the configured Xcode toolchain. Signed-app,
 physical-device, live UI, real-model, and production-server validation remain
 explicit release gates.
@@ -313,6 +352,7 @@ or unavailable result. Test and preview code can inject deterministic mocks.
 - [`Documentation/tutorials/`](Documentation/tutorials/) — end-to-end local model tutorial.
 - [`Documentation/how-to/`](Documentation/how-to/) — integration, lifecycle, MCP, sandbox, semantic action, and release guides.
 - [`Documentation/reference/`](Documentation/reference/) — product, model, policy, and executable contracts.
+- [`Documentation/reference/supported-models.md`](Documentation/reference/supported-models.md) — supported runtimes, model-family neutrality, catalog wiring, and the Gemma-seed explanation.
 - [`Documentation/reference/competitor-comparison.md`](Documentation/reference/competitor-comparison.md) — detailed competitor feature tables, scores, and Archon-fit decisions.
 - [`Documentation/explanation/`](Documentation/explanation/) — architecture, dependency, local-first, and recovery rationale.
 - [`Documentation/decisions/`](Documentation/decisions/) — migration and architectural decision records.

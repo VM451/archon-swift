@@ -381,6 +381,13 @@ public struct ModelSearchRequest: Sendable {
     public var format: ArchonModelFormat?
     public var compatibleOnly: Bool
     public var device: ArchonDeviceCapabilities?
+    /// Zero-based position used by catalogs that paginate with offsets.
+    /// Cursor-based catalogs should prefer `continuationToken` instead.
+    public var offset: Int
+    /// Opaque continuation state returned by a paginated catalog. Callers must
+    /// pass it back unchanged and must not inspect or persist its contents as a
+    /// provider-specific contract.
+    public var continuationToken: String?
     public var limit: Int
     public var includeVariants: Bool
 
@@ -391,6 +398,8 @@ public struct ModelSearchRequest: Sendable {
         format: ArchonModelFormat? = nil,
         compatibleOnly: Bool = false,
         device: ArchonDeviceCapabilities? = nil,
+        offset: Int = 0,
+        continuationToken: String? = nil,
         limit: Int = 20,
         includeVariants: Bool = true
     ) {
@@ -400,8 +409,28 @@ public struct ModelSearchRequest: Sendable {
         self.format = format
         self.compatibleOnly = compatibleOnly
         self.device = device
+        self.offset = max(0, offset)
+        self.continuationToken = continuationToken
         self.limit = max(1, min(limit, 100))
         self.includeVariants = includeVariants
+    }
+}
+
+/// A bounded result page returned by a catalog that supports incremental
+/// discovery. `nextContinuationToken` is provider-owned opaque state.
+public struct ModelCatalogPage: Sendable, Equatable {
+    public let models: [ModelDescriptor]
+    public let hasMore: Bool
+    public let nextContinuationToken: String?
+
+    public init(
+        models: [ModelDescriptor],
+        hasMore: Bool,
+        nextContinuationToken: String? = nil
+    ) {
+        self.models = models
+        self.hasMore = hasMore
+        self.nextContinuationToken = nextContinuationToken
     }
 }
 
@@ -410,7 +439,14 @@ public protocol ModelCatalogProvider: Sendable {
     func search(_ request: ModelSearchRequest) async throws -> [ModelDescriptor]
 }
 
-public struct StaticModelCatalog: ModelCatalogProvider, Sendable {
+/// Optional pagination boundary for catalogs that can report whether another
+/// page exists. Existing custom `ModelCatalogProvider` implementations remain
+/// source-compatible and are used through their bounded `search` method.
+public protocol PaginatedModelCatalogProvider: ModelCatalogProvider {
+    func searchPage(_ request: ModelSearchRequest) async throws -> ModelCatalogPage
+}
+
+public struct StaticModelCatalog: PaginatedModelCatalogProvider, Sendable {
     public let id: String
     public let models: [ModelDescriptor]
 
@@ -420,14 +456,18 @@ public struct StaticModelCatalog: ModelCatalogProvider, Sendable {
     }
 
     public func search(_ request: ModelSearchRequest) async throws -> [ModelDescriptor] {
+        try await searchPage(request).models
+    }
+
+    public func searchPage(_ request: ModelSearchRequest) async throws -> ModelCatalogPage {
         let query = request.query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return models
+        let filteredModels: [ModelDescriptor] = models
             .filter { query.isEmpty || $0.id.lowercased().contains(query) || $0.name.lowercased().contains(query) }
             .filter { model in
                 guard let task = request.task else { return true }
                 return model.tasks.contains(task)
             }
-            .compactMap { model in
+            .compactMap { (model: ModelDescriptor) -> ModelDescriptor? in
                 let variants = model.variants.filter { variant in
                     (request.runtime == nil || variant.runtime == request.runtime) &&
                     (request.format == nil || variant.format == request.format) &&
@@ -452,14 +492,18 @@ public struct StaticModelCatalog: ModelCatalogProvider, Sendable {
                     variants: request.includeVariants ? variants : []
                 )
             }
-            .prefix(request.limit)
-            .map { $0 }
+
+        let page = Array(filteredModels.dropFirst(min(request.offset, filteredModels.count)).prefix(request.limit))
+        return ModelCatalogPage(
+            models: page,
+            hasMore: request.offset + page.count < filteredModels.count
+        )
     }
 }
 
 /// A catalog for one explicitly supplied remote model URL. The URL is metadata,
 /// not a compatibility claim: raw formats still remain conversion-required.
-public struct DirectURLModelCatalog: ModelCatalogProvider, Sendable {
+public struct DirectURLModelCatalog: PaginatedModelCatalogProvider, Sendable {
     private let catalog: StaticModelCatalog
 
     public init(
@@ -523,7 +567,11 @@ public struct DirectURLModelCatalog: ModelCatalogProvider, Sendable {
     public var id: String { catalog.id }
 
     public func search(_ request: ModelSearchRequest) async throws -> [ModelDescriptor] {
-        try await catalog.search(request)
+        try await searchPage(request).models
+    }
+
+    public func searchPage(_ request: ModelSearchRequest) async throws -> ModelCatalogPage {
+        try await catalog.searchPage(request)
     }
 }
 
@@ -531,7 +579,7 @@ public struct DirectURLModelCatalog: ModelCatalogProvider, Sendable {
 /// a list of explicit model package directories. Local discovery never creates
 /// a download URL; callers can import the advertised `sourceURL` with the
 /// manifest through `ModelLibrary.importArtifact(at:manifest:)`.
-public struct LocalModelCatalog: ModelCatalogProvider, Sendable {
+public struct LocalModelCatalog: PaginatedModelCatalogProvider, Sendable {
     public let locations: [URL]
 
     public init(locations: [URL]) {
@@ -541,6 +589,10 @@ public struct LocalModelCatalog: ModelCatalogProvider, Sendable {
     public var id: String { "local" }
 
     public func search(_ request: ModelSearchRequest) async throws -> [ModelDescriptor] {
+        try await searchPage(request).models
+    }
+
+    public func searchPage(_ request: ModelSearchRequest) async throws -> ModelCatalogPage {
         var descriptors: [ModelDescriptor] = []
         var seen = Set<String>()
         for location in locations {
@@ -550,7 +602,7 @@ public struct LocalModelCatalog: ModelCatalogProvider, Sendable {
             }
         }
 
-        return try await StaticModelCatalog(id: id, models: descriptors).search(request)
+        return try await StaticModelCatalog(id: id, models: descriptors).searchPage(request)
     }
 
     private func candidateDirectories(at location: URL) -> [URL] {
@@ -620,7 +672,7 @@ public struct LocalModelCatalog: ModelCatalogProvider, Sendable {
 
 /// A catalog adapter for curated Apple Core AI entries. The entries are supplied by
 /// the application or a checked-in registry so the SDK never invents runtime support.
-public struct AppleCoreAIModelCatalog: ModelCatalogProvider, Sendable {
+public struct AppleCoreAIModelCatalog: PaginatedModelCatalogProvider, Sendable {
     private let provider: any ModelCatalogProvider
 
     public init(models: [ModelDescriptor] = []) {
@@ -647,13 +699,21 @@ public struct AppleCoreAIModelCatalog: ModelCatalogProvider, Sendable {
     public var id: String { provider.id }
 
     public func search(_ request: ModelSearchRequest) async throws -> [ModelDescriptor] {
-        try await provider.search(request)
+        try await searchPage(request).models
+    }
+
+    public func searchPage(_ request: ModelSearchRequest) async throws -> ModelCatalogPage {
+        if let provider = provider as? any PaginatedModelCatalogProvider {
+            return try await provider.searchPage(request)
+        }
+        let models = try await provider.search(request)
+        return ModelCatalogPage(models: models, hasMore: models.count == request.limit)
     }
 }
 
 /// A developer-hosted Archon-compatible catalog. It is intentionally data-driven;
 /// VM451 infrastructure is not required for publishing or consuming entries.
-public struct ArchonCompatibleModelCatalog: ModelCatalogProvider, Sendable {
+public struct ArchonCompatibleModelCatalog: PaginatedModelCatalogProvider, Sendable {
     private let provider: any ModelCatalogProvider
 
     public init(models: [ModelDescriptor] = []) {
@@ -680,11 +740,19 @@ public struct ArchonCompatibleModelCatalog: ModelCatalogProvider, Sendable {
     public var id: String { provider.id }
 
     public func search(_ request: ModelSearchRequest) async throws -> [ModelDescriptor] {
-        try await provider.search(request)
+        try await searchPage(request).models
+    }
+
+    public func searchPage(_ request: ModelSearchRequest) async throws -> ModelCatalogPage {
+        if let provider = provider as? any PaginatedModelCatalogProvider {
+            return try await provider.searchPage(request)
+        }
+        let models = try await provider.search(request)
+        return ModelCatalogPage(models: models, hasMore: models.count == request.limit)
     }
 }
 
-public struct CompositeModelCatalog: ModelCatalogProvider, Sendable {
+public struct CompositeModelCatalog: PaginatedModelCatalogProvider, Sendable {
     public let id: String
     public let providers: [any ModelCatalogProvider]
 
@@ -694,16 +762,101 @@ public struct CompositeModelCatalog: ModelCatalogProvider, Sendable {
     }
 
     public func search(_ request: ModelSearchRequest) async throws -> [ModelDescriptor] {
+        try await searchPage(request).models
+    }
+
+    public func searchPage(_ request: ModelSearchRequest) async throws -> ModelCatalogPage {
         var results: [ModelDescriptor] = []
         var seen = Set<String>()
-        for provider in providers {
-            for model in try await provider.search(request) where seen.insert(model.id).inserted {
+        var state = try Self.state(from: request.continuationToken, providerCount: providers.count)
+        if request.continuationToken == nil, !state.offsets.isEmpty {
+            state.offsets[0] = request.offset
+        }
+
+        while state.providerIndex < providers.count {
+            let providerIndex = state.providerIndex
+            let provider = providers[providerIndex]
+            let providerRequest = ModelSearchRequest(
+                query: request.query,
+                task: request.task,
+                runtime: request.runtime,
+                format: request.format,
+                compatibleOnly: request.compatibleOnly,
+                device: request.device,
+                offset: state.offsets[providerIndex],
+                continuationToken: state.continuationTokens[providerIndex],
+                limit: request.limit,
+                includeVariants: request.includeVariants
+            )
+            let page: ModelCatalogPage
+            if let paginatedProvider = provider as? any PaginatedModelCatalogProvider {
+                page = try await paginatedProvider.searchPage(providerRequest)
+            } else {
+                let models = try await provider.search(providerRequest)
+                page = ModelCatalogPage(
+                    models: Array(models.prefix(request.limit)),
+                    hasMore: models.count >= request.limit
+                )
+            }
+
+            state.offsets[providerIndex] += page.models.count
+            state.continuationTokens[providerIndex] = page.nextContinuationToken
+            for model in page.models where seen.insert(model.id).inserted {
                 results.append(model)
-                if results.count >= request.limit { return results }
+            }
+
+            if page.hasMore {
+                return ModelCatalogPage(
+                    models: Array(results.prefix(request.limit)),
+                    hasMore: true,
+                    nextContinuationToken: try Self.token(for: state)
+                )
+            }
+
+            state.providerIndex += 1
+            if results.count >= request.limit || state.providerIndex == providers.count {
+                let hasMore = state.providerIndex < providers.count
+                return ModelCatalogPage(
+                    models: Array(results.prefix(request.limit)),
+                    hasMore: hasMore,
+                    nextContinuationToken: hasMore ? try Self.token(for: state) : nil
+                )
             }
         }
-        return results
+        return ModelCatalogPage(models: Array(results.prefix(request.limit)), hasMore: false)
     }
+
+    private static func token(for state: CompositeContinuationState) throws -> String {
+        try JSONEncoder().encode(state).base64EncodedString()
+    }
+
+    private static func state(
+        from continuationToken: String?,
+        providerCount: Int
+    ) throws -> CompositeContinuationState {
+        guard let continuationToken else {
+            return CompositeContinuationState(
+                providerIndex: 0,
+                offsets: Array(repeating: 0, count: providerCount),
+                continuationTokens: Array(repeating: nil, count: providerCount)
+            )
+        }
+        guard let data = Data(base64Encoded: continuationToken),
+              let state = try? JSONDecoder().decode(CompositeContinuationState.self, from: data),
+              state.providerIndex >= 0,
+              state.providerIndex <= providerCount,
+              state.offsets.count == providerCount,
+              state.continuationTokens.count == providerCount else {
+            throw ArchonModelsError.invalidResponse
+        }
+        return state
+    }
+}
+
+private struct CompositeContinuationState: Codable, Sendable {
+    var providerIndex: Int
+    var offsets: [Int]
+    var continuationTokens: [String?]
 }
 
 public enum ModelCompatibilityStatus: String, Codable, CaseIterable, Sendable {

@@ -51,8 +51,9 @@ struct UnavailableAdaptiveModelProvider: LLMProvider, Sendable {
 /// A catalog entry used by hardware-aware local model selection.
 ///
 /// Scores are optional catalog metadata. Archon never invents benchmark
-/// results: when a score is absent, selection falls back to deterministic fit,
-/// memory, and stable identifier ordering.
+/// results: when a score is absent, declared parameter count may provide a
+/// bounded capacity heuristic, followed by deterministic fit, memory, and
+/// stable identifier ordering.
 public struct AdaptiveModelCandidate: Sendable, Equatable, Identifiable {
     public let id: String
     public let name: String
@@ -63,6 +64,9 @@ public struct AdaptiveModelCandidate: Sendable, Equatable, Identifiable {
     /// Generic candidates without this value are never selected for local use.
     public let estimatedMemoryBytes: UInt64?
     public let modelSizeBytes: Int64?
+    /// Parameter count copied from catalog metadata. It is a capacity proxy
+    /// only when the catalog does not provide an evaluated quality score.
+    public let parameterCount: Int64?
     public let maxContextTokens: Int
     public let minimumSystemRAMGB: Double?
     public let estimatedQualityScore: Double?
@@ -82,6 +86,7 @@ public struct AdaptiveModelCandidate: Sendable, Equatable, Identifiable {
         capabilities: ModelCapabilities = .mlxLocal,
         estimatedMemoryBytes: UInt64? = nil,
         modelSizeBytes: Int64? = nil,
+        parameterCount: Int64? = nil,
         maxContextTokens: Int = 8_192,
         minimumSystemRAMGB: Double? = nil,
         estimatedQualityScore: Double? = nil,
@@ -100,6 +105,7 @@ public struct AdaptiveModelCandidate: Sendable, Equatable, Identifiable {
             capabilities: capabilities,
             estimatedMemoryBytes: estimatedMemoryBytes,
             modelSizeBytes: modelSizeBytes,
+            parameterCount: parameterCount,
             maxContextTokens: maxContextTokens,
             minimumSystemRAMGB: minimumSystemRAMGB,
             estimatedQualityScore: estimatedQualityScore,
@@ -121,6 +127,7 @@ public struct AdaptiveModelCandidate: Sendable, Equatable, Identifiable {
         capabilities: ModelCapabilities = .mlxLocal,
         estimatedMemoryBytes: UInt64? = nil,
         modelSizeBytes: Int64? = nil,
+        parameterCount: Int64? = nil,
         maxContextTokens: Int = 8_192,
         minimumSystemRAMGB: Double? = nil,
         estimatedQualityScore: Double? = nil,
@@ -139,6 +146,7 @@ public struct AdaptiveModelCandidate: Sendable, Equatable, Identifiable {
         self.capabilities = capabilities
         self.estimatedMemoryBytes = estimatedMemoryBytes
         self.modelSizeBytes = modelSizeBytes
+        self.parameterCount = parameterCount.map { max(0, $0) }
         self.maxContextTokens = max(1, maxContextTokens)
         self.minimumSystemRAMGB = minimumSystemRAMGB
         self.estimatedQualityScore = Self.normalizedScore(estimatedQualityScore)
@@ -211,6 +219,7 @@ public struct AdaptiveModelCandidate: Sendable, Equatable, Identifiable {
             capabilities: capabilities,
             estimatedMemoryBytes: memoryBytes,
             modelSizeBytes: variant.sizeBytes,
+            parameterCount: variant.parameterCount,
             maxContextTokens: variant.contextLength ?? 8_192,
             estimatedQualityScore: variant.estimatedQualityScore,
             estimatedTokensPerSecond: variant.estimatedTokensPerSecond,
@@ -277,9 +286,10 @@ public struct AdaptiveModelCatalog: Sendable, Equatable {
         )
     }
 
-    /// The current bundled compatibility seed. It is represented through the
-    /// generic candidate type; the resolver's Gemma compatibility branch only
-    /// preserves the historical default until an app supplies refreshed data.
+    /// The current bundled Gemma compatibility seed. It is represented through
+    /// the generic candidate type; the resolver's Gemma compatibility branch
+    /// only preserves the historical default until an app supplies refreshed
+    /// data. It is not a universal model-discovery registry.
     public static var builtIn: AdaptiveModelCatalog {
         AdaptiveModelCatalog(
             candidates: GemmaModelCatalog.allVariants.flatMap { variant in
@@ -411,6 +421,7 @@ public struct AdaptiveModelCatalog: Sendable, Equatable {
         let maximumQuality = eligible.compactMap(\.estimatedQualityScore).max() ?? 1
         let maximumSpeed = eligible.compactMap(\.estimatedTokensPerSecond).max() ?? 1
         let maximumPromptSpeed = eligible.compactMap(\.estimatedPromptTokensPerSecond).max() ?? 1
+        let maximumParameterCount = eligible.compactMap(\.parameterCount).max()
 
         return eligible
             .map { candidate in
@@ -421,7 +432,8 @@ public struct AdaptiveModelCatalog: Sendable, Equatable {
                     budgetBytes: budgetBytes,
                     maximumQuality: maximumQuality,
                     maximumSpeed: maximumSpeed,
-                    maximumPromptSpeed: maximumPromptSpeed
+                    maximumPromptSpeed: maximumPromptSpeed,
+                    maximumParameterCount: maximumParameterCount
                 ))
             }
             .sorted { lhs, rhs in
@@ -438,7 +450,8 @@ public struct AdaptiveModelCatalog: Sendable, Equatable {
         budgetBytes: UInt64,
         maximumQuality: Double,
         maximumSpeed: Double,
-        maximumPromptSpeed: Double
+        maximumPromptSpeed: Double,
+        maximumParameterCount: Int64?
     ) -> Double {
         let memoryFit: Double
         if let estimatedMemoryBytes = candidate.estimatedMemoryBytes {
@@ -447,7 +460,23 @@ public struct AdaptiveModelCatalog: Sendable, Equatable {
         } else {
             memoryFit = 0.5
         }
-        let quality = candidate.estimatedQualityScore.map { $0 / max(maximumQuality, 0.0001) } ?? 0.5
+        // Do not invent a benchmark score. When no evaluated quality exists,
+        // use the declared parameter count as a bounded capacity heuristic so
+        // intelligence-first routing does not systematically choose the
+        // smallest model. Memory and platform gates still run first.
+        let capacity: Double
+        if let parameterCount = candidate.parameterCount,
+           let maximumParameterCount,
+           parameterCount > 0,
+           maximumParameterCount > 0 {
+            capacity = min(
+                max(sqrt(Double(parameterCount) / Double(maximumParameterCount)), 0),
+                1
+            )
+        } else {
+            capacity = 0.5
+        }
+        let quality = candidate.estimatedQualityScore.map { $0 / max(maximumQuality, 0.0001) } ?? capacity
         let speed = candidate.estimatedTokensPerSecond.map { $0 / max(maximumSpeed, 0.0001) } ?? 0.5
         let promptSpeed = candidate.estimatedPromptTokensPerSecond.map { $0 / max(maximumPromptSpeed, 0.0001) } ?? 0.5
         let energy = candidate.estimatedEnergyEfficiencyScore ?? 0.5

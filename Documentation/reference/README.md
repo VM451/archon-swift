@@ -8,6 +8,7 @@ doc comments and DocC catalogs.
 - [Product guides](products/README.md)
 - [Model contract](model-contract.md)
 - [Model catalogs](model-catalogs.md)
+- [Supported models and model-family policy](supported-models.md)
 - [Model lifecycle](model-lifecycle.md)
 - [Policies and typed failures](policies-and-errors.md)
 - [Executables](executables.md)

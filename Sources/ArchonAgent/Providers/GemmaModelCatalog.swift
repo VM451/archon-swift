@@ -84,7 +84,11 @@ public struct GemmaVariant: Sendable, Equatable, Codable {
     }
 }
 
-/// Curated catalog of Google Gemma 4 model variants with hardware-adaptive sizing.
+/// Curated compatibility seed of Google Gemma 4 variants with hardware-adaptive sizing.
+///
+/// This is not the complete model-discovery catalog. Applications should use
+/// `AdaptiveModelCatalog` with descriptors from their configured
+/// `ArchonModels` catalog when they need other model families.
 public enum GemmaModelCatalog: Sendable {
     // MARK: - Curated Gemma 4 Variants
 

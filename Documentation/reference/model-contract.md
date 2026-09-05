@@ -59,4 +59,6 @@ exports remain discoverable for developer validation but cannot load until a
 validated catalog or manifest result removes the experimental restriction.
 
 See [model lifecycle](model-lifecycle.md) for operations and
-[model catalogs](model-catalogs.md) for discovery behavior.
+[model catalogs](model-catalogs.md) for discovery behavior. See [supported
+models and model-family policy](supported-models.md) for the distinction
+between family-neutral catalog support and a runnable runtime artifact.

@@ -36,6 +36,10 @@ The application, not the package, provides:
 - MCP servers, search providers, and remote sandbox adapters; and
 - semantic observations, user approvals, and side-effect policy.
 
+For model discovery, inject the catalog that the application intends users to
+browse. The model UI is data-driven; the bundled Gemma adaptive seed is not a
+complete discovery registry. See [Supported models and model-family policy](../reference/supported-models.md).
+
 ## 4. Select a policy
 
 Choose local-only, local-preferred, Apple-only, or cloud-allowed behavior

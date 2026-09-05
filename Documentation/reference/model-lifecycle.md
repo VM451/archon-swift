@@ -4,6 +4,10 @@
 state, and lifecycle hooks. A runtime adapter owns the framework-specific load
 operation.
 
+The lifecycle is model-family neutral. See the [supported model and
+model-family policy](supported-models.md) for the difference between a catalog
+entry, a runnable artifact, and an app-provided runtime adapter.
+
 ## Main actors and boundaries
 
 | API | Responsibility |

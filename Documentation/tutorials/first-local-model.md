@@ -10,6 +10,11 @@ The directory must contain one or more Archon model packages with a valid
 are source artifacts and require developer-side conversion before they can be
 installed as runnable models.
 
+This tutorial is family-neutral. The local catalog can contain Gemma, Qwen,
+Mistral, Llama, or another family as long as each entry has a validated
+manifest and runnable runtime contract. The bundled Gemma compatibility seed
+belongs to adaptive provider convenience APIs, not to `LocalModelCatalog`.
+
 ## 1. Discover compatible local models
 
 ```swift
@@ -62,4 +67,4 @@ adapter is unavailable, the load must fail closed.
 
 It does not convert weights, download from Hugging Face, invent a tokenizer, or
 claim that every Apple device supports every model. For those paths, read
-[model catalogs](../reference/model-catalogs.md) and [model lifecycle](../reference/model-lifecycle.md).
+[supported models](../reference/supported-models.md), [model catalogs](../reference/model-catalogs.md), and [model lifecycle](../reference/model-lifecycle.md).

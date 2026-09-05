@@ -7,7 +7,7 @@ organized using the Diátaxis model so each document has one job:
 | --- | --- | --- |
 | [Tutorials](tutorials/) | Learning-oriented, end-to-end paths | Build your first local model flow |
 | [How-to guides](how-to/) | Task-oriented implementation recipes | Integrate a capability into an app |
-| [Reference](reference/) | Exact contracts and boundaries | Check supported products, fields, states, or commands |
+| [Reference](reference/) | Exact contracts and boundaries | Check supported models, products, fields, states, or commands |
 | [Explanation](explanation/) | Architecture and design rationale | Understand why Archon is shaped this way |
 | [Decisions](decisions/) | Historical and migration records | Understand what was retained, replaced, or excluded |
 
@@ -34,17 +34,19 @@ documentation surface.
 ### New application
 
 1. [Add Archon and choose products](how-to/add-archon.md)
-2. [Integrate a local model](tutorials/first-local-model.md)
-3. [Understand product boundaries](reference/products.md)
-4. [Forward lifecycle and permissions](how-to/host-lifecycle.md)
-5. [Read the competitor comparison and scorecard](reference/competitor-comparison.md)
+2. [Read the supported model policy](reference/supported-models.md)
+3. [Integrate a local model](tutorials/first-local-model.md)
+4. [Understand product boundaries](reference/products.md)
+5. [Forward lifecycle and permissions](how-to/host-lifecycle.md)
+6. [Read the competitor comparison and scorecard](reference/competitor-comparison.md)
 
 ### Existing Archon integration
 
 1. [Local-first boundaries](explanation/local-first-boundaries.md)
-2. [Model lifecycle reference](reference/model-lifecycle.md)
-3. [Policies and typed failures](reference/policies-and-errors.md)
-4. [Release validation](how-to/validate-a-release.md)
+2. [Supported model policy](reference/supported-models.md)
+3. [Model lifecycle reference](reference/model-lifecycle.md)
+4. [Policies and typed failures](reference/policies-and-errors.md)
+5. [Release validation](how-to/validate-a-release.md)
 
 ### Memory and agent work
 
@@ -63,6 +65,11 @@ where the underlying Apple capability is available. The repository includes a
 buildable macOS SwiftUI example and package-level tests, but not a signed
 consuming application. Device, entitlement, permission, live UI, and
 model-specific runtime claims must be validated in the consuming app.
+
+The canonical model-support statement is [Supported models and model-family
+policy](reference/supported-models.md). It explains why the built-in Gemma
+catalog is only a compatibility seed, how discovery catalogs are injected, and
+which artifact/runtime combinations can become runnable.
 
 ## Documentation rules
 

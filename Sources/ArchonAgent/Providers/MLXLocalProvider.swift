@@ -59,11 +59,12 @@ public enum MLXLocalProviderError: Error, LocalizedError, Sendable, Equatable {
 
 /// Local LLM provider backed by MLX Swift LM when the optional macOS runtime is linked.
 ///
-/// The model is loaded lazily on the first request. The default is Google's
-/// lightweight Gemma 4 E2B 4-bit model, while the initializer accepts any
-/// compatible MLX model identifier or a local model directory. Each request
-/// gets its own `ChatSession`, which keeps the provider safe for concurrent
-/// graph invocations while the underlying `ModelContainer` remains shared.
+/// The model is loaded lazily on the first request. The default is the
+/// lightweight Gemma 4 E2B compatibility seed, while the initializer accepts
+/// any compatible MLX model identifier or a local model directory. Each
+/// request gets its own `ChatSession`, which keeps the provider safe for
+/// concurrent graph invocations while the underlying `ModelContainer` remains
+/// shared.
 #if canImport(MLXHuggingFace) && canImport(MLXLLM) && canImport(MLXLMCommon)
 public final class MLXLocalProvider: LLMProvider, @unchecked Sendable {
     /// A practical default for devices that cannot run Apple Foundation Models.

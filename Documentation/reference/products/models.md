@@ -4,7 +4,7 @@
 licensing, staging, integrity validation, installation, managed storage,
 updates, and runtime lifecycle hooks.
 
-Read the focused [model contract](../model-contract.md), [catalog reference](../model-catalogs.md), and [lifecycle reference](../model-lifecycle.md).
+Read the focused [supported model policy](../supported-models.md), [model contract](../model-contract.md), [catalog reference](../model-catalogs.md), and [lifecycle reference](../model-lifecycle.md).
 
 ## Host-owned concerns
 
@@ -22,3 +22,9 @@ conversion-required and unsupported runtime/format pairs fail closed.
 streaming, tool-calling, and structured-output requirements before loading.
 The lifecycle remains runtime-neutral: Foundation Models, Core ML, MLX, and
 Hugging Face integrations are adapters selected by the consuming host.
+
+`ArchonModels` does not restrict discovery to Gemma. `ModelDescriptor.family`
+is descriptive data, and a host can register any family whose variant has a
+truthful runtime, format, resource, capability, license, platform, and memory
+contract. The bundled Gemma catalog is only a compatibility seed; it is not the
+source of truth for the application's complete model-discovery list.

@@ -90,6 +90,41 @@ private actor RecordingModelHTTPClient: ModelHTTPClient {
     }
 }
 
+private actor PagingModelHTTPClient: ModelHTTPClient {
+    let responses: [Data]
+    let nextPageURL: URL
+    private var responseIndex = 0
+    private var requestedURLs: [URL] = []
+
+    init(responses: [Data], nextPageURL: URL) {
+        self.responses = responses
+        self.nextPageURL = nextPageURL
+    }
+
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        guard let url = request.url,
+              !responses.isEmpty,
+              let response = HTTPURLResponse(
+                url: url,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: responseIndex == 0
+                    ? ["Link": "<\(nextPageURL.absoluteString)>; rel=\"next\""]
+                    : nil
+              ) else {
+            throw ArchonModelsError.invalidResponse
+        }
+        requestedURLs.append(url)
+        let data = responses[min(responseIndex, responses.count - 1)]
+        responseIndex += 1
+        return (data, response)
+    }
+
+    func requestedURL(at index: Int) -> URL? {
+        requestedURLs.indices.contains(index) ? requestedURLs[index] : nil
+    }
+}
+
 private actor ControlledModelByteTransfer {
     private let payload: [UInt8]
     private var continuation: AsyncThrowingStream<UInt8, Error>.Continuation?
@@ -638,6 +673,174 @@ struct ArchonModelsTests {
         let requestURL = try #require(await recorder.lastRequestedURL())
         let queryItems = try #require(URLComponents(url: requestURL, resolvingAgainstBaseURL: false)?.queryItems)
         #expect(queryItems.first(where: { $0.name == "full" })?.value == "true")
+    }
+
+    @Test("Catalog pages honor offsets and report remaining results")
+    func paginatesStaticCatalog() async throws {
+        let catalog = StaticModelCatalog(models: (0..<3).map { index in
+            ModelDescriptor(
+                id: "model-\(index)",
+                name: "Model \(index)",
+                publisher: "Test",
+                source: .developerRegistry
+            )
+        })
+
+        let firstPage = try await catalog.searchPage(ModelSearchRequest(query: "", offset: -1, limit: 2))
+        #expect(firstPage.models.map(\.id) == ["model-0", "model-1"])
+        #expect(firstPage.hasMore)
+        #expect(firstPage.nextContinuationToken == nil)
+
+        let secondPage = try await catalog.searchPage(ModelSearchRequest(query: "", offset: 2, limit: 2))
+        #expect(secondPage.models.map(\.id) == ["model-2"])
+        #expect(!secondPage.hasMore)
+    }
+
+    @Test("Composite catalog pagination keeps each provider's cursor")
+    func paginatesCompositeCatalog() async throws {
+        func descriptor(_ id: String) -> ModelDescriptor {
+            ModelDescriptor(
+                id: id,
+                name: id,
+                publisher: "Test",
+                source: .developerRegistry
+            )
+        }
+
+        let catalog = CompositeModelCatalog(providers: [
+            StaticModelCatalog(models: [descriptor("first-0"), descriptor("first-1"), descriptor("first-2")]),
+            StaticModelCatalog(models: [descriptor("second-0")])
+        ])
+
+        let firstPage = try await catalog.searchPage(ModelSearchRequest(query: "", limit: 2))
+        let token = try #require(firstPage.nextContinuationToken)
+        #expect(firstPage.models.map(\.id) == ["first-0", "first-1"])
+        #expect(firstPage.hasMore)
+
+        let secondPage = try await catalog.searchPage(ModelSearchRequest(
+            query: "",
+            continuationToken: token,
+            limit: 2
+        ))
+        #expect(secondPage.models.map(\.id) == ["first-2", "second-0"])
+        #expect(!secondPage.hasMore)
+    }
+
+    @Test("Hugging Face pages follow the provider cursor instead of restarting discovery")
+    func followsHuggingFaceContinuationToken() async throws {
+        let firstPayload = Data(#"""
+        [{"id":"mlx-community/First","pipeline_tag":"text-generation","tags":["mlx"]}]
+        """#.utf8)
+        let secondPayload = Data(#"""
+        [{"id":"mlx-community/Second","pipeline_tag":"text-generation","tags":["mlx"]}]
+        """#.utf8)
+        let nextURL = URL(string: "https://example.com/api/models?filter=mlx&cursor=next")!
+        let session = PagingModelHTTPClient(
+            responses: [firstPayload, secondPayload],
+            nextPageURL: nextURL
+        )
+        let catalog = HuggingFaceCatalog(
+            baseURL: URL(string: "https://example.com")!,
+            session: session,
+            tokenStore: nil
+        )
+
+        let firstPage = try await catalog.searchPage(ModelSearchRequest(query: "Qwen", runtime: .mlx, limit: 1))
+        let token = try #require(firstPage.nextContinuationToken)
+        #expect(firstPage.models.map(\.id) == ["mlx-community/First"])
+        #expect(firstPage.hasMore)
+
+        let secondPage = try await catalog.searchPage(ModelSearchRequest(
+            query: "Qwen",
+            runtime: .mlx,
+            continuationToken: token,
+            limit: 1
+        ))
+        #expect(secondPage.models.map(\.id) == ["mlx-community/Second"])
+        #expect(!secondPage.hasMore)
+        #expect(await session.requestedURL(at: 1) == nextURL)
+    }
+
+    @Test("Hugging Face MLX search finds current tagged packages instead of only popular raw checkpoints")
+    func searchesRunnableMLXPackages() async throws {
+        let payload = Data(#"""
+        [{
+          "id": "lmstudio-community/Qwen3.8-27B-MLX-4bit",
+          "author": "lmstudio-community",
+          "pipeline_tag": "image-text-to-text",
+          "library_name": "transformers",
+          "tags": ["transformers", "safetensors", "qwen3_5", "image-text-to-text", "mlx", "base_model:Qwen/Qwen3.8-27B", "4-bit"],
+          "gated": false,
+          "private": false,
+          "sha": "current-mlx-revision",
+          "siblings": [
+            {"rfilename": "model.safetensors", "size": 100},
+            {"rfilename": "config.json", "size": 20},
+            {"rfilename": "tokenizer.json", "size": 30}
+          ]
+        }]
+        """#.utf8)
+        let recorder = RecordingModelHTTPClient(payload: payload)
+        let catalog = HuggingFaceCatalog(
+            baseURL: URL(string: "https://example.com")!,
+            session: recorder,
+            tokenStore: nil
+        )
+
+        let models = try await catalog.search(ModelSearchRequest(query: "Qwen", runtime: .mlx))
+        let model = try #require(models.first)
+        let variant = try #require(model.variants.first)
+        let requestURL = try #require(await recorder.lastRequestedURL())
+        let queryItems = try #require(URLComponents(url: requestURL, resolvingAgainstBaseURL: false)?.queryItems)
+
+        #expect(model.family == "Qwen")
+        #expect(model.parameterCount == 27_000_000_000)
+        #expect(model.tasks.contains(.textGeneration))
+        #expect(model.tasks.contains(.vision))
+        #expect(variant.format == .mlx)
+        #expect(variant.capabilities.tasks.contains(.textGeneration))
+        #expect(queryItems.first(where: { $0.name == "filter" })?.value == "mlx")
+    }
+
+    @Test("Compatible Hugging Face search continues past raw repositories")
+    func compatibleSearchDoesNotStopAtRawRepository() async throws {
+        let payload = Data(#"""
+        [
+          {
+            "id": "Qwen/Qwen3-8B",
+            "pipeline_tag": "text-generation",
+            "tags": ["transformers", "safetensors", "8b"],
+            "siblings": [{"rfilename": "model.safetensors", "size": 100}]
+          },
+          {
+            "id": "mlx-community/Qwen3-8B-4bit",
+            "pipeline_tag": "text-generation",
+            "library_name": "mlx",
+            "tags": ["mlx", "text-generation", "8b"],
+            "siblings": [
+              {"rfilename": "model.safetensors", "size": 100},
+              {"rfilename": "config.json", "size": 20},
+              {"rfilename": "tokenizer.json", "size": 30}
+            ]
+          }
+        ]
+        """#.utf8)
+        let catalog = HuggingFaceCatalog(
+            baseURL: URL(string: "https://example.com")!,
+            session: MockHTTPClient(payload: payload),
+            tokenStore: nil
+        )
+
+        let models = try await catalog.search(ModelSearchRequest(
+            query: "Qwen",
+            compatibleOnly: true,
+            device: device,
+            limit: 1
+        ))
+
+        #expect(models.count == 1)
+        #expect(models.first?.id == "mlx-community/Qwen3-8B-4bit")
+        #expect(models.first?.variants.first?.format == .mlx)
     }
 
     @Test("Hugging Face inspection rejects unsafe repository paths before requesting them")

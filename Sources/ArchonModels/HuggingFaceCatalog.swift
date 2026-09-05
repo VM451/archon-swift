@@ -63,7 +63,7 @@ public struct KeychainModelTokenStore: ModelTokenStore, Sendable {
     }
 }
 
-public struct HuggingFaceCatalog: ModelCatalogProvider, Sendable {
+public struct HuggingFaceCatalog: PaginatedModelCatalogProvider, Sendable {
     public let id: String = "huggingface"
     public let baseURL: URL
     public let session: any ModelHTTPClient
@@ -79,38 +79,45 @@ public struct HuggingFaceCatalog: ModelCatalogProvider, Sendable {
         self.tokenStore = tokenStore
     }
 
+    /// Searches Hub metadata and repository inventories.
+    ///
+    /// An MLX runtime/format request is narrowed with the Hub's `mlx` tag so
+    /// current runnable packages are not hidden behind the most-downloaded
+    /// raw checkpoints. A broad search remains useful for conversion and
+    /// inspection workflows, but raw formats are deliberately not runnable.
     public func search(_ request: ModelSearchRequest) async throws -> [ModelDescriptor] {
+        try await searchPage(request).models
+    }
+
+    public func searchPage(_ request: ModelSearchRequest) async throws -> ModelCatalogPage {
         if let repositoryID = Self.repositoryID(from: request.query) {
+            guard request.offset == 0, request.continuationToken == nil else {
+                return ModelCatalogPage(models: [], hasMore: false)
+            }
             let model = try await inspect(repositoryID: repositoryID)
             guard let filteredModel = filtered(model, for: request) else {
-                return []
+                return ModelCatalogPage(models: [], hasMore: false)
             }
-            return [filteredModel]
+            return ModelCatalogPage(models: [filteredModel], hasMore: false)
         }
-        var components = URLComponents(url: baseURL.appendingPathComponent("api/models"), resolvingAgainstBaseURL: false)
-        components?.queryItems = [
-            URLQueryItem(name: "search", value: request.query),
-            URLQueryItem(name: "limit", value: String(request.limit)),
-            // Variant-level filters need the repository file inventory even
-            // when the caller only wants compact result rows.
-            URLQueryItem(
-                name: "full",
-                value: (request.includeVariants || request.compatibleOnly || request.runtime != nil || request.format != nil) ? "true" : "false"
-            ),
-            URLQueryItem(name: "sort", value: "downloads"),
-            URLQueryItem(name: "direction", value: "-1")
-        ]
-        guard let url = components?.url else { throw ArchonModelsError.invalidResponse }
-        let data = try await data(for: url)
-        let summaries = try JSONDecoder().decode([HuggingFaceModelPayload].self, from: data)
+        let page = try await searchPayloads(for: request)
 
         var models: [ModelDescriptor] = []
-        for payload in summaries.prefix(request.limit) {
+        var seenRepositories = Set<String>()
+        for payload in page.payloads where seenRepositories.insert(payload.id).inserted {
             let model = makeDescriptor(from: payload, includeVariants: true)
             guard let filteredModel = filtered(model, for: request) else { continue }
             models.append(filteredModel)
+            // Filtering happens after the Hub response is decoded. Do not
+            // stop at the first `request.limit` raw repositories because a
+            // popular raw checkpoint can hide a later runnable package.
+            if models.count == request.limit { break }
         }
-        return models
+        return ModelCatalogPage(
+            models: models,
+            hasMore: page.nextContinuationToken != nil,
+            nextContinuationToken: page.nextContinuationToken
+        )
     }
 
     /// Fetches a single repository's complete metadata and artifact inventory.
@@ -130,7 +137,7 @@ public struct HuggingFaceCatalog: ModelCatalogProvider, Sendable {
         return makeDescriptor(from: payload, includeVariants: true)
     }
 
-    private func data(for url: URL) async throws -> Data {
+    private func response(for url: URL) async throws -> (Data, HTTPURLResponse) {
         var request = URLRequest(url: url)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let token = await tokenStore?.token(for: "huggingface.co") {
@@ -141,20 +148,135 @@ public struct HuggingFaceCatalog: ModelCatalogProvider, Sendable {
         guard (200...299).contains(response.statusCode) else {
             throw ArchonModelsError.httpFailure(statusCode: response.statusCode)
         }
-        return data
+        return (data, response)
+    }
+
+    private func data(for url: URL) async throws -> Data {
+        let result = try await response(for: url)
+        return result.0
+    }
+
+    private func searchPayloads(for request: ModelSearchRequest) async throws -> HuggingFaceSearchPage {
+        let needsMLXFilter = request.runtime == .mlx || request.format == .mlx
+        let needsCompatibilitySearch = request.compatibleOnly &&
+            !needsMLXFilter &&
+            request.runtime == nil &&
+            request.format == nil
+        let needsOverfetch = request.compatibleOnly ||
+            (request.runtime != nil && !needsMLXFilter) ||
+            (request.format != nil && !needsMLXFilter)
+        let serverLimit = min(
+            100,
+            max(request.limit, request.limit * (needsOverfetch ? 3 : 1))
+        )
+
+        let urls: [URL]
+        if let continuationToken = request.continuationToken {
+            urls = try Self.urls(from: continuationToken)
+        } else {
+            // The Hub's generic popularity list is dominated by raw
+            // Transformers and SafeTensors repositories. A local-compatible
+            // search must ask the Hub for its explicit `mlx` tag as well,
+            // otherwise useful MLX packages may never reach this adapter's
+            // local filtering stage.
+            if needsMLXFilter {
+                urls = [try makeSearchURL(for: request, limit: serverLimit, filter: "mlx")]
+            } else {
+                var initialURLs = [try makeSearchURL(for: request, limit: serverLimit, filter: nil)]
+                if needsCompatibilitySearch {
+                    initialURLs.insert(try makeSearchURL(for: request, limit: serverLimit, filter: "mlx"), at: 0)
+                }
+                urls = initialURLs
+            }
+        }
+
+        var payloads: [HuggingFaceModelPayload] = []
+        var nextURLs: [URL] = []
+        for url in urls {
+            let result = try await response(for: url)
+            let data = result.0
+            payloads.append(contentsOf: try JSONDecoder().decode([HuggingFaceModelPayload].self, from: data))
+            if let nextURL = Self.nextPageURL(from: result.1) {
+                nextURLs.append(nextURL)
+            }
+        }
+        return HuggingFaceSearchPage(
+            payloads: payloads,
+            nextContinuationToken: try Self.token(for: nextURLs)
+        )
+    }
+
+    private func makeSearchURL(
+        for request: ModelSearchRequest,
+        limit: Int,
+        filter: String?
+    ) throws -> URL {
+        var components = URLComponents(url: baseURL.appendingPathComponent("api/models"), resolvingAgainstBaseURL: false)
+        var queryItems = [
+            URLQueryItem(name: "search", value: request.query),
+            URLQueryItem(name: "limit", value: String(limit)),
+            // Variant-level filters need the repository file inventory even
+            // when the caller only wants compact result rows.
+            URLQueryItem(
+                name: "full",
+                value: (request.includeVariants || request.compatibleOnly || request.runtime != nil || request.format != nil) ? "true" : "false"
+            ),
+            URLQueryItem(name: "sort", value: "downloads"),
+            URLQueryItem(name: "direction", value: "-1")
+        ]
+        if let filter {
+            queryItems.append(URLQueryItem(name: "filter", value: filter))
+        }
+        components?.queryItems = queryItems
+        guard let url = components?.url else { throw ArchonModelsError.invalidResponse }
+        return url
+    }
+
+    private static func nextPageURL(from response: HTTPURLResponse) -> URL? {
+        guard let linkHeader = response.value(forHTTPHeaderField: "Link") else { return nil }
+        for link in linkHeader.split(separator: ",") {
+            let value = String(link)
+            guard let opening = value.firstIndex(of: "<"),
+                  let closing = value.firstIndex(of: ">"),
+                  opening < closing else { continue }
+            let attributes = value[value.index(after: closing)...].lowercased()
+            guard attributes.contains("rel=\"next\"") ||
+                    attributes.contains("rel='next'") ||
+                    attributes.contains("rel=next") else { continue }
+            return URL(string: String(value[value.index(after: opening)..<closing]))
+        }
+        return nil
+    }
+
+    private static func token(for urls: [URL]) throws -> String? {
+        guard !urls.isEmpty else { return nil }
+        let data = try JSONEncoder().encode(urls.map(\.absoluteString))
+        return data.base64EncodedString()
+    }
+
+    private static func urls(from token: String) throws -> [URL] {
+        guard let data = Data(base64Encoded: token),
+              let strings = try? JSONDecoder().decode([String].self, from: data),
+              !strings.isEmpty else {
+            throw ArchonModelsError.invalidResponse
+        }
+        let urls = strings.compactMap(URL.init(string:))
+        guard urls.count == strings.count else { throw ArchonModelsError.invalidResponse }
+        return urls
     }
 
     private func makeDescriptor(from payload: HuggingFaceModelPayload, includeVariants: Bool) -> ModelDescriptor {
         let repositoryID = payload.id
         let publisher = payload.author ?? repositoryID.split(separator: "/").first.map(String.init) ?? "Unknown"
-        let tasks = Set([task(for: payload.pipelineTag)])
+        let tags = payload.tags ?? []
+        let tasks = tasks(for: payload.pipelineTag, tags: tags, repositoryID: repositoryID)
         let variants = includeVariants ? makeVariants(from: payload) : []
         return ModelDescriptor(
             id: repositoryID,
             name: repositoryID.split(separator: "/").last.map(String.init) ?? repositoryID,
             publisher: publisher,
-            family: payload.tags?.first(where: { $0.lowercased().contains("model") == false }),
-            parameterCount: parameterCount(from: payload.tags ?? []),
+            family: family(from: payload),
+            parameterCount: parameterCount(from: tags, repositoryID: repositoryID),
             tasks: tasks,
             architecture: payload.architectures?.first,
             description: payload.cardData?["model_summary"]?.stringValue,
@@ -174,8 +296,11 @@ public struct HuggingFaceCatalog: ModelCatalogProvider, Sendable {
     private func makeVariants(from payload: HuggingFaceModelPayload) -> [ModelVariant] {
         guard let siblings = payload.siblings else { return [] }
         let revision = payload.sha ?? "main"
+        let tags = payload.tags ?? []
+        let tasks = tasks(for: payload.pipelineTag, tags: tags, repositoryID: payload.id)
         let isKnownMLXRepository = payload.id.lowercased().hasPrefix("mlx-community/") ||
-            (payload.tags ?? []).contains { $0.lowercased() == "mlx" }
+            payload.libraryName?.lowercased() == "mlx" ||
+            tags.contains { $0.lowercased() == "mlx" }
         let isGated = payload.gated?.indicatesGated ?? false
         var variants: [ModelVariant] = []
 
@@ -214,14 +339,14 @@ public struct HuggingFaceCatalog: ModelCatalogProvider, Sendable {
                     architecture: payload.architectures?.first,
                     supportedDeviceArchitectures: ["arm64"],
                     supportedPlatforms: Set(ArchonPlatform.allCases),
-                    parameterCount: parameterCount(from: payload.tags ?? []),
-                    contextLength: contextLength(from: payload.tags ?? []),
+                    parameterCount: parameterCount(from: tags, repositoryID: payload.id),
+                    contextLength: contextLength(from: tags),
                     precision: quantization(from: primary.relativePath),
                     quantization: quantization(from: primary.relativePath),
                     sizeBytes: totalSize,
                     estimatedMemoryBytes: totalSize.map { Int64(Double($0) * 1.15) },
                     resources: mlxResources,
-                    capabilities: ArchonModelCapabilities(tasks: [task(for: payload.pipelineTag)]),
+                    capabilities: capabilities(for: tasks, tags: tags),
                     requiresAuthentication: payload.private ?? false || isGated
                 ))
             }
@@ -262,13 +387,13 @@ public struct HuggingFaceCatalog: ModelCatalogProvider, Sendable {
                 architecture: payload.architectures?.first,
                 supportedDeviceArchitectures: ["arm64"],
                 supportedPlatforms: Set(ArchonPlatform.allCases),
-                parameterCount: parameterCount(from: payload.tags ?? []),
-                contextLength: contextLength(from: payload.tags ?? []),
+                parameterCount: parameterCount(from: tags, repositoryID: payload.id),
+                contextLength: contextLength(from: tags),
                 precision: quantization(from: filename),
                 quantization: quantization(from: filename),
                 sizeBytes: size,
                 estimatedMemoryBytes: size.map { Int64(Double($0) * 1.15) },
-                capabilities: ArchonModelCapabilities(tasks: [task(for: payload.pipelineTag)]),
+                capabilities: capabilities(for: tasks, tags: tags),
                 requiresAuthentication: payload.private ?? false || isGated
             )
         })
@@ -345,23 +470,98 @@ public struct HuggingFaceCatalog: ModelCatalogProvider, Sendable {
         }
     }
 
-    private func task(for pipelineTag: String?) -> ArchonModelTask {
-        switch pipelineTag?.lowercased() {
-        case "text-generation", "text2text-generation": .textGeneration
-        case "image-text-to-text", "image-to-text", "visual-question-answering": .vision
-        case "automatic-speech-recognition", "audio-classification": .audio
-        case "feature-extraction", "sentence-similarity": .embedding
-        case "text-classification", "zero-shot-classification": .classification
-        default: .unknown
+    private func tasks(
+        for pipelineTag: String?,
+        tags: [String],
+        repositoryID: String
+    ) -> Set<ArchonModelTask> {
+        var result = Set<ArchonModelTask>()
+
+        func insert(_ value: String?) {
+            switch value?.lowercased() {
+            case "text-generation", "text2text-generation", "text-to-text-generation":
+                result.insert(.textGeneration)
+            case "image-text-to-text", "image-to-text", "visual-question-answering", "any-to-any":
+                // Multimodal checkpoints can still answer text-only prompts,
+                // but vision requires a consuming-app model adapter.
+                result.insert(.textGeneration)
+                result.insert(.vision)
+            case "automatic-speech-recognition", "audio-classification":
+                result.insert(.audio)
+            case "feature-extraction", "sentence-similarity", "text-embeddings":
+                result.insert(.embedding)
+            case "text-classification", "zero-shot-classification":
+                result.insert(.classification)
+            case "image-generation", "text-to-image":
+                result.insert(.imageGeneration)
+            default:
+                break
+            }
         }
+
+        insert(pipelineTag)
+        for tag in tags { insert(tag) }
+        if result.isEmpty {
+            let repositoryName = repositoryID.lowercased()
+            if ["instruct", "chat", "causal", "language-model", "decoder", "llm"]
+                .contains(where: { repositoryName.contains($0) }) {
+                // This is task classification for discovery only. Runtime
+                // compatibility still depends on the declared MLX artifact
+                // and the consuming adapter.
+                result.insert(.textGeneration)
+            }
+        }
+        return result.isEmpty ? [.unknown] : result
     }
 
-    private func parameterCount(from tags: [String]) -> Int64? {
-        guard let tag = tags.first(where: { $0.range(of: #"\d+(?:\.\d+)?[bmk]"#, options: .regularExpression) != nil }),
+    private func parameterCount(from tags: [String], repositoryID: String) -> Int64? {
+        let sources = (tags + [repositoryID]).map { $0.lowercased() }
+        guard let tag = sources.first(where: { $0.range(of: #"\d+(?:\.\d+)?[bmk]"#, options: .regularExpression) != nil }),
               let match = tag.range(of: #"\d+(?:\.\d+)?[bmk]"#, options: .regularExpression) else { return nil }
-        let value = tag[match].lowercased()
+        let value = tag[match]
         let multiplier: Double = value.hasSuffix("b") ? 1_000_000_000 : value.hasSuffix("m") ? 1_000_000 : 1_000
         return Int64((Double(value.dropLast()) ?? 0) * multiplier)
+    }
+
+    private func capabilities(for tasks: Set<ArchonModelTask>, tags: [String]) -> ArchonModelCapabilities {
+        let normalizedTags = Set(tags.map { $0.lowercased() })
+        return ArchonModelCapabilities(
+            tasks: tasks,
+            supportsStreaming: true,
+            supportsToolCalling: normalizedTags.contains("tool-use") ||
+                normalizedTags.contains("function-calling") ||
+                normalizedTags.contains("tool-calling")
+        )
+    }
+
+    private func family(from payload: HuggingFaceModelPayload) -> String? {
+        let tags = payload.tags ?? []
+        let baseModelTags = tags.filter {
+            let normalized = $0.lowercased()
+            return normalized.hasPrefix("base_model:") && !normalized.hasPrefix("base_model:quantized:")
+        }
+        let values = baseModelTags + tags + [payload.id] + (payload.architectures ?? [])
+        let knownFamilies: [(String, String)] = [
+            ("qwen", "Qwen"),
+            ("mistral", "Mistral"),
+            ("llama", "Llama"),
+            ("gemma", "Gemma"),
+            ("phi", "Phi"),
+            ("deepseek", "DeepSeek"),
+            ("granite", "Granite"),
+            ("falcon", "Falcon"),
+            ("whisper", "Whisper"),
+            ("parakeet", "Parakeet"),
+            ("bert", "BERT"),
+            ("t5", "T5")
+        ]
+        for value in values {
+            let normalized = value.lowercased()
+            if let family = knownFamilies.first(where: { normalized.contains($0.0) })?.1 {
+                return family
+            }
+        }
+        return nil
     }
 
     private func contextLength(from tags: [String]) -> Int? {
@@ -378,10 +578,16 @@ public struct HuggingFaceCatalog: ModelCatalogProvider, Sendable {
     }
 }
 
+private struct HuggingFaceSearchPage: Sendable {
+    let payloads: [HuggingFaceModelPayload]
+    let nextContinuationToken: String?
+}
+
 private struct HuggingFaceModelPayload: Decodable, Sendable {
     let id: String
     let author: String?
     let pipelineTag: String?
+    let libraryName: String?
     let tags: [String]?
     let architectures: [String]?
     let gated: JSONValue?
@@ -393,6 +599,7 @@ private struct HuggingFaceModelPayload: Decodable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id, author, tags, architectures, gated, sha, siblings
         case pipelineTag = "pipeline_tag"
+        case libraryName = "library_name"
         case `private`
         case cardData = "cardData"
     }

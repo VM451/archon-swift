@@ -76,7 +76,8 @@ public final class OnDeviceProvider: LLMProvider, @unchecked Sendable {
     public let hardwareProfile: DeviceHardwareProfile
     /// The generic catalog entry selected for local execution, when one was selected.
     public let selectedModel: AdaptiveModelCandidate?
-    /// Deprecated compatibility view for callers that still use the Gemma-only API.
+    /// Deprecated compatibility view for callers that still use the Gemma
+    /// convenience API. Inspect `selectedModel` for any catalog family.
     public let selectedGemmaVariant: GemmaVariant?
 
     private let selectedProvider: any LLMProvider
@@ -196,6 +197,7 @@ public final class OnDeviceProvider: LLMProvider, @unchecked Sendable {
     }
 
     /// Creates an on-device provider explicitly using a curated Gemma variant.
+    /// Use the `catalog` initializer for other model families.
     public static func gemma(
         _ variant: GemmaVariant,
         runtime: OnDeviceRuntimePreference = .auto

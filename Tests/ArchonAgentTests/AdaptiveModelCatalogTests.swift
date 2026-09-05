@@ -21,6 +21,7 @@ struct AdaptiveModelCatalogTests {
             // This is a predicted peak, not just the on-disk weight size.
             estimatedMemoryBytes: 700 * 1024 * 1024,
             modelSizeBytes: 600 * 1024 * 1024,
+            parameterCount: 600_000_000,
             maxContextTokens: 8_192,
             minimumSystemRAMGB: 3.5,
             estimatedQualityScore: 0.7,
@@ -45,6 +46,47 @@ struct AdaptiveModelCatalogTests {
         #expect(provider.selectedGemmaVariant == nil)
     }
 
+    @Test("Intelligence-first routing uses declared capacity when quality benchmarks are absent")
+    func intelligenceFirstDoesNotAlwaysChooseSmallestModel() {
+        let smaller = AdaptiveModelCandidate(
+            id: "qwen-3b",
+            name: "Qwen 3B",
+            family: "Qwen",
+            source: .mlx(source: .huggingFace(id: "mlx-community/Qwen-3B-4bit", revision: "main"), extraEOSTokens: []),
+            estimatedMemoryBytes: 1 * 1024 * 1024 * 1024,
+            modelSizeBytes: 800 * 1024 * 1024,
+            parameterCount: 3_000_000_000,
+            supportedPlatforms: [.macOS]
+        )
+        let stronger = AdaptiveModelCandidate(
+            id: "qwen-7b",
+            name: "Qwen 7B",
+            family: "Qwen",
+            source: .mlx(source: .huggingFace(id: "mlx-community/Qwen-7B-4bit", revision: "main"), extraEOSTokens: []),
+            estimatedMemoryBytes: 2 * 1024 * 1024 * 1024,
+            modelSizeBytes: 1_600 * 1024 * 1024,
+            parameterCount: 7_000_000_000,
+            supportedPlatforms: [.macOS]
+        )
+        let profile = DeviceHardwareProfile(
+            platform: .macOS,
+            physicalMemoryBytes: 16 * 1024 * 1024 * 1024,
+            appProcessMemoryLimitBytes: 12 * 1024 * 1024 * 1024,
+            availableProcessMemoryBytes: 10 * 1024 * 1024 * 1024,
+            processorCount: 10,
+            isAppleFoundationModelSupported: false,
+            isCoreAISupported: false
+        )
+
+        let selected = AdaptiveModelCatalog(candidates: [smaller, stronger]).resolve(
+            for: profile,
+            preference: .intelligenceFirst,
+            runtime: .preferMLX
+        )
+
+        #expect(selected?.id == stronger.id)
+    }
+
     @Test("Model descriptors become generic adaptive candidates without a family enum")
     func buildsCandidatesFromModelDescriptors() {
         let variant = ModelVariant(
@@ -55,6 +97,7 @@ struct AdaptiveModelCatalogTests {
             format: .mlx,
             runtime: .mlx,
             supportedPlatforms: [.iOS],
+            parameterCount: 600_000_000,
             contextLength: 8_192,
             sizeBytes: 600 * 1024 * 1024,
             estimatedMemoryBytes: 400 * 1024 * 1024,
@@ -82,6 +125,7 @@ struct AdaptiveModelCatalogTests {
         #expect(catalog.candidates.count == 1)
         #expect(selected?.id == "qwen3-variant")
         #expect(selected?.family == "Qwen")
+        #expect(catalog.candidates.first?.parameterCount == 600_000_000)
         if case .mlx(let source, _) = catalog.candidates[0].source {
             #expect(source.identifier == "mlx-community/Qwen3-0.6B-4bit@2026-09-01")
         } else {

@@ -38,10 +38,19 @@ benchmark metadata is not invented. Automatic runtime selection keeps MLX
 dynamic weights separate from Core AI exports; Core AI requires an explicit
 preference or a compatible Core AI-only catalog.
 
-The bundled catalog is a small compatibility seed and retains the existing
-Gemma convenience API. Applications should refresh descriptors from
+The bundled catalog is a small Gemma compatibility seed and retains the
+existing Gemma convenience API; it is not a complete model-family allow-list.
+Applications should refresh descriptors from
 `ArchonModels` catalog providers (or use `AdaptiveModelCatalog.load(from:)`)
 and pass a new `AdaptiveModelCatalog` to `OnDeviceProvider` or
 `ArchonAI.adaptive(...)` when new model releases are approved. Raw GGUF,
 SafeTensors, and Transformers weights remain
 conversion-required and are not made runnable by catalog metadata alone.
+
+For a dynamic Hugging Face local catalog, request `runtime: .mlx` and a task
+such as `textGeneration` before constructing the adaptive catalog. This asks
+the Hub for MLX-tagged runnable packages instead of relying on its popular raw
+checkpoint list.
+
+See [Supported models and model-family policy](../supported-models.md) for
+catalog wiring, runtime/artifact support, and the AI-agent guidance.

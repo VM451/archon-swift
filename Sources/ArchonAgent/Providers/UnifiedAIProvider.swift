@@ -128,7 +128,8 @@ public enum ArchonAI: Sendable {
         PrivateCloudComputeProvider.default
     }
 
-    /// Apple Core AI runtime on Apple Silicon (Neural Engine & GPU) with Gemma 4.
+    /// Apple Core AI runtime on Apple Silicon (Neural Engine & GPU), using the
+    /// Gemma compatibility convenience overload.
     public static func coreAI(
         variant: GemmaVariant = GemmaModelCatalog.defaultVariant,
         computeUnit: CoreAIComputeUnit = .neuralEngineFirst
@@ -136,7 +137,8 @@ public enum ArchonAI: Sendable {
         CoreAIProvider(variant: variant, computeUnit: computeUnit)
     }
 
-    /// Apple MLX Swift Metal runtime with Gemma 4.
+    /// Apple MLX Swift Metal runtime, using the Gemma compatibility convenience
+    /// overload.
     public static func mlx(
         variant: GemmaVariant = GemmaModelCatalog.defaultVariant
     ) -> any LLMProvider {
