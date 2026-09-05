@@ -17,7 +17,7 @@ all-base-products re-export; optional adapters remain separate.
 | Language | Swift 6.4, strict-concurrency settings |
 | Platforms | iOS 27, macOS 27, visionOS 27 |
 | Package manager | Swift Package Manager |
-| Runtime posture | MLX-only user-facing model discovery; explicit host adapters remain separate |
+| Runtime posture | MLX Swift and Hugging Face/Transformers support is bundled with `ArchonAgent` for out-of-the-box local inference; user-facing discovery remains MLX-only |
 | Default safety posture | Typed errors, bounded operations, fail closed |
 | App boundary | The consuming app owns credentials, entitlements, permissions, and host adapters |
 
@@ -230,10 +230,11 @@ the network.
 ## Quick start
 
 Add the package URL in Xcode or Swift Package Manager. Pin a release tag or
-commit in production for reproducible builds:
+commit in production for reproducible builds. Replace the placeholder with the
+exact release commit you have verified:
 
 ```swift
-.package(url: "https://github.com/VM451/archon-swift.git", branch: "main")
+.package(url: "https://github.com/VM451/archon-swift.git", revision: "<verified-release-commit>")
 ```
 
 Inspect a local model library without introducing a network request:
@@ -320,7 +321,7 @@ feature is not called “user-loved” from official documentation alone. The
 [release validation guide](Documentation/how-to/validate-a-release.md) defines
 the evidence gates required before a replacement becomes the default.
 
-The package contains 364 Swift tests across 10 bundles, and the complete
+The package contains 369 Swift tests across 10 bundles, and the complete
 package-wide suite passes on the configured Xcode toolchain. Signed-app,
 physical-device, live UI, real-model, and production-server validation remain
 explicit release gates.
@@ -343,10 +344,12 @@ device guarantees.
 
 ## Integration boundaries
 
-The package is a SwiftPM library family with a buildable SwiftUI example host,
-not a signed Xcode application. A production app supplies its own:
+The package includes the MLX Swift, Hugging Face, and Transformers dependencies
+needed by `ArchonAgent`; consumers do not need to add a separate local-provider
+package. The package is a SwiftPM library family with a buildable SwiftUI example
+host, not a signed Xcode application. A production app supplies its own:
 
-- model tokenizer/text adapters and provider credentials;
+- provider credentials, network consent, and any app-specific non-MLX model adapters;
 - privacy usage descriptions, entitlements, and platform permissions;
 - MCP servers, search services, lifecycle forwarding, and host semantic observations;
 - user-facing policy for side effects and data retention.

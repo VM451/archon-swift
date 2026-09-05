@@ -6,7 +6,8 @@ public enum VectorMath: Sendable {
     /// Computes cosine similarity between two equal-length float vectors using Accelerate vDSP.
     /// Range: [-1.0, 1.0] (for normalized unit vectors: [0.0, 1.0])
     public static func cosineSimilarity(_ a: [Float], _ b: [Float]) -> Float {
-        guard a.count == b.count, !a.isEmpty else { return 0.0 }
+        guard a.count == b.count, !a.isEmpty,
+              a.allSatisfy(\.isFinite), b.allSatisfy(\.isFinite) else { return 0.0 }
         
         var dotProduct: Float = 0.0
         var normA: Float = 0.0
@@ -17,7 +18,9 @@ public enum VectorMath: Sendable {
         vDSP_dotpr(b, 1, b, 1, &normB, vDSP_Length(a.count))
         
         let denominator = sqrt(normA) * sqrt(normB)
-        return denominator == 0 ? 0 : (dotProduct / denominator)
+        guard denominator.isFinite, denominator > 0 else { return 0 }
+        let similarity = dotProduct / denominator
+        return similarity.isFinite ? min(max(similarity, -1), 1) : 0
     }
 
     /// Computes Euclidean distance between two float vectors using Accelerate vDSP.

@@ -5,6 +5,8 @@ import Accelerate
 /// Concrete local database store backed by SQLite (via GRDB) and Accelerate framework SIMD vector operations.
 /// Supports Core Memories, Knowledge Graph, Documents/Bookmarks (Supermemory), Recall Dialogue Logs (Letta), and Summaries (Zep).
 public actor LocalVectorStore: VectorStore {
+    private static let maximumVectorDimensions = 16_384
+    private static let maximumMetadataBytes = 1 * 1024 * 1024
     private let dbQueue: DatabaseQueue
     private let alpha: Float // Vector similarity weight (default 0.7)
     private let beta: Float  // BM25 text rank weight (default 0.3)
@@ -175,8 +177,12 @@ public actor LocalVectorStore: VectorStore {
     public func saveBatch(items: [MemoryItem]) async throws {
         try await dbQueue.write { db in
             for item in items {
+                try Self.validate(vector: item.vector, label: "memory")
                 let vectorData = Data(bytes: item.vector, count: item.vector.count * MemoryLayout<Float>.size)
                 let metadataData = try JSONEncoder().encode(item.metadata)
+                guard metadataData.count <= Self.maximumMetadataBytes else {
+                    throw ArchonMemoryError.inputTooLarge(maxBytes: Self.maximumMetadataBytes)
+                }
                 let metadataJson = String(data: metadataData, encoding: .utf8) ?? "{}"
 
                 try db.execute(
@@ -361,7 +367,15 @@ public actor LocalVectorStore: VectorStore {
         limit: Int,
         filters: MemoryFilter?
     ) async throws -> [SearchResult] {
-        guard (0...500).contains(limit) else { return [] }
+        guard (0...500).contains(limit) else {
+            throw ArchonMemoryError.invalidSearchRequest("limit must be between 0 and 500")
+        }
+        if let query, query.utf8.count > Self.maximumMetadataBytes {
+            throw ArchonMemoryError.invalidSearchRequest("query is too large")
+        }
+        if let vector, !vector.allSatisfy(\.isFinite) {
+            throw ArchonMemoryError.invalidSearchRequest("query vector contains a non-finite value")
+        }
         let candidates = try await fetchAll(filters: filters)
         guard !candidates.isEmpty else { return [] }
         
@@ -415,7 +429,10 @@ public actor LocalVectorStore: VectorStore {
             }
         }
         
-        results.sort(by: { $0.score > $1.score })
+        results.sort { lhs, rhs in
+            if lhs.score != rhs.score { return lhs.score > rhs.score }
+            return lhs.item.id.uuidString < rhs.item.id.uuidString
+        }
         let trimmedResults = Array(results.prefix(limit))
         
         if !trimmedResults.isEmpty {
@@ -438,10 +455,15 @@ public actor LocalVectorStore: VectorStore {
 
     public func saveDocument(doc: DocumentItem) async throws {
         try await dbQueue.write { db in
+            try Self.validate(vector: doc.vector, label: "document")
             let vectorData = Data(bytes: doc.vector, count: doc.vector.count * MemoryLayout<Float>.size)
             let tagsData = try JSONEncoder().encode(doc.tags)
             let tagsJson = String(data: tagsData, encoding: .utf8) ?? "[]"
             let metadataData = try JSONEncoder().encode(doc.metadata)
+            guard tagsData.count <= Self.maximumMetadataBytes,
+                  metadataData.count <= Self.maximumMetadataBytes else {
+                throw ArchonMemoryError.inputTooLarge(maxBytes: Self.maximumMetadataBytes)
+            }
             let metadataJson = String(data: metadataData, encoding: .utf8) ?? "{}"
 
             try db.execute(
@@ -477,6 +499,15 @@ public actor LocalVectorStore: VectorStore {
                     doc.updatedAt.timeIntervalSince1970,
                     doc.isDeleted
                 ]
+            )
+        }
+    }
+
+    private static func validate(vector: [Float], label: String) throws {
+        guard vector.count <= maximumVectorDimensions,
+              vector.allSatisfy(\.isFinite) else {
+            throw ArchonMemoryError.invalidSearchRequest(
+                "\(label) vector must contain at most \(maximumVectorDimensions) finite values"
             )
         }
     }
@@ -804,13 +835,20 @@ public actor LocalVectorStore: VectorStore {
         
         var vector: [Float] = []
         if let vectorBlob: Data = row["vectorData"] {
+            guard vectorBlob.count % MemoryLayout<Float>.size == 0 else {
+                throw ArchonMemoryError.invalidConfiguration("Stored memory vector has an invalid byte length.")
+            }
             vector = vectorBlob.withUnsafeBytes { buffer in
                 Array(buffer.bindMemory(to: Float.self))
             }
+            try validate(vector: vector, label: "stored memory")
         }
         
         var metadata: [String: String] = [:]
         if let jsonStr: String = row["metadataJson"], let data = jsonStr.data(using: .utf8) {
+            guard data.count <= maximumMetadataBytes else {
+                throw ArchonMemoryError.inputTooLarge(maxBytes: maximumMetadataBytes)
+            }
             metadata = (try? JSONDecoder().decode([String: String].self, from: data)) ?? [:]
         }
         

@@ -82,6 +82,19 @@ struct ToolDispatcherTests {
         #expect(valid.content == "called")
     }
 
+    @Test("Nested dynamic JSON values round-trip without stringification")
+    func nestedAnySendableRoundTrip() throws {
+        let original = AnySendable([
+            "outer": AnySendable([
+                AnySendable("value"),
+                AnySendable(["enabled": AnySendable(true)])
+            ])
+        ])
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(AnySendable.self, from: data)
+        #expect(decoded == original)
+    }
+
     @Test("Tool effect ledger replays a receipt instead of repeating the side effect")
     func testToolEffectReceipt() async {
         let registry = ToolRegistry()
@@ -132,7 +145,7 @@ struct MultiAgentTests {
         }
         childBuilder.setEntryPoint("childWorker")
         childBuilder.addEdge(from: "childWorker", to: EndNode.id)
-        let childGraph = childBuilder.compile()
+        let childGraph = try childBuilder.compile()
 
         // Parent Graph
         let parentBuilder = GraphBuilder<PersistentState>()
@@ -147,7 +160,7 @@ struct MultiAgentTests {
         parentBuilder.setEntryPoint("subAgent")
         parentBuilder.addEdge(from: "subAgent", to: EndNode.id)
 
-        let parentGraph = parentBuilder.compile()
+        let parentGraph = try parentBuilder.compile()
         let finalState = try await parentGraph.invoke(initialState: PersistentState(step: 10, data: "start"))
 
         #expect(finalState.step == 60)
@@ -173,7 +186,7 @@ struct MultiAgentTests {
         builder.setEntryPoint("parallelWorker")
         builder.addEdge(from: "parallelWorker", to: EndNode.id)
 
-        let graph = builder.compile()
+        let graph = try builder.compile()
         let res = try await graph.invoke(initialState: SimpleAgentState(count: 0))
 
         #expect(res.count == 30)
@@ -221,7 +234,7 @@ struct ConcurrencyStressTests {
         }
         builder.setEntryPoint("worker")
         builder.addEdge(from: "worker", to: EndNode.id)
-        let graph = builder.compile()
+        let graph = try builder.compile()
 
         try await withThrowingTaskGroup(of: SimpleAgentState.self) { group in
             for i in 0..<50 {

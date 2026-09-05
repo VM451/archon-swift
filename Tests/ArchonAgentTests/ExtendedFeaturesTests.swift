@@ -17,7 +17,7 @@ struct SupervisorAndSwarmTests {
         }
         mathBuilder.setEntryPoint("math")
         mathBuilder.addEdge(from: "math", to: EndNode.id)
-        let mathWorker = AgentWorker(name: "MathWorker", roleDescription: "Solves arithmetic calculations", graph: mathBuilder.compile())
+        let mathWorker = AgentWorker(name: "MathWorker", roleDescription: "Solves arithmetic calculations", graph: try mathBuilder.compile())
 
         // Build worker 2: Text Worker
         let textBuilder = GraphBuilder<SimpleAgentState>()
@@ -28,7 +28,7 @@ struct SupervisorAndSwarmTests {
         }
         textBuilder.setEntryPoint("text")
         textBuilder.addEdge(from: "text", to: EndNode.id)
-        let textWorker = AgentWorker(name: "TextWorker", roleDescription: "Summarizes text documents", graph: textBuilder.compile())
+        let textWorker = AgentWorker(name: "TextWorker", roleDescription: "Summarizes text documents", graph: try textBuilder.compile())
 
         // Mock LLM provider that selects MathWorker
         let provider = AppleFoundationModelProvider(id: "test.supervisor", simulatedDelay: 0.0)
@@ -54,7 +54,7 @@ struct SupervisorAndSwarmTests {
         }
         graph1Builder.setEntryPoint("agent1")
         graph1Builder.addEdge(from: "agent1", to: EndNode.id)
-        orchestrator.register(agentName: "Agent1", graph: graph1Builder.compile())
+        orchestrator.register(agentName: "Agent1", graph: try graph1Builder.compile())
 
         let graph2Builder = GraphBuilder<SimpleAgentState>()
         graph2Builder.addNode("agent2") { state in
@@ -64,7 +64,7 @@ struct SupervisorAndSwarmTests {
         }
         graph2Builder.setEntryPoint("agent2")
         graph2Builder.addEdge(from: "agent2", to: EndNode.id)
-        orchestrator.register(agentName: "Agent2", graph: graph2Builder.compile())
+        orchestrator.register(agentName: "Agent2", graph: try graph2Builder.compile())
 
         let intermediateState = try await orchestrator.handoff(from: "User", to: "Agent1", state: SimpleAgentState(count: 5), threadId: "t1")
         #expect(intermediateState.count == 15)
@@ -88,7 +88,7 @@ struct AgentViewModelTests {
         builder.setEntryPoint("compute")
         builder.addEdge(from: "compute", to: EndNode.id)
 
-        let graph = builder.compile()
+        let graph = try builder.compile()
         let vm = AgentViewModel(graph: graph, initialState: SimpleAgentState(count: 0))
 
         vm.start()
@@ -114,7 +114,7 @@ struct AgentViewModelTests {
         builder.setEntryPoint("riskyNode")
         builder.addEdge(from: "riskyNode", to: EndNode.id)
 
-        let graph = builder.compile(checkpointer: checkpointer)
+        let graph = try builder.compile(checkpointer: checkpointer)
         let vm = AgentViewModel(graph: graph, initialState: PersistentState(step: 0, data: "initial"))
 
         vm.start()
@@ -135,15 +135,15 @@ struct ProvidersExtendedTests {
     func testProviderConfigurations() throws {
         let openai = OpenAIProvider(apiKey: "sk-test", model: "gpt-4o")
         #expect(openai.id == "openai.gpt-4o")
-        #expect(openai.apiKey == "sk-test")
+        #expect(!openai.capabilities.supportsStreaming)
 
         let anthropic = AnthropicProvider(apiKey: "anth-test", model: "claude-3-5-sonnet")
         #expect(anthropic.id == "anthropic.claude-3-5-sonnet")
-        #expect(anthropic.apiKey == "anth-test")
+        #expect(!anthropic.capabilities.supportsStreaming)
 
         let gemini = GoogleGeminiProvider(apiKey: "gem-test", model: "gemini-1.5-pro")
         #expect(gemini.id == "google.gemini-1.5-pro")
-        #expect(gemini.apiKey == "gem-test")
+        #expect(!gemini.capabilities.supportsStreaming)
 
         let ollama = OllamaProvider(model: "llama3:8b")
         #expect(ollama.id == "ollama.llama3:8b")

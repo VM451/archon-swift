@@ -4,7 +4,7 @@ import Foundation
 public final class OpenAIProvider: LLMProvider, @unchecked Sendable {
     public let id: String
     public let capabilities: ModelCapabilities
-    public let apiKey: String
+    private let apiKey: String
     public let endpoint: URL
     public let model: String
     private let urlSession: URLSession
@@ -17,7 +17,9 @@ public final class OpenAIProvider: LLMProvider, @unchecked Sendable {
         urlSession: URLSession = .shared
     ) {
         self.id = "openai.\(model)"
-        self.capabilities = capabilities
+        // This implementation performs one request and emits one response;
+        // do not advertise incremental streaming until SSE is implemented.
+        self.capabilities = capabilities.withStreaming(false)
         self.apiKey = apiKey
         self.endpoint = endpoint
         self.model = model
@@ -74,17 +76,25 @@ public final class OpenAIProvider: LLMProvider, @unchecked Sendable {
         }
 
         let bodyData = try JSONSerialization.data(withJSONObject: payload)
+        try LLMProviderResponsePolicy.validateRequest(bodyData, provider: "OpenAI")
 
         var request = URLRequest(url: endpoint)
+        request.timeoutInterval = 120
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = bodyData
 
         let (data, response) = try await urlSession.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
-            let errorText = String(data: data, encoding: .utf8) ?? "Unknown OpenAI Error"
-            throw GraphError.toolExecutionFailed(toolName: "OpenAI", errorDescription: errorText)
+        try LLMProviderResponsePolicy.validate(data, provider: "OpenAI")
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw GraphError.toolExecutionFailed(toolName: "OpenAI", errorDescription: "The provider returned an invalid HTTP response.")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw GraphError.toolExecutionFailed(
+                toolName: "OpenAI",
+                errorDescription: "The provider returned HTTP status (httpResponse.statusCode)."
+            )
         }
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],

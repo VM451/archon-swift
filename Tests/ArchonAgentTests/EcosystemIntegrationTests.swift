@@ -148,7 +148,7 @@ struct EcosystemIntegrationTests {
         builder.addEdge(from: "searchMemory", to: "executeSandbox")
         builder.addEdge(from: "executeSandbox", to: EndNode.id)
 
-        let graph = builder.compile(checkpointer: InMemoryCheckpointer())
+        let graph = try builder.compile(checkpointer: InMemoryCheckpointer())
         let finalState = try await graph.invoke(initialState: EcosystemState(query: "Swift UI"))
 
         #expect(finalState.answer == "Pipeline completed successfully.")

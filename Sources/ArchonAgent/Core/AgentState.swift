@@ -8,7 +8,12 @@ public protocol AgentState: Codable, Sendable, Equatable {
     init()
 }
 
-/// A type-erased Sendable and Codable container for partial state updates and dynamic properties.
+/// A type-erased Sendable and Codable container for partial state updates and
+/// dynamic JSON properties.
+///
+/// This remains source-compatible with the original `Any`-backed API, but
+/// decoded collections retain their `AnySendable` elements. That keeps nested
+/// values recursively Codable instead of degrading them to `String(describing:)`.
 public struct AnySendable: @unchecked Sendable, Codable, Equatable {
     public let value: Any
 
@@ -27,11 +32,14 @@ public struct AnySendable: @unchecked Sendable, Codable, Equatable {
         } else if let stringVal = try? container.decode(String.self) {
             self.value = stringVal
         } else if let arrayVal = try? container.decode([AnySendable].self) {
-            self.value = arrayVal.map(\.value)
+            self.value = arrayVal
         } else if let dictVal = try? container.decode([String: AnySendable].self) {
-            self.value = dictVal.mapValues(\.value)
+            self.value = dictVal
         } else {
-            self.value = try container.decode(String.self)
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "AnySendable only supports JSON scalar, array, and object values."
+            )
         }
     }
 
@@ -54,12 +62,24 @@ public struct AnySendable: @unchecked Sendable, Codable, Equatable {
             let wrapper = EncodableWrapper(codableVal)
             try wrapper.encode(to: encoder)
         default:
-            try container.encode(String(describing: value))
+            throw EncodingError.invalidValue(
+                value,
+                EncodingError.Context(
+                    codingPath: encoder.codingPath,
+                    debugDescription: "AnySendable only supports JSON scalar, array, and object values."
+                )
+            )
         }
     }
 
     public static func == (lhs: AnySendable, rhs: AnySendable) -> Bool {
-        String(describing: lhs.value) == String(describing: rhs.value)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let lhsData = try? encoder.encode(lhs),
+              let rhsData = try? encoder.encode(rhs) else {
+            return false
+        }
+        return lhsData == rhsData
     }
 }
 

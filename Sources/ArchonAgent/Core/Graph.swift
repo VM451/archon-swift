@@ -230,7 +230,7 @@ public final class Graph<State: AgentState>: Sendable {
         }
         builder.setEntryPoint(nextNodeId)
 
-        let subGraph = builder.compile(
+        let subGraph = try builder.compile(
             checkpointer: self.checkpointer,
             maxRecursionDepth: self.maxRecursionDepth
         )

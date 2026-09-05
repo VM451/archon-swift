@@ -1,4 +1,5 @@
 import Foundation
+import ArchonCore
 
 /// Boundary policy for URLs that can be fetched by the search/content tools.
 enum SearchURLPolicy {
@@ -25,32 +26,7 @@ enum SearchURLPolicy {
     }
 
     static func validate(_ url: URL) -> Bool {
-        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
-              let host = url.host?.lowercased(), !host.isEmpty else { return false }
-        if host == "localhost" || host.hasSuffix(".localhost") || host.hasSuffix(".local") || host == "::1" {
-            return false
-        }
-        if host.hasPrefix("127.") || host == "0.0.0.0" || host == "::" || host.hasPrefix("169.254.") || host.hasPrefix("fe80:") || host.hasPrefix("fc") || host.hasPrefix("fd") {
-            return false
-        }
-        // Reject alternate numeric and IPv4-mapped IPv6 spellings that do not
-        // survive the simple dotted-decimal checks below.
-        // Avoid incomplete textual IPv6 classification; reject literals at
-        // this boundary and leave hostname resolution to the host networking
-        // layer, where resolved-address policy can be enforced atomically.
-        if host.contains(":") {
-            return false
-        }
-        if host.split(separator: ".").count == 1, Int(host) != nil {
-            return false
-        }
-        let parts = host.split(separator: ".").compactMap { Int($0) }
-        if parts.count == 4 {
-            if parts[0] == 10 || (parts[0] == 192 && parts[1] == 168) || (parts[0] == 172 && (16...31).contains(parts[1])) {
-                return false
-            }
-        }
-        return true
+        (try? ArchonNetworkPolicy.publicInternet.validate(url)) != nil
     }
 
     /// Local files are an explicit on-device capability used by the local-workspace

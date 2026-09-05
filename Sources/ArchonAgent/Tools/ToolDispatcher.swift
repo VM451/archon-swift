@@ -21,7 +21,12 @@ public final class ToolRegistry: @unchecked Sendable {
     public func definitions() -> [ToolDefinition] {
         lock.lock()
         defer { lock.unlock() }
-        return tools.values.map(\.definition)
+        return tools.values
+            .map(\.definition)
+            .sorted { lhs, rhs in
+                if lhs.name != rhs.name { return lhs.name < rhs.name }
+                return lhs.id < rhs.id
+            }
     }
 
     /// Looks up a registered tool by its name.
@@ -35,6 +40,7 @@ public final class ToolRegistry: @unchecked Sendable {
 /// Dynamic Tool Dispatcher that isolates tool execution, validates JSON inputs against declared schemas,
 /// and handles runtime execution errors cleanly without breaking the agent loop.
 public struct ToolDispatcher: Sendable {
+    private static let maximumOutputBytes = 1 * 1024 * 1024
     public let registry: ToolRegistry
     public let authorizationPolicy: ToolAuthorizationPolicy
     public let effectLedger: (any ToolEffectLedger)?
@@ -71,13 +77,24 @@ public struct ToolDispatcher: Sendable {
             )
         }
 
-        if let effectLedger, let receipt = try? await effectLedger.receipt(for: call.id) {
-            return ChatMessage.toolResult(receipt.output, toolCallId: call.id)
+        if let effectLedger {
+            do {
+                switch try await effectLedger.reserve(callID: call.id, toolName: call.name) {
+                case .replay(let receipt):
+                    return ChatMessage.toolResult(receipt.output, toolCallId: call.id)
+                case .inFlight:
+                    return ChatMessage.toolResult("Tool call is already executing.", toolCallId: call.id)
+                case .execute:
+                    break
+                }
+            } catch {
+                return ChatMessage.toolResult("Unable to reserve tool effect safely.", toolCallId: call.id)
+            }
         }
 
         do {
             try tool.definition.validate(argumentsJSON: call.arguments)
-            let output = try await tool.call(argumentsJSON: call.arguments)
+            let output = Self.boundedOutput(try await tool.call(argumentsJSON: call.arguments))
             if let effectLedger {
                 try? await effectLedger.record(ToolEffectReceipt(
                     callID: call.id,
@@ -87,7 +104,17 @@ public struct ToolDispatcher: Sendable {
             }
             return ChatMessage.toolResult(output, toolCallId: call.id)
         } catch {
-            return ChatMessage.toolResult("Execution Error in '\(call.name)': \(error.localizedDescription)", toolCallId: call.id)
+            if let effectLedger {
+                try? await effectLedger.release(callID: call.id)
+            }
+            let reason = (error as? ToolValidationError)?.errorDescription ?? "The tool failed without exposing internal details."
+            return ChatMessage.toolResult("Execution Error in '\(call.name)': \(reason)", toolCallId: call.id)
         }
+    }
+
+    private static func boundedOutput(_ output: String) -> String {
+        guard output.utf8.count > maximumOutputBytes else { return output }
+        let prefix = output.utf8.prefix(maximumOutputBytes)
+        return String(decoding: prefix, as: UTF8.self) + "\n[output truncated]"
     }
 }

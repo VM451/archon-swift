@@ -50,6 +50,7 @@ public struct RemoteModelCatalog: PaginatedModelCatalogProvider, Sendable {
         guard let url = components?.url else { throw ArchonModelsError.invalidResponse }
 
         var httpRequest = URLRequest(url: url)
+        httpRequest.timeoutInterval = 30
         httpRequest.setValue("application/json", forHTTPHeaderField: "Accept")
         for (field, value) in headers {
             httpRequest.setValue(value, forHTTPHeaderField: field)
@@ -60,6 +61,9 @@ public struct RemoteModelCatalog: PaginatedModelCatalogProvider, Sendable {
         }
 
         let (data, response) = try await session.data(for: httpRequest)
+        guard data.count <= ModelDownloadURLPolicy.maximumResponseBytes else {
+            throw ArchonModelsError.invalidResponse
+        }
         guard let response = response as? HTTPURLResponse else { throw ArchonModelsError.invalidResponse }
         guard (200...299).contains(response.statusCode) else {
             throw ArchonModelsError.httpFailure(statusCode: response.statusCode)

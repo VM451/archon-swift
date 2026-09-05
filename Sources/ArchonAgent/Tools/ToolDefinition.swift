@@ -28,24 +28,34 @@ public struct ToolDefinition: Sendable, Codable, Equatable, Identifiable {
     /// fields, enums, properties, items, and `additionalProperties`.
     public func validate(argumentsJSON: String) throws {
         guard !parametersJSONSchema.isEmpty else { return }
-        guard let data = argumentsJSON.data(using: .utf8),
-              let value = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
+        guard let data = argumentsJSON.data(using: .utf8) else {
+            throw ToolValidationError.invalidJSON
+        }
+        guard data.count <= ToolSchemaValidator.maximumInputBytes else {
+            throw ToolValidationError.invalidArguments("input exceeds the 1 MiB limit.")
+        }
+        guard let value = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
             throw ToolValidationError.invalidJSON
         }
         let schema = ToolSchemaValue.unwrap(parametersJSONSchema)
-        guard let schema = schema as? [String: Any] else { return }
+        guard let schema = schema as? [String: Any] else {
+            throw ToolValidationError.invalidSchema("root schema must be a JSON object")
+        }
         try ToolSchemaValidator.validate(value: value, schema: schema, path: name)
     }
 }
 
 public enum ToolValidationError: Error, LocalizedError, Equatable, Sendable {
     case invalidJSON
+    case invalidSchema(String)
     case invalidArguments(String)
 
     public var errorDescription: String? {
         switch self {
         case .invalidJSON:
             return "Tool arguments are not valid JSON."
+        case .invalidSchema(let reason):
+            return "Tool schema is invalid: \(reason)"
         case .invalidArguments(let reason):
             return "Tool arguments are invalid: \(reason)"
         }
@@ -68,7 +78,16 @@ private enum ToolSchemaValue {
 }
 
 private enum ToolSchemaValidator {
-    static func validate(value: Any, schema: [String: Any], path: String) throws {
+    static let maximumInputBytes = 1 * 1024 * 1024
+    private static let maximumDepth = 64
+    private static let maximumCollectionElements = 10_000
+
+    static func validate(value: Any, schema: [String: Any], path: String, depth: Int = 0) throws {
+        guard depth <= maximumDepth else {
+            throw ToolValidationError.invalidArguments("\(path) exceeds the maximum nesting depth.")
+        }
+        try validateSizeLimits(value: value, path: path)
+
         if let enumValues = schema["enum"] as? [Any],
            !enumValues.contains(where: { jsonEqual(value, $0) }) {
             throw ToolValidationError.invalidArguments("\(path) is not an allowed value.")
@@ -97,7 +116,7 @@ private enum ToolSchemaValidator {
 
             for (name, value) in object {
                 if let propertySchema = properties[name] as? [String: Any] {
-                    try validate(value: value, schema: propertySchema, path: "\(path).\(name)")
+                    try validate(value: value, schema: propertySchema, path: "\(path).\(name)", depth: depth + 1)
                 }
             }
         }
@@ -105,7 +124,7 @@ private enum ToolSchemaValidator {
         if let items = value as? [Any],
            let itemSchema = schema["items"] as? [String: Any] {
             for (index, item) in items.enumerated() {
-                try validate(value: item, schema: itemSchema, path: "\(path)[\(index)]")
+                try validate(value: item, schema: itemSchema, path: "\(path)[\(index)]", depth: depth + 1)
             }
         }
     }
@@ -123,14 +142,27 @@ private enum ToolSchemaValidator {
             guard let number = value as? NSNumber, !(value is Bool) else { return false }
             return number.doubleValue.isFinite && number.doubleValue.rounded() == number.doubleValue
         default:
-            return true
+            return false
+        }
+    }
+
+    private static func validateSizeLimits(value: Any, path: String) throws {
+        switch value {
+        case let string as String where string.utf8.count > maximumInputBytes:
+            throw ToolValidationError.invalidArguments("\(path) exceeds the maximum string size.")
+        case let array as [Any] where array.count > maximumCollectionElements:
+            throw ToolValidationError.invalidArguments("\(path) exceeds the maximum array size.")
+        case let object as [String: Any] where object.count > maximumCollectionElements:
+            throw ToolValidationError.invalidArguments("\(path) exceeds the maximum object size.")
+        default:
+            break
         }
     }
 
     private static func jsonEqual(_ lhs: Any, _ rhs: Any) -> Bool {
         guard let lhsData = try? JSONSerialization.data(withJSONObject: [lhs], options: [.sortedKeys]),
               let rhsData = try? JSONSerialization.data(withJSONObject: [rhs], options: [.sortedKeys]) else {
-            return String(describing: lhs) == String(describing: rhs)
+            return false
         }
         return lhsData == rhsData
     }

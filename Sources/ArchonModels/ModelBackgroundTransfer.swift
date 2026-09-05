@@ -180,8 +180,10 @@ public actor FileModelBackgroundDownloadStore: ModelBackgroundDownloadStore {
 
     private func loadIfNeeded() throws {
         guard !loaded else { return }
-        loaded = true
-        guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            loaded = true
+            return
+        }
         do {
             let data = try Data(contentsOf: fileURL)
             if let decoded = try? JSONDecoder().decode([PersistedModelBackgroundDownloadRecord].self, from: data) {
@@ -197,6 +199,10 @@ public actor FileModelBackgroundDownloadStore: ModelBackgroundDownloadStore {
                     return (safe.request.identifier, safe)
                 })
             }
+            // Mark the store loaded only after a complete, valid decode. A
+            // corrupt file must remain retryable and observable rather than
+            // being silently converted into an empty in-memory store.
+            loaded = true
         } catch {
             throw ModelBackgroundTransferError.persistence(error.localizedDescription)
         }
@@ -564,8 +570,12 @@ public actor ModelBackgroundTransferCoordinator {
         guard !request.identifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ModelBackgroundTransferError.invalidRequest("identifier is empty")
         }
-        guard request.url.scheme?.lowercased() == "https" || request.url.scheme?.lowercased() == "http" else {
-            throw ModelBackgroundTransferError.invalidRequest("URLSession background transfers require HTTP or HTTPS")
+        do {
+            try ModelDownloadURLPolicy.validate(request.url)
+        } catch {
+            throw ModelBackgroundTransferError.invalidRequest(
+                "url must be an HTTPS model endpoint"
+            )
         }
         guard request.destinationURL.isFileURL else {
             throw ModelBackgroundTransferError.invalidRequest("destinationURL must be a file URL")
@@ -788,9 +798,10 @@ private final class ModelBackgroundURLSessionDelegate: NSObject, URLSessionDownl
         do {
             try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
             if FileManager.default.fileExists(atPath: destination.path) {
-                try FileManager.default.removeItem(at: destination)
+                _ = try FileManager.default.replaceItemAt(destination, withItemAt: location)
+            } else {
+                try FileManager.default.moveItem(at: location, to: destination)
             }
-            try FileManager.default.moveItem(at: location, to: destination)
             Task { await owner?.receiveFinished(taskIdentifier: downloadTask.taskIdentifier, destinationURL: destination, errorMessage: nil) }
         } catch {
             Task { await owner?.receiveFinished(taskIdentifier: downloadTask.taskIdentifier, destinationURL: nil, errorMessage: error.localizedDescription) }

@@ -6,6 +6,7 @@ public enum ArchonMemoryError: Error, LocalizedError, Equatable, Sendable {
     case documentLoadFailed(String)
     case unsupportedDocumentFormat(String)
     case invalidConfiguration(String)
+    case invalidSearchRequest(String)
 
     public var errorDescription: String? {
         switch self {
@@ -14,6 +15,7 @@ public enum ArchonMemoryError: Error, LocalizedError, Equatable, Sendable {
         case .documentLoadFailed(let reason): "Document loading failed: \(reason)"
         case .unsupportedDocumentFormat(let reason): "Unsupported document format: \(reason)"
         case .invalidConfiguration(let reason): "Invalid ArchonMemory configuration: \(reason)"
+        case .invalidSearchRequest(let reason): "Invalid memory search request: \(reason)"
         }
     }
 }

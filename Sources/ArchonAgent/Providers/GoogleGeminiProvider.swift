@@ -4,7 +4,7 @@ import Foundation
 public final class GoogleGeminiProvider: LLMProvider, @unchecked Sendable {
     public let id: String
     public let capabilities: ModelCapabilities
-    public let apiKey: String
+    private let apiKey: String
     public let model: String
     private let urlSession: URLSession
 
@@ -15,7 +15,7 @@ public final class GoogleGeminiProvider: LLMProvider, @unchecked Sendable {
         urlSession: URLSession = .shared
     ) {
         self.id = "google.\(model)"
-        self.capabilities = capabilities
+        self.capabilities = capabilities.withStreaming(false)
         self.apiKey = apiKey
         self.model = model
         self.urlSession = urlSession
@@ -55,17 +55,25 @@ public final class GoogleGeminiProvider: LLMProvider, @unchecked Sendable {
         }
 
         let bodyData = try JSONSerialization.data(withJSONObject: payload)
+        try LLMProviderResponsePolicy.validateRequest(bodyData, provider: "GoogleGemini")
 
         var request = URLRequest(url: url)
+        request.timeoutInterval = 120
         request.httpMethod = "POST"
         request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = bodyData
 
         let (data, response) = try await urlSession.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
-            let err = String(data: data, encoding: .utf8) ?? "Unknown Google Gemini error"
-            throw GraphError.toolExecutionFailed(toolName: "GoogleGemini", errorDescription: err)
+        try LLMProviderResponsePolicy.validate(data, provider: "GoogleGemini")
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw GraphError.toolExecutionFailed(toolName: "GoogleGemini", errorDescription: "The provider returned an invalid HTTP response.")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw GraphError.toolExecutionFailed(
+                toolName: "GoogleGemini",
+                errorDescription: "The provider returned HTTP status (httpResponse.statusCode)."
+            )
         }
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],

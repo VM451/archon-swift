@@ -7,21 +7,29 @@ boundaries.
 ## Core pieces
 
 - `AgentState` is the Codable/Sendable state carried through a graph.
-- `GraphBuilder` compiles nodes and static, conditional, or branch edges.
+- `GraphBuilder` validates and compiles nodes and static, conditional, or branch
+  edges; invalid graphs fail at compile time with `GraphError.invalidGraph`.
 - `Graph` streams lifecycle events or returns a final state.
 - `StateCheckpointer` persists thread history, supports latest-state recovery,
   deletion, and forks.
 - `GraphInterrupt` supports approval or pause points.
 - Tool registries, model policies, tracing, token accounting, and evaluation
   harnesses remain independently configurable.
-- `ToolEffectLedger` records successful idempotent tool receipts so recovery
-  can replay a completed side effect instead of executing it twice.
+- `ToolEffectLedger` atomically reserves call IDs, records successful
+  idempotent tool receipts, and replays completed effects instead of executing
+  them twice.
 
 The graph does not download models. `ModelPolicy` and the routing layer select
 an explicitly permitted provider; `localOnly` never silently chooses a cloud
 provider and can explicitly prefer Apple's Foundation Models runtime when the
-device reports it available. Use the consuming app for credentials,
-side-effect approval, and host-specific model adapters.
+device reports it available. `ArchonAgent` includes the MLX/Hugging Face
+dependencies needed by `MLXLocalProvider` so the bundled local path is ready
+without another provider package. Use the consuming app for credentials,
+side-effect approval, and host-specific non-MLX model adapters.
+
+Custom `ToolEffectLedger` conformances must implement the reserve/record/release
+protocol. `record` is valid only after a successful reservation; release a
+reservation when execution is skipped or fails before producing a receipt.
 
 ## Adaptive local model selection
 

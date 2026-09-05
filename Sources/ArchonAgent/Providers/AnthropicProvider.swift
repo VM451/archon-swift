@@ -4,7 +4,7 @@ import Foundation
 public final class AnthropicProvider: LLMProvider, @unchecked Sendable {
     public let id: String
     public let capabilities: ModelCapabilities
-    public let apiKey: String
+    private let apiKey: String
     public let endpoint: URL
     public let model: String
     private let urlSession: URLSession
@@ -17,7 +17,7 @@ public final class AnthropicProvider: LLMProvider, @unchecked Sendable {
         urlSession: URLSession = .shared
     ) {
         self.id = "anthropic.\(model)"
-        self.capabilities = capabilities
+        self.capabilities = capabilities.withStreaming(false)
         self.apiKey = apiKey
         self.endpoint = endpoint
         self.model = model
@@ -68,8 +68,10 @@ public final class AnthropicProvider: LLMProvider, @unchecked Sendable {
         }
 
         let bodyData = try JSONSerialization.data(withJSONObject: payload)
+        try LLMProviderResponsePolicy.validateRequest(bodyData, provider: "Anthropic")
 
         var request = URLRequest(url: endpoint)
+        request.timeoutInterval = 120
         request.httpMethod = "POST"
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
@@ -77,9 +79,15 @@ public final class AnthropicProvider: LLMProvider, @unchecked Sendable {
         request.httpBody = bodyData
 
         let (data, response) = try await urlSession.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
-            let err = String(data: data, encoding: .utf8) ?? "Unknown Anthropic error"
-            throw GraphError.toolExecutionFailed(toolName: "Anthropic", errorDescription: err)
+        try LLMProviderResponsePolicy.validate(data, provider: "Anthropic")
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw GraphError.toolExecutionFailed(toolName: "Anthropic", errorDescription: "The provider returned an invalid HTTP response.")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw GraphError.toolExecutionFailed(
+                toolName: "Anthropic",
+                errorDescription: "The provider returned HTTP status (httpResponse.statusCode)."
+            )
         }
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],

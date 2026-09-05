@@ -10,7 +10,7 @@ public enum EndNode {
 }
 
 /// The result returned by an AgentNode upon execution.
-public enum NodeResult<State: AgentState>: @unchecked Sendable {
+public enum NodeResult<State: AgentState>: Sendable {
     /// Overwrites the full state.
     case state(State)
     /// Applies an in-place mutation to the state.

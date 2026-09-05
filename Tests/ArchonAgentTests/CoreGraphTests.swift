@@ -30,7 +30,7 @@ struct CoreGraphTests {
         builder.addEdge(from: "increment", to: "appendMsg")
         builder.addEdge(from: "appendMsg", to: EndNode.id)
 
-        let graph = builder.compile()
+        let graph = try builder.compile()
         let result = try await graph.invoke(initialState: SimpleAgentState())
 
         #expect(result.count == 1)
@@ -56,7 +56,7 @@ struct CoreGraphTests {
             }
         }
 
-        let graph = builder.compile()
+        let graph = try builder.compile()
         let result = try await graph.invoke(initialState: SimpleAgentState())
 
         #expect(result.count == 5)
@@ -96,7 +96,7 @@ struct CoreGraphTests {
         builder.addEdge(from: "urgentHandler", to: EndNode.id)
         builder.addEdge(from: "standardHandler", to: EndNode.id)
 
-        let graph = builder.compile()
+        let graph = try builder.compile()
         let result = try await graph.invoke(initialState: SimpleAgentState())
 
         #expect(result.count == 911)
@@ -115,10 +115,44 @@ struct CoreGraphTests {
         builder.setEntryPoint("infinite")
         builder.addEdge(from: "infinite", to: "infinite")
 
-        let graph = builder.compile(maxRecursionDepth: 10)
+        let graph = try builder.compile(maxRecursionDepth: 10)
 
         await #expect(throws: GraphError.self) {
             try await graph.invoke(initialState: SimpleAgentState())
         }
+    }
+
+    @Test("Graph compilation rejects missing nodes and missing entry points")
+    func testGraphCompilationValidation() throws {
+        let missingEntry = GraphBuilder<SimpleAgentState>()
+        missingEntry.addNode("worker") { state in state }
+        #expect(throws: GraphError.self) {
+            try missingEntry.compile()
+        }
+
+        let missingTarget = GraphBuilder<SimpleAgentState>()
+        missingTarget.addNode("worker") { state in state }
+        missingTarget.setEntryPoint("worker")
+        missingTarget.addEdge(from: "worker", to: "does-not-exist")
+        #expect(throws: GraphError.self) {
+            try missingTarget.compile()
+        }
+    }
+
+    @Test("Graph compilation installs reducers before execution")
+    func testReducerRegistrationIsSynchronous() async throws {
+        let builder = GraphBuilder<SimpleAgentState>()
+        builder.addNode("emit") { _, _ in
+            NodeResult<SimpleAgentState>.dictionary(["count": "5"])
+        }
+        builder.addReducer(forKey: "count") { state, value in
+            state.count += Int(value) ?? 0
+        }
+        builder.setEntryPoint("emit")
+        builder.addEdge(from: "emit", to: EndNode.id)
+
+        let graph = try builder.compile()
+        let result = try await graph.invoke()
+        #expect(result.count == 5)
     }
 }

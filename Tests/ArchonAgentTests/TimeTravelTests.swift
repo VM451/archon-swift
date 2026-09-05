@@ -56,7 +56,7 @@ struct HumanInTheLoopTests {
         builder.addEdge(from: "criticalAction", to: "finalize")
         builder.addEdge(from: "finalize", to: EndNode.id)
 
-        let graph = builder.compile(checkpointer: checkpointer)
+        let graph = try builder.compile(checkpointer: checkpointer)
         let threadId = "hitl-thread"
 
         // Initial run should halt at criticalAction

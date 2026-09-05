@@ -15,7 +15,7 @@ public final class OllamaProvider: LLMProvider, @unchecked Sendable {
         urlSession: URLSession = .shared
     ) {
         self.id = "ollama.\(model)"
-        self.capabilities = capabilities
+        self.capabilities = capabilities.withStreaming(false)
         self.endpoint = endpoint
         self.model = model
         self.urlSession = urlSession
@@ -48,16 +48,24 @@ public final class OllamaProvider: LLMProvider, @unchecked Sendable {
         }
 
         let bodyData = try JSONSerialization.data(withJSONObject: payload)
+        try LLMProviderResponsePolicy.validateRequest(bodyData, provider: "Ollama")
 
         var request = URLRequest(url: endpoint)
+        request.timeoutInterval = 120
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = bodyData
 
         let (data, response) = try await urlSession.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
-            let err = String(data: data, encoding: .utf8) ?? "Unknown Ollama error"
-            throw GraphError.toolExecutionFailed(toolName: "Ollama", errorDescription: err)
+        try LLMProviderResponsePolicy.validate(data, provider: "Ollama")
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw GraphError.toolExecutionFailed(toolName: "Ollama", errorDescription: "The provider returned an invalid HTTP response.")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw GraphError.toolExecutionFailed(
+                toolName: "Ollama",
+                errorDescription: "The provider returned HTTP status (httpResponse.statusCode)."
+            )
         }
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -118,7 +126,7 @@ public final class MistralProvider: LLMProvider, @unchecked Sendable {
         urlSession: URLSession = .shared
     ) {
         self.id = "mistral.\(model)"
-        self.capabilities = .cloudStandard
+        self.capabilities = .cloudStandard.withStreaming(false)
         self.openAIWrapper = OpenAIProvider(
             apiKey: apiKey,
             model: model,
@@ -150,7 +158,7 @@ public final class GrokProvider: LLMProvider, @unchecked Sendable {
         urlSession: URLSession = .shared
     ) {
         self.id = "xai.\(model)"
-        self.capabilities = .cloudStandard
+        self.capabilities = .cloudStandard.withStreaming(false)
         self.openAIWrapper = OpenAIProvider(
             apiKey: apiKey,
             model: model,
@@ -182,7 +190,7 @@ public final class NvidiaProvider: LLMProvider, @unchecked Sendable {
         urlSession: URLSession = .shared
     ) {
         self.id = "nvidia.\(model)"
-        self.capabilities = .cloudStandard
+        self.capabilities = .cloudStandard.withStreaming(false)
         self.openAIWrapper = OpenAIProvider(
             apiKey: apiKey,
             model: model,

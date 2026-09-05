@@ -21,6 +21,21 @@ vendor APIs from leaking through default Archon contracts.
 | `ArchonModelsUI` | `ArchonCore`, `ArchonModels` | UI reads the same model actors used by the library |
 | `ArchonFull` | Base Archon products | Re-export facade only |
 
+## Out-of-the-box local provider decision
+
+`ArchonAgent` intentionally keeps its MLX Swift, MLX LM, Hugging Face, and
+Transformers dependencies in the product. This makes `MLXLocalProvider`
+available immediately to an app that imports `ArchonAgent`, without a second
+provider package or a separate dependency-integration exercise. The decision
+does not make every product heavy: applications that import only `ArchonCore`,
+`ArchonModels`, `ArchonMemory`, or another focused product do not inherit the
+`ArchonAgent` target.
+
+The app still owns credentials, privacy descriptions, entitlements, permissions,
+and any model-specific adapter that is not covered by the bundled MLX path. This
+is an intentional developer-experience tradeoff: keep the common local-agent
+path ready to use while preserving focused adoption at the product boundary.
+
 ## Reuse rule
 
 A package is eligible for the local core only when its capability is:

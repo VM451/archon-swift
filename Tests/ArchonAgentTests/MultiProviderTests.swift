@@ -91,7 +91,7 @@ struct StreamingTests {
         builder.setEntryPoint("step1")
         builder.addEdge(from: "step1", to: EndNode.id)
 
-        let graph = builder.compile()
+        let graph = try builder.compile()
         var nodeCount = 0
         var isFinished = false
 

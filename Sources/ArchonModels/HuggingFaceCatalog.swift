@@ -140,11 +140,15 @@ public struct HuggingFaceCatalog: PaginatedModelCatalogProvider, Sendable {
 
     private func response(for url: URL) async throws -> (Data, HTTPURLResponse) {
         var request = URLRequest(url: url)
+        request.timeoutInterval = 30
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let token = await tokenStore?.token(for: "huggingface.co") {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         let (data, response) = try await session.data(for: request)
+        guard data.count <= ModelDownloadURLPolicy.maximumResponseBytes else {
+            throw ArchonModelsError.invalidResponse
+        }
         guard let response = response as? HTTPURLResponse else { throw ArchonModelsError.invalidResponse }
         guard (200...299).contains(response.statusCode) else {
             throw ArchonModelsError.httpFailure(statusCode: response.statusCode)

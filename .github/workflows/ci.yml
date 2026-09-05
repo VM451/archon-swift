@@ -1,0 +1,49 @@
+name: Swift Package CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: swift-package-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Build and test package
+    runs-on: macos-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: swift --version
+
+      - name: Resolve dependencies
+        run: swift package resolve
+
+      - name: Validate package description
+        run: swift package dump-package >/dev/null
+
+      - name: Build all products
+        run: swift build -j 2
+
+      - name: Run Swift Testing suite
+        run: swift test -j 2
+
+      - name: Verify product dependency scope
+        run: swift Tools/verify-product-scope.swift
+
+      - name: Verify dependency license evidence
+        run: swift Tools/verify-dependency-licenses.swift
+
+      - name: Verify competitor scorecard links and structure
+        run: swift Tools/verify-competitor-scorecard.swift
+
+      - name: Check whitespace
+        run: git diff --check

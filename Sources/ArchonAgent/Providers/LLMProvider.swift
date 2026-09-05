@@ -75,6 +75,41 @@ public struct ModelCapabilities: Sendable, Codable, Equatable {
         maxContextTokens: 128_000,
         isOnDevice: false
     )
+
+    /// Returns a copy with the provider's actual streaming contract.
+    public func withStreaming(_ supportsStreaming: Bool) -> ModelCapabilities {
+        ModelCapabilities(
+            supportsStreaming: supportsStreaming,
+            supportsToolCalling: supportsToolCalling,
+            supportsVision: supportsVision,
+            supportsJSONSchema: supportsJSONSchema,
+            maxContextTokens: maxContextTokens,
+            isOnDevice: isOnDevice
+        )
+    }
+}
+
+enum LLMProviderResponsePolicy {
+    static let maximumRequestBytes = 8 * 1024 * 1024
+    static let maximumResponseBytes = 16 * 1024 * 1024
+
+    static func validateRequest(_ data: Data, provider: String) throws {
+        guard data.count <= maximumRequestBytes else {
+            throw GraphError.toolExecutionFailed(
+                toolName: provider,
+                errorDescription: "Provider request exceeded the configured size limit."
+            )
+        }
+    }
+
+    static func validate(_ data: Data, provider: String) throws {
+        guard data.count <= maximumResponseBytes else {
+            throw GraphError.toolExecutionFailed(
+                toolName: provider,
+                errorDescription: "Provider response exceeded the configured size limit."
+            )
+        }
+    }
 }
 
 /// Generation hyperparameters for model requests.

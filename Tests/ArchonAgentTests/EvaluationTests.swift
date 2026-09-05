@@ -60,7 +60,7 @@ struct EvaluationTests {
         builder.addNode(nodeA)
         builder.setEntryPoint("FormatNode")
         builder.addEdge(AgentEdge(from: "FormatNode", to: EndNode.id))
-        let graph = builder.compile()
+        let graph = try builder.compile()
 
         let dataset = EvalDataset<EvalTestState>(
             name: "Core Prompts Suite",
@@ -101,7 +101,7 @@ struct EvaluationTests {
         builderA.addNode(nodeA)
         builderA.setEntryPoint("NodeA")
         builderA.addEdge(AgentEdge(from: "NodeA", to: EndNode.id))
-        let graphA = builderA.compile()
+        let graphA = try builderA.compile()
 
         // Variant B (higher fidelity output)
         let builderB = GraphBuilder<EvalTestState>()
@@ -113,7 +113,7 @@ struct EvaluationTests {
         builderB.addNode(nodeB)
         builderB.setEntryPoint("NodeB")
         builderB.addEdge(AgentEdge(from: "NodeB", to: EndNode.id))
-        let graphB = builderB.compile()
+        let graphB = try builderB.compile()
 
         let dataset = EvalDataset<EvalTestState>(
             name: "Fidelity Benchmark",

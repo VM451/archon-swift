@@ -82,6 +82,8 @@ public struct ModelDownloadPolicy: Sendable, Equatable {
 }
 
 enum ModelDownloadURLPolicy {
+    static let maximumResponseBytes = 16 * 1024 * 1024
+
     private final class RedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
         func urlSession(
             _ session: URLSession,
@@ -103,33 +105,10 @@ enum ModelDownloadURLPolicy {
     }
 
     static func validate(_ url: URL) throws {
-        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              let scheme = components.scheme?.lowercased(),
-              scheme == "https" || scheme == "http",
-              let rawHost = components.host?.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")),
-              !rawHost.isEmpty,
-              rawHost != "localhost",
-              !rawHost.hasSuffix(".local"),
-              !isPrivateAddress(rawHost) else {
+        do {
+            try ArchonNetworkPolicy.publicInternet.validate(url)
+        } catch {
             throw ArchonModelsError.invalidResponse
-        }
-    }
-
-    private static func isPrivateAddress(_ host: String) -> Bool {
-        let normalized = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-        if normalized.contains(":") || (normalized.split(separator: ".").count == 1 && Int(normalized) != nil) {
-            return true
-        }
-        if normalized == "::1" || normalized == "0:0:0:0:0:0:0:1" || normalized.hasPrefix("fc") || normalized.hasPrefix("fd") || normalized.hasPrefix("fe80:") {
-            return true
-        }
-        let octets = normalized.split(separator: ".").compactMap { Int($0) }
-        guard octets.count == 4, octets.allSatisfy({ (0...255).contains($0) }) else { return false }
-        switch (octets[0], octets[1]) {
-        case (0, _), (10, _), (127, _), (169, 254), (192, 168), (172, 16...31):
-            return true
-        default:
-            return false
         }
     }
 }
@@ -384,7 +363,22 @@ public actor ModelLoadManager {
         for residentModel in residentModels {
             await unload(residentModel)
         }
-        try await load(model, on: device)
+        do {
+            try await load(model, on: device)
+        } catch {
+            // A failed replacement must not strand the previously usable
+            // resident set. Restore it best-effort before returning the
+            // original load error to the caller.
+            for residentModel in residentModels {
+                do {
+                    try await load(residentModel, on: device)
+                } catch {
+                    // Preserve the replacement error; the restored state is
+                    // observable through `state(for:)` and diagnostics.
+                }
+            }
+            throw error
+        }
     }
 
     public func markIdle(modelID: String) {

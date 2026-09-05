@@ -7,7 +7,7 @@ public enum GraphError: Error, LocalizedError, Sendable, Equatable {
     case recursionLimitExceeded(limit: Int, currentNodeId: String)
     case missingCondition(nodeId: String)
     case unresolvedBranch(from: String, key: String)
-    case executionTimeout(nodeId: String, duration: TimeInterval)
+    case invalidGraph([String])
     case graphHalted(reason: String)
     case interrupted(message: String, threadId: String)
     case stateDeserializationFailed(String)
@@ -26,8 +26,8 @@ public enum GraphError: Error, LocalizedError, Sendable, Equatable {
             return "Conditional edge for node '\(id)' is missing an evaluation closure."
         case .unresolvedBranch(let from, let key):
             return "Branch edge from '\(from)' could not resolve key '\(key)' and no default target was provided."
-        case .executionTimeout(let id, let duration):
-            return "Node '\(id)' exceeded execution timeout limit of \(duration) seconds."
+        case .invalidGraph(let issues):
+            return "The graph is invalid: \(issues.joined(separator: " "))"
         case .graphHalted(let reason):
             return "Graph execution halted: \(reason)"
         case .interrupted(let message, let threadId):
@@ -48,6 +48,10 @@ public actor NodeDispatcher<State: AgentState> {
     private var reducers: [String: @Sendable (inout State, String) -> Void] = [:]
 
     public init() {}
+
+    init(reducers: [String: @Sendable (inout State, String) -> Void]) {
+        self.reducers = reducers
+    }
 
     /// Registers a custom state reducer for string-based dictionary key updates.
     public func registerReducer(forKey key: String, reducer: @escaping @Sendable (inout State, String) -> Void) {
