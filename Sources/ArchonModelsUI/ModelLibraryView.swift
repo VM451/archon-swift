@@ -270,6 +270,7 @@ public struct ModelBrowserView: View {
         }
     }
 
+    private let title: String
     private let catalog: any ModelCatalogProvider
     private let library: ModelLibrary
     private let downloadManager: ModelDownloadManager
@@ -296,11 +297,13 @@ public struct ModelBrowserView: View {
     @State private var searchError: String?
 
     public init(
+        title: String = "Models Discovery",
         catalog: any ModelCatalogProvider,
         library: ModelLibrary = .makeDefault(),
         downloadManager: ModelDownloadManager = ModelDownloadManager(),
         device: ArchonDeviceCapabilities? = nil
     ) {
+        self.title = title
         self.catalog = catalog
         self.library = library
         self.downloadManager = downloadManager
@@ -450,7 +453,7 @@ public struct ModelBrowserView: View {
             }
         }
         .searchable(text: $query, prompt: "Search models")
-        .navigationTitle("Models")
+        .navigationTitle(title)
         .task(id: "\(query)|\(compatibleOnly)|\(selectedTaskRaw)|\(selectedRuntimeRaw)") {
             do {
                 // Search fields can change several times while the user is
