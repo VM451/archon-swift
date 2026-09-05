@@ -20,11 +20,11 @@ struct ModelLogoView: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(fallbackTint.opacity(0.12))
 
-            if let logoURL = validatedLogoURL {
-                AsyncImage(url: logoURL, transaction: Transaction(animation: nil)) { phase in
+            if let targetURL = effectiveLogoURL {
+                AsyncImage(url: targetURL, transaction: Transaction(animation: nil)) { phase in
                     if case .success(let image) = phase {
                         image
                             .resizable()
@@ -39,14 +39,46 @@ struct ModelLogoView: View {
             }
         }
         .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .accessibilityHidden(true)
     }
 
+    @ViewBuilder
     private var fallbackImage: some View {
-        Image(systemName: fallbackIcon)
-            .font(.system(size: size * 0.45))
-            .foregroundStyle(fallbackTint)
+        if let bundledImage = bundledProviderLogo {
+            bundledImage
+                .resizable()
+                .scaledToFit()
+                .padding(size * 0.16)
+        } else {
+            Image(systemName: fallbackIcon)
+                .font(.system(size: size * 0.45))
+                .foregroundStyle(fallbackTint)
+        }
+    }
+
+    private var bundledProviderLogo: Image? {
+        let value = name.lowercased()
+        if value.contains("qwen") {
+            return Image("qwen_logo", bundle: .module)
+        }
+        if value.contains("meta") || value.contains("llama") {
+            return Image("meta_logo", bundle: .module)
+        }
+        if value.contains("google") || value.contains("gemma") {
+            return Image("google_logo", bundle: .module)
+        }
+        if value.contains("mistral") {
+            return Image("mistral_logo", bundle: .module)
+        }
+        return nil
+    }
+
+    private var effectiveLogoURL: URL? {
+        if let validated = validatedLogoURL {
+            return validated
+        }
+        return defaultProviderLogoURL
     }
 
     private var validatedLogoURL: URL? {
@@ -57,6 +89,23 @@ struct ModelLogoView: View {
               logoURL.user == nil,
               logoURL.password == nil else { return nil }
         return logoURL
+    }
+
+    private var defaultProviderLogoURL: URL? {
+        let value = name.lowercased()
+        if value.contains("qwen") {
+            return URL(string: "https://cdn-avatars.huggingface.co/v1/production/uploads/6215ca5692c0ecfba9186921/hrRM50-6XcdWgg2AKpENG.jpeg")
+        }
+        if value.contains("meta") || value.contains("llama") {
+            return URL(string: "https://cdn-avatars.huggingface.co/v1/production/uploads/646cf8084eefb026fb8fd8bc/oCTqufkdTkjyGodsx1vo1.png")
+        }
+        if value.contains("google") || value.contains("gemma") {
+            return URL(string: "https://cdn-avatars.huggingface.co/v1/production/uploads/5dd96eb166059660ed1ee413/WtA3YYitedOr9n02eHfJe.png")
+        }
+        if value.contains("mistral") {
+            return URL(string: "https://cdn-avatars.huggingface.co/v1/production/uploads/634c17653d11eaedd88b314d/9OgyfKstSZtbmsmuG8MbU.png")
+        }
+        return nil
     }
 
     private var fallbackIcon: String {

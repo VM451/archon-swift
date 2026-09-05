@@ -133,6 +133,7 @@ let package = Package(
             name: "ArchonModelsUI",
             dependencies: ["ArchonCore", "ArchonModels"],
             path: "Sources/ArchonModelsUI",
+            resources: [.process("Resources")],
             swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]
         ),
         .target(
