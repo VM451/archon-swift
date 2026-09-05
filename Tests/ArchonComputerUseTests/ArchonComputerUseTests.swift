@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import ArchonComputerUse
 
@@ -82,6 +83,42 @@ private actor ActionGate {
 }
 
 struct ArchonComputerUseTests {
+    @Test("Semantic snapshots carry a stable revision")
+    func snapshotRevisionIsPersisted() throws {
+        let snapshot = SemanticSnapshot(screenID: "home", elements: [], revision: 7)
+        let data = try JSONEncoder().encode(snapshot)
+        let decoded = try JSONDecoder().decode(SemanticSnapshot.self, from: data)
+        #expect(decoded.revision == 7)
+    }
+
+    @Test("Action preconditions can reject a stale semantic state")
+    func rejectsStalePrecondition() async throws {
+        let observation = MockObservationProvider(snapshot: SemanticSnapshot(
+            screenID: "home",
+            elements: [],
+            revision: 1
+        ))
+        let controller = ComputerUseController(
+            observationProvider: observation,
+            permissionPolicy: AllowAllComputerUsePolicy()
+        )
+        await controller.register(SemanticAction(
+            id: "record.save",
+            description: "Save record",
+            risk: .modify,
+            precondition: { snapshot in snapshot?.revision == 2 }
+        ) {
+            SemanticActionResult(actionID: "record.save", succeeded: true)
+        })
+
+        do {
+            _ = try await controller.execute(actionID: "record.save")
+            Issue.record("A stale semantic snapshot must not execute an action.")
+        } catch let error as ComputerUseError {
+            #expect(error == .staleObservation("record.save"))
+        }
+    }
+
     @Test("Semantic actions can require an element from a fresh observation")
     func observesTargetBeforeExecution() async throws {
         let observation = MockObservationProvider(snapshot: SemanticSnapshot(

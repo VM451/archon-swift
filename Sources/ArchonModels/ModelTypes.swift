@@ -53,6 +53,53 @@ public struct ModelLicenseMetadata: Codable, Equatable, Sendable {
     public var licenseURL: URL? { url }
 }
 
+public struct ModelCapabilityRequirements: Codable, Equatable, Sendable {
+    public let task: ArchonModelTask
+    public let requiresStreaming: Bool
+    public let requiresToolCalling: Bool
+    public let requiresStructuredOutput: Bool
+
+    public init(
+        task: ArchonModelTask,
+        requiresStreaming: Bool = false,
+        requiresToolCalling: Bool = false,
+        requiresStructuredOutput: Bool = false
+    ) {
+        self.task = task
+        self.requiresStreaming = requiresStreaming
+        self.requiresToolCalling = requiresToolCalling
+        self.requiresStructuredOutput = requiresStructuredOutput
+    }
+}
+
+/// Runtime capabilities derived from an Archon model manifest. This is
+/// metadata negotiation only; the runtime adapter still owns actual loading.
+public struct ModelRuntimeCapabilities: Codable, Equatable, Sendable {
+    public let runtime: ArchonModelRuntime
+    public let tasks: Set<ArchonModelTask>
+    public let supportsStreaming: Bool
+    public let supportsToolCalling: Bool
+    public let supportsStructuredOutput: Bool
+
+    public init(
+        runtime: ArchonModelRuntime,
+        capabilities: ArchonModelCapabilities
+    ) {
+        self.runtime = runtime
+        self.tasks = capabilities.tasks
+        self.supportsStreaming = capabilities.supportsStreaming
+        self.supportsToolCalling = capabilities.supportsToolCalling
+        self.supportsStructuredOutput = capabilities.supportsStructuredOutput
+    }
+
+    public func satisfies(_ requirements: ModelCapabilityRequirements) -> Bool {
+        tasks.contains(requirements.task) &&
+            (!requirements.requiresStreaming || supportsStreaming) &&
+            (!requirements.requiresToolCalling || supportsToolCalling) &&
+            (!requirements.requiresStructuredOutput || supportsStructuredOutput)
+    }
+}
+
 public enum ModelLicenseDecision: String, Codable, CaseIterable, Sendable {
     case allowed
     case confirmationRequired
@@ -731,8 +778,17 @@ public enum ModelCompatibilityAnalyzer {
         variant: ModelVariant,
         device: ArchonDeviceCapabilities,
         isInstalled: Bool = false,
-        hasAuthentication: Bool = true
+        hasAuthentication: Bool = true,
+        requirements: ModelCapabilityRequirements? = nil
     ) -> ModelCompatibility {
+        if let requirements,
+           !ModelRuntimeCapabilities(runtime: variant.runtime, capabilities: variant.capabilities).satisfies(requirements) {
+            return ModelCompatibility(
+                status: .unsupportedFormat,
+                fit: .cannotRun,
+                reasons: ["The model variant does not provide the requested runtime capability contract."]
+            )
+        }
         if variant.requiresAuthentication && !hasAuthentication {
             return ModelCompatibility(
                 status: .requiresAuthentication,

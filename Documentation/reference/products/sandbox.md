@@ -14,3 +14,7 @@ active even when developer tooling is enabled.
 `InProcessWebKitExecutionProvider` explicitly reports `.inProcessWebKit`. It is
 not a process, container, or microVM. Remote isolation belongs in a separate
 `SandboxExecutionProvider` adapter and must disclose network dependence.
+
+Execution results include explicit `IsolationLevel` and bounded resource
+usage. Audit sinks may be attached to native bridges for host-observable
+patches without weakening the deny-by-default policy.

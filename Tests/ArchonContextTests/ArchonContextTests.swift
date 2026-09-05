@@ -18,7 +18,50 @@ private struct DelayedContributor: ContextContributor {
     }
 }
 
+private actor ConcurrencyProbe {
+    private var activeCount = 0
+    private var maximumActiveCount = 0
+
+    func enter() {
+        activeCount += 1
+        maximumActiveCount = max(maximumActiveCount, activeCount)
+    }
+
+    func leave() {
+        activeCount -= 1
+    }
+
+    func maximum() -> Int { maximumActiveCount }
+}
+
+private struct ProbedContributor: ContextContributor {
+    let id: String
+    let probe: ConcurrencyProbe
+
+    func makeContextFragment() async throws -> ContextFragment {
+        await probe.enter()
+        try await Task.sleep(for: .milliseconds(25))
+        await probe.leave()
+        return ContextFragment(id: id, source: id, content: id)
+    }
+}
+
 struct ArchonContextTests {
+    @Test("ContextBuilder assembles contributors concurrently and preserves order")
+    func assemblesConcurrently() async throws {
+        let probe = ConcurrencyProbe()
+        let builder = ContextBuilder(contributors: [
+            ProbedContributor(id: "first", probe: probe),
+            ProbedContributor(id: "second", probe: probe)
+        ])
+
+        let snapshot = try await builder.snapshot()
+
+        let maximumConcurrency = await probe.maximum()
+        #expect(maximumConcurrency == 2)
+        #expect(snapshot.fragments.map(\.id) == ["first", "second"])
+    }
+
     @Test("ContextBuilder assembles contributors by priority")
     func assemblesCurrentContext() async throws {
         let builder = ContextBuilder(contributors: [
@@ -71,6 +114,32 @@ struct ArchonContextTests {
         #expect(throws: ContextBuilderError.invalidBudget) {
             try ContextBudget(maxUTF8Bytes: -1)
         }
+        #expect(throws: ContextBuilderError.invalidBudget) {
+            try ContextBudget(maxTokens: -1)
+        }
+    }
+
+    @Test("ContextBuilder preserves provenance and applies token budgets")
+    func tokenBudgetAndProvenance() async throws {
+        let builder = ContextBuilder(contributors: [
+            TestContributor(
+                id: "memory",
+                fragment: ContextFragment(
+                    source: "memory",
+                    content: "abcdefghijk",
+                    priority: 10,
+                    provenance: "memory://1",
+                    trust: .trusted
+                )
+            )
+        ])
+
+        let snapshot = try await builder.snapshot(budget: try ContextBudget(maxTokens: 4))
+
+        #expect(snapshot.fragments.first?.provenance == "memory://1")
+        #expect(snapshot.fragments.first?.trust == .trusted)
+        #expect(snapshot.fragments.first?.metadata["archon.truncated"] == "true")
+        #expect(snapshot.fragments.first.map { UTF8ContextTokenEstimator().estimateTokens($0.content) } ?? 0 <= 4)
     }
 
     @Test("ContextBuilder propagates task cancellation")

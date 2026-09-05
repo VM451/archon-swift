@@ -11,6 +11,7 @@ From the repository root:
 swift package dump-package
 swift build -j 2
 swift test -j 2
+swift Tools/verify-competitor-scorecard.swift
 swift Tools/verify-product-scope.swift
 swift Tools/verify-dependency-licenses.swift
 git diff --check

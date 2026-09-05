@@ -42,18 +42,31 @@ private struct Validate: ParsableCommand {
     @Option(name: .long, help: "Optional artifact file or directory to hash and size-check.")
     var artifact: String?
 
+    @Flag(name: .long, help: "Emit a stable machine-readable JSON report.")
+    var json = false
+
     mutating func run() throws {
         let manifest = try readManifest(at: manifestPath)
         let report = ModelManifestValidator.validate(
             manifest,
             artifactAt: artifact.map(localURL)
         )
-        print("valid: \(report.isValid)")
-        for warning in report.warnings {
-            print("warning: \(warning)")
-        }
-        for error in report.errors {
-            print("error: \(error)")
+        if json {
+            let payload: [String: Any] = [
+                "valid": report.isValid,
+                "warnings": report.warnings,
+                "errors": report.errors
+            ]
+            let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+            print(String(decoding: data, as: UTF8.self))
+        } else {
+            print("valid: \(report.isValid)")
+            for warning in report.warnings {
+                print("warning: \(warning)")
+            }
+            for error in report.errors {
+                print("error: \(error)")
+            }
         }
         guard report.isValid else {
             throw ValidationError("Manifest validation failed.")
@@ -116,8 +129,26 @@ private struct Search: AsyncParsableCommand {
     @Flag(name: .long, help: "Only return variants compatible with this Mac.")
     var compatibleOnly = false
 
+    @Flag(name: .long, help: "Search only local manifests; never access the network.")
+    var offline = false
+
+    @Option(name: .long, help: "Local manifest directory used with --offline.")
+    var localPath: String?
+
     mutating func run() async throws {
-        let catalog = HuggingFaceCatalog()
+        let catalog: any ModelCatalogProvider
+        if offline {
+            let path: String
+            if let localPath {
+                path = localPath
+            } else {
+                let library = ModelLibrary.makeDefault()
+                path = await library.rootURL.path
+            }
+            catalog = LocalModelCatalog(locations: [localURL(path)])
+        } else {
+            catalog = HuggingFaceCatalog()
+        }
         let models = try await catalog.search(ModelSearchRequest(
             query: query,
             compatibleOnly: compatibleOnly,

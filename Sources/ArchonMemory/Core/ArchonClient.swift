@@ -62,7 +62,8 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
             graphStore: graphStore,
             embeddingProvider: config.embeddingProvider,
             llmProvider: config.llmProvider,
-            customExtractionPrompt: config.customExtractionPrompt
+            customExtractionPrompt: config.customExtractionPrompt,
+            policy: config.extractionPolicy
         )
 
         self.summarizer = DialogueSummarizer(llmProvider: config.llmProvider)
@@ -228,8 +229,14 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
         limit: Int = 5
     ) async throws -> [SearchResult] {
         let vector = try await config.embeddingProvider.embed(text: query)
-        let filter = MemoryFilter(userId: userId, agentId: agentId, runId: runId)
-        return try await vectorStore.search(query: query, vector: vector, limit: limit, filters: filter)
+        let filter = MemoryFilter(
+            userId: userId,
+            agentId: agentId,
+            runId: runId,
+            includeDeleted: config.retrievalPolicy.includeDeleted
+        )
+        let boundedLimit = min(max(limit, 0), config.retrievalPolicy.maximumResults)
+        return try await vectorStore.search(query: query, vector: vector, limit: boundedLimit, filters: filter)
     }
 
     /// Fetch a memory by its UUID.
@@ -245,8 +252,15 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
         limit: Int? = nil,
         offset: Int? = nil
     ) async throws -> [MemoryItem] {
-        let filter = MemoryFilter(userId: userId, agentId: agentId, runId: runId)
-        return try await vectorStore.fetchAll(filters: filter, limit: limit, offset: offset)
+        let filter = MemoryFilter(
+            userId: userId,
+            agentId: agentId,
+            runId: runId,
+            includeDeleted: config.retrievalPolicy.includeDeleted
+        )
+        let requestedLimit = limit ?? config.retrievalPolicy.maximumResults
+        let boundedLimit = min(max(requestedLimit, 0), config.retrievalPolicy.maximumResults)
+        return try await vectorStore.fetchAll(filters: filter, limit: boundedLimit, offset: offset)
     }
 
     /// Update an existing memory item.

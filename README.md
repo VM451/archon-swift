@@ -262,10 +262,10 @@ Archon product, decision, priority, and definition of done. The [quality
 scorecard](context/quality-scorecard.md) defines the weighted score and the
 gates required before a replacement becomes the default.
 
-The current package evidence is 325 Swift tests across 10 bundles, independent
-product builds, simulator compilation, dependency-scope checks, and license
-inventory checks. Signed-app, physical-device, live UI, real-model, and
-production-server validation remain explicit release gates.
+The package contains 340 Swift tests across 10 bundles, and the complete
+package-wide suite passes on the configured Xcode toolchain. Signed-app,
+physical-device, live UI, real-model, and production-server validation remain
+explicit release gates.
 
 ## Build and test
 
@@ -273,6 +273,7 @@ production-server validation remain explicit release gates.
 swift package dump-package
 swift build -j 2
 swift test -j 2
+swift Tools/verify-competitor-scorecard.swift
 swift Tools/verify-product-scope.swift
 swift Tools/verify-dependency-licenses.swift
 ```
@@ -304,6 +305,7 @@ or unavailable result. Test and preview code can inject deterministic mocks.
 - [`Documentation/tutorials/`](Documentation/tutorials/) — end-to-end local model tutorial.
 - [`Documentation/how-to/`](Documentation/how-to/) — integration, lifecycle, MCP, sandbox, semantic action, and release guides.
 - [`Documentation/reference/`](Documentation/reference/) — product, model, policy, and executable contracts.
+- [`Documentation/reference/competitor-comparison.md`](Documentation/reference/competitor-comparison.md) — detailed competitor feature tables, scores, and Archon-fit decisions.
 - [`Documentation/explanation/`](Documentation/explanation/) — architecture, dependency, local-first, and recovery rationale.
 - [`Documentation/decisions/`](Documentation/decisions/) — migration and architectural decision records.
 - [`context/competitor-signature-features.md`](context/competitor-signature-features.md) — capability evidence and local/native qualification.

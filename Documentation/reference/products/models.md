@@ -17,3 +17,8 @@ adapters, App Intents registration, lifecycle forwarding, and the concrete
 Every import/download crosses staging, size/checksum, manifest, resource,
 license, and compatibility checks before atomic installation. Raw weights remain
 conversion-required and unsupported runtime/format pairs fail closed.
+
+`ModelRuntimeCapabilities` and `ModelCapabilityRequirements` negotiate task,
+streaming, tool-calling, and structured-output requirements before loading.
+The lifecycle remains runtime-neutral: Foundation Models, Core ML, MLX, and
+Hugging Face integrations are adapters selected by the consuming host.

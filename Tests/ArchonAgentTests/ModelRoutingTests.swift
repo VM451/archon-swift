@@ -120,6 +120,30 @@ struct ModelRoutingTests {
         #expect(selection == .appleFoundationModel)
     }
 
+    @Test("Explicit Foundation Models preference remains local-only")
+    func explicitFoundationModelsPreference() {
+        let device = ArchonDeviceCapabilities(
+            platform: .iOS,
+            osVersion: ArchonOSVersion(major: 27),
+            physicalMemoryBytes: 8_000_000_000,
+            availableMemoryBytes: 6_000_000_000,
+            processorCount: 6,
+            deviceArchitecture: "arm64",
+            supportsAppleFoundationModels: true,
+            supportsCoreAI: true
+        )
+
+        let selection = AgentModelRouter.select(
+            policy: ModelPolicy(
+                privacy: .localOnly,
+                preferredRuntime: .foundationModels
+            ),
+            device: device
+        )
+
+        #expect(selection == .appleFoundationModel)
+    }
+
     @Test("Local-only policy offers a compatible Core AI variant for download")
     func findsCompatibleCatalogVariant() {
         let device = ArchonDeviceCapabilities(

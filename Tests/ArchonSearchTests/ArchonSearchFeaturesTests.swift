@@ -79,6 +79,59 @@ struct ArchonSearchFeaturesTests {
             ))
         }
     }
+
+    @Test("LocalSearchIndex supports deterministic offline corpus search and persistence")
+    func localCorpusSearch() async throws {
+        let storageURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("archon-local-index-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: storageURL) }
+
+        let index = try LocalSearchIndex(storageURL: storageURL)
+        let document = LocalSearchDocument(
+            url: URL(fileURLWithPath: "/tmp/archon.md"),
+            title: "Offline Memory",
+            content: "Local-first retrieval stays on the device."
+        )
+        try await index.upsert(document)
+
+        let provider = LocalSearchIndexProvider(index: index)
+        let response = try await provider.search(SearchRequest(
+            query: "local retrieval",
+            source: .localWorkspace(directoryPath: "/tmp"),
+            networkPolicy: .localOnly
+        ))
+
+        #expect(response.usedNetwork == false)
+        #expect(response.results.first?.url == document.url)
+
+        let reopened = try LocalSearchIndex(storageURL: storageURL)
+        #expect(await reopened.count == 1)
+    }
+
+    @Test("Local workspace discovery cooperates with task cancellation")
+    func localWorkspaceSearchCancellation() async throws {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempDir) }
+
+        let task = Task {
+            try await DiscoveryEngine().search(
+                query: "cancel",
+                source: .localWorkspace(directoryPath: tempDir.path)
+            )
+        }
+        task.cancel()
+
+        do {
+            _ = try await task.value
+            Issue.record("Expected local workspace discovery to observe cancellation.")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            Issue.record("Expected CancellationError, got \(error).")
+        }
+    }
     
     @Test("Contents returns full page text, html and highlights")
     func contentsLocalWorkspace() async throws {

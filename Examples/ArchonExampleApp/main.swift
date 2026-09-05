@@ -1,4 +1,5 @@
 import SwiftUI
+import ArchonCore
 import ArchonAgent
 import ArchonModels
 import ArchonModelsUI
@@ -47,6 +48,7 @@ private struct ArchonExampleRootView: View {
         case discover
         case storage
         case inference
+        case status
 
         var id: Self { self }
 
@@ -56,6 +58,7 @@ private struct ArchonExampleRootView: View {
             case .discover: "Discover"
             case .storage: "Storage"
             case .inference: "System Model"
+            case .status: "Runtime Status"
             }
         }
 
@@ -65,6 +68,7 @@ private struct ArchonExampleRootView: View {
             case .discover: "magnifyingglass"
             case .storage: "internaldrive"
             case .inference: "bubble.left.and.bubble.right"
+            case .status: "checkmark.shield"
             }
         }
     }
@@ -74,6 +78,7 @@ private struct ArchonExampleRootView: View {
     private let downloadManager: ModelDownloadManager
     private let systemModelProvider: AppleFoundationModelProvider
     @State private var selection: Destination? = .library
+    @StateObject private var modelLibraryViewModel: ModelLibraryViewModel
 
     init(
         library: ModelLibrary,
@@ -85,6 +90,13 @@ private struct ArchonExampleRootView: View {
         self.catalog = catalog
         self.downloadManager = downloadManager
         self.systemModelProvider = systemModelProvider
+        _modelLibraryViewModel = StateObject(
+            wrappedValue: ModelLibraryViewModel(
+                library: library,
+                catalog: catalog,
+                downloadManager: downloadManager
+            )
+        )
     }
 
     var body: some View {
@@ -113,8 +125,78 @@ private struct ArchonExampleRootView: View {
                     ModelStorageView(library: library)
                 case .inference:
                     SystemModelChatView(provider: systemModelProvider)
+                case .status:
+                    ArchonExampleStatusView(modelLibraryViewModel: modelLibraryViewModel)
                 }
             }
+        }
+    }
+}
+
+@available(iOS 27.0, macOS 27.0, visionOS 27.0, *)
+private struct ArchonExampleStatusView: View {
+    @ObservedObject private var modelLibraryViewModel: ModelLibraryViewModel
+    private let device = ArchonDeviceCapabilities.current
+
+    init(modelLibraryViewModel: ModelLibraryViewModel) {
+        self.modelLibraryViewModel = modelLibraryViewModel
+    }
+
+    private var localSelection: String {
+        let selection = AgentModelRouter.select(
+            policy: ModelPolicy(privacy: .localOnly),
+            device: device
+        )
+        switch selection {
+        case .appleFoundationModel: return "Apple Foundation Model"
+        case .installed: return "Installed local model"
+        case .downloadRequired: return "Local model download required"
+        case .unavailable(let reason): return "Unavailable: \(reason)"
+        }
+    }
+
+    var body: some View {
+        Form {
+            Section("Execution policy") {
+                LabeledContent("Data plane", value: "Local-first")
+                LabeledContent("Network fallback", value: "Host opt-in only")
+                LabeledContent("Selected local runtime", value: localSelection)
+                Label("Cloud providers are not selected by this example host.", systemImage: "lock.shield")
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Device facts") {
+                LabeledContent("Platform", value: device.platform.rawValue)
+                LabeledContent("OS", value: device.osVersion.stringValue)
+                LabeledContent("Architecture", value: device.deviceArchitecture)
+                LabeledContent("Available memory", value: ByteCountFormatter.string(fromByteCount: Int64(device.availableMemoryBytes), countStyle: .memory))
+                LabeledContent("Thermal state", value: device.thermalState.rawValue)
+            }
+
+            Section("Model library") {
+                LabeledContent("State", value: stateDescription)
+                LabeledContent("Installed models", value: "\(modelLibraryViewModel.models.count)")
+                if let error = modelLibraryViewModel.lastError {
+                    Text(error)
+                        .foregroundStyle(.red)
+                }
+                Button("Refresh library", systemImage: "arrow.clockwise") {
+                    Task { await modelLibraryViewModel.refresh() }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .navigationTitle("Runtime Status")
+        .task { await modelLibraryViewModel.refresh() }
+    }
+
+    private var stateDescription: String {
+        switch modelLibraryViewModel.state {
+        case .idle: "Not loaded"
+        case .loading: "Loading"
+        case .loaded: "Ready"
+        case .offline: "Offline"
+        case .failed: "Failed"
         }
     }
 }

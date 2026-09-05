@@ -21,9 +21,11 @@ GGUF, SafeTensors, Transformers, and unknown formats remain
 
 ## `archon-example-app`
 
-This is a small SwiftUI host for model-library, discovery, storage, download,
-App Intents, and Apple Foundation Model availability behavior. Run it on macOS
-with:
+This is a SwiftUI golden-host slice for model-library, discovery, storage,
+download/recovery, Apple Foundation Model inference, local-only routing, and
+runtime/network-status behavior. It uses the real public package boundaries;
+credentials and cloud fallback remain host-owned and are not enabled by
+default. Run it on macOS with:
 
 ```bash
 swift run archon-example-app

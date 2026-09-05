@@ -794,15 +794,21 @@ public struct AllowReadOnlyMCPPolicy: MCPPermissionPolicy, Sendable {
 public actor MCPClient {
     private let transport: any MCPTransport
     private let permissionPolicy: any MCPPermissionPolicy
+    private let auditSink: any ArchonAuditSink
     private var connected = false
     private var toolsByName: [String: MCPTool] = [:]
     private var resourcesByURI: [String: MCPResource] = [:]
     private var promptsByName: [String: MCPPrompt] = [:]
     private var streamTasks: [UUID: Task<Void, Never>] = [:]
 
-    public init(transport: any MCPTransport, permissionPolicy: any MCPPermissionPolicy = AllowReadOnlyMCPPolicy()) {
+    public init(
+        transport: any MCPTransport,
+        permissionPolicy: any MCPPermissionPolicy = AllowReadOnlyMCPPolicy(),
+        auditSink: any ArchonAuditSink = NoOpArchonAuditSink()
+    ) {
         self.transport = transport
         self.permissionPolicy = permissionPolicy
+        self.auditSink = auditSink
     }
 
     public func connect() async throws {
@@ -828,12 +834,28 @@ public actor MCPClient {
             resourcesByURI = Dictionary(discoveredResources.map { ($0.uri, $0) }, uniquingKeysWith: { first, _ in first })
             promptsByName = Dictionary(discoveredPrompts.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
             connected = true
+            await auditSink.record(ArchonAuditEvent(
+                category: "mcp",
+                action: "connect",
+                outcome: "succeeded",
+                metadata: [
+                    "tools": String(discoveredTools.count),
+                    "resources": String(discoveredResources.count),
+                    "prompts": String(discoveredPrompts.count)
+                ]
+            ))
         } catch {
             await transport.disconnect()
             connected = false
             toolsByName.removeAll()
             resourcesByURI.removeAll()
             promptsByName.removeAll()
+            await auditSink.record(ArchonAuditEvent(
+                category: "mcp",
+                action: "connect",
+                outcome: "failed",
+                metadata: ["error-type": String(reflecting: type(of: error))]
+            ))
             throw error
         }
     }
@@ -846,6 +868,11 @@ public actor MCPClient {
         toolsByName.removeAll()
         resourcesByURI.removeAll()
         promptsByName.removeAll()
+        await auditSink.record(ArchonAuditEvent(
+            category: "mcp",
+            action: "disconnect",
+            outcome: "completed"
+        ))
     }
 
     public func tools() -> [MCPTool] {
@@ -882,7 +909,27 @@ public actor MCPClient {
         guard await permissionPolicy.allows(tool.risk, tool: tool) else {
             throw ArchonCoreError.invalidConfiguration("MCP permission policy denied tool \(name).")
         }
-        return try await transport.callTool(name: name, arguments: arguments)
+        do {
+            let result = try await transport.callTool(name: name, arguments: arguments)
+            await auditSink.record(ArchonAuditEvent(
+                category: "mcp",
+                action: "tool-call",
+                outcome: result.isError ? "server-error" : "succeeded",
+                metadata: ["tool": name]
+            ))
+            return result
+        } catch {
+            await auditSink.record(ArchonAuditEvent(
+                category: "mcp",
+                action: "tool-call",
+                outcome: "failed",
+                metadata: [
+                    "tool": name,
+                    "error-type": String(reflecting: type(of: error))
+                ]
+            ))
+            throw error
+        }
     }
 
     /// Streams MCP server notifications and the final result while preserving

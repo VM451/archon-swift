@@ -72,7 +72,17 @@ public struct SearchResponse: Codable, Hashable, Sendable {
 /// Vendor SDK types and credentials must remain behind conforming adapters.
 public protocol SearchProvider: Sendable {
     var providerID: String { get }
+    var capabilities: SearchProviderCapabilities { get }
     func search(_ request: SearchRequest) async throws -> SearchResponse
+}
+
+public extension SearchProvider {
+    var capabilities: SearchProviderCapabilities {
+        SearchProviderCapabilities(
+            supportsOffline: false,
+            isNetworkDependent: true
+        )
+    }
 }
 
 /// Adapts the existing Archon search engine to the provider-neutral contract.
@@ -83,6 +93,12 @@ public protocol SearchProvider: Sendable {
 /// `networkAllowed`.
 public struct ArchonSearchProvider: SearchProvider, Sendable {
     public let providerID: String
+    public let capabilities = SearchProviderCapabilities(
+        supportsOffline: true,
+        supportsQueryRewriting: true,
+        supportsStructuredExtraction: true,
+        isNetworkDependent: false
+    )
     private let engine: ArchonSearch
 
     public init(engine: ArchonSearch = ArchonSearch(), providerID: String = "archon.search") {

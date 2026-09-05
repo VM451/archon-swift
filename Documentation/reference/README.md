@@ -11,3 +11,4 @@ doc comments and DocC catalogs.
 - [Model lifecycle](model-lifecycle.md)
 - [Policies and typed failures](policies-and-errors.md)
 - [Executables](executables.md)
+- [Competitor comparison and scorecard](competitor-comparison.md)

@@ -113,6 +113,8 @@ struct SandboxEngineTests {
         #expect(result.isolationLevel == .inProcessWebKit)
         #expect(result.networkAccessPermitted == false)
         #expect(provider.isNetworkDependent == false)
+        #expect(result.resourceUsage.outputBytes == result.output.utf8.count)
+        #expect(result.resourceUsage.duration >= 0)
 
         await #expect(throws: SandboxError.invalidExecutionRequest("Script must not be empty.")) {
             _ = try await provider.execute(SandboxExecutionRequest(script: "   "))

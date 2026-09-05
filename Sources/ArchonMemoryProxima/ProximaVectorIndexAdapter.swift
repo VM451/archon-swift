@@ -33,6 +33,7 @@ public enum ProximaVectorIndexError: Error, LocalizedError, Equatable, Sendable 
     case invalidConfiguration(String)
     case busy
     case candidateFailure(String)
+    case persistenceFailure(String)
 
     public var errorDescription: String? {
         switch self {
@@ -44,7 +45,25 @@ public enum ProximaVectorIndexError: Error, LocalizedError, Equatable, Sendable 
             "The Proxima vector index is rebuilding; retry the mutation later."
         case .candidateFailure(let message):
             "The Proxima vector index failed: \(message)."
+        case .persistenceFailure(let message):
+            "Proxima vector index persistence failed: \(message)."
         }
+    }
+}
+
+public struct ProximaVectorIndexSnapshot: Codable, Equatable, Sendable {
+    public let dimension: Int
+    public let configuration: ProximaVectorIndexConfiguration
+    public let records: [ArchonMemory.VectorIndexRecord]
+
+    public init(
+        dimension: Int,
+        configuration: ProximaVectorIndexConfiguration,
+        records: [ArchonMemory.VectorIndexRecord]
+    ) {
+        self.dimension = dimension
+        self.configuration = configuration
+        self.records = records
     }
 }
 
@@ -59,6 +78,7 @@ public actor ProximaVectorIndexAdapter: ArchonMemory.VectorIndex {
     public nonisolated let configuration: ProximaVectorIndexConfiguration
 
     private var index: HNSWIndex
+    private var records: [UUID: [Float]] = [:]
     private var rebuilding = false
 
     public init(
@@ -86,8 +106,48 @@ public actor ProximaVectorIndexAdapter: ArchonMemory.VectorIndex {
     }
 
     public var count: Int {
-        get async {
-            await index.liveCount
+        records.count
+    }
+
+    public func persist(to url: URL) throws {
+        guard url.isFileURL else {
+            throw ProximaVectorIndexError.persistenceFailure("The snapshot URL must be a file URL.")
+        }
+        do {
+            let snapshot = ProximaVectorIndexSnapshot(
+                dimension: dimension,
+                configuration: configuration,
+                records: records.map { ArchonMemory.VectorIndexRecord(id: $0.key, vector: $0.value) }
+                    .sorted { $0.id.uuidString < $1.id.uuidString }
+            )
+            let data = try JSONEncoder().encode(snapshot)
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try data.write(to: url, options: .atomic)
+        } catch {
+            throw ProximaVectorIndexError.persistenceFailure(error.localizedDescription)
+        }
+    }
+
+    public func restore(from url: URL) async throws {
+        guard url.isFileURL else {
+            throw ProximaVectorIndexError.persistenceFailure("The snapshot URL must be a file URL.")
+        }
+        do {
+            let snapshot = try JSONDecoder().decode(
+                ProximaVectorIndexSnapshot.self,
+                from: Data(contentsOf: url)
+            )
+            guard snapshot.dimension == dimension else {
+                throw ProximaVectorIndexError.invalidDimension(snapshot.dimension)
+            }
+            try await rebuild(snapshot.records)
+        } catch let error as ProximaVectorIndexError {
+            throw error
+        } catch {
+            throw ProximaVectorIndexError.persistenceFailure(error.localizedDescription)
         }
     }
 
@@ -126,6 +186,7 @@ public actor ProximaVectorIndexAdapter: ArchonMemory.VectorIndex {
             }
             try Task.checkCancellation()
             index = replacement
+            self.records = Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0.vector) })
         } catch let error as ArchonMemory.VectorIndexError {
             throw error
         } catch is CancellationError {
@@ -142,6 +203,7 @@ public actor ProximaVectorIndexAdapter: ArchonMemory.VectorIndex {
         try Self.validate(vector, dimension: dimension)
         do {
             try await index.add(Vector(vector), id: id)
+            records[id] = vector
         } catch {
             throw ProximaVectorIndexError.candidateFailure(error.localizedDescription)
         }
@@ -152,7 +214,9 @@ public actor ProximaVectorIndexAdapter: ArchonMemory.VectorIndex {
         guard !rebuilding else {
             throw ProximaVectorIndexError.busy
         }
-        return await index.remove(id: id)
+        let removed = await index.remove(id: id)
+        if removed { records.removeValue(forKey: id) }
+        return removed
     }
 
     public func search(_ query: ArchonMemory.VectorIndexQuery) async throws -> [ArchonMemory.VectorIndexMatch] {

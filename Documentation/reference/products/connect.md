@@ -12,3 +12,7 @@ headers; it never discovers, persists, or prints credentials.
 Treat modify, sensitive, destructive, and external tools as side effects. Apply
 the host's `MCPPermissionPolicy`, validate arguments before transport, consume
 progress when available, and disconnect during host shutdown.
+
+`MCPClient` can emit redacted `ArchonAuditEvent` values for connection,
+disconnection, and tool outcomes. Remote transport is always a host-visible
+network boundary; local policy must decide whether it is permitted.

@@ -9,5 +9,10 @@ runtime adapters, or model policy. Register the configured library through
 `ModelLibraryIntentRegistry` and inject catalogs/download managers from the
 consuming app.
 
+`ModelLibraryViewModel` is the main-actor presentation boundary for installed
+models, compatibility/update state, download progress, offline failures, and
+deletion. It delegates storage and transfer lifecycle to `ArchonModels` rather
+than starting unstructured work directly in a view.
+
 Validate accessibility, file-import security scope, loading states, failure
 states, offline behavior, and physical-device layout in a signed host app.

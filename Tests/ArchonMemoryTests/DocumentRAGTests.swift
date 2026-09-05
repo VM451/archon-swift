@@ -5,6 +5,22 @@ import Foundation
 @Suite("Document RAG & Multi-Format Loaders Tests")
 struct DocumentRAGTests {
 
+    @Test("Memory policies clamp unsafe limits and keep deletion opt-in")
+    func memoryPoliciesAreBounded() {
+        let extraction = MemoryExtractionPolicy(
+            maxCandidates: -10,
+            enableGraphExtraction: false,
+            allowAutomaticDeletion: true
+        )
+        let retrieval = MemoryRetrievalPolicy(maximumResults: -1, includeDeleted: true)
+
+        #expect(extraction.maxCandidates == 0)
+        #expect(extraction.enableGraphExtraction == false)
+        #expect(extraction.allowAutomaticDeletion == true)
+        #expect(retrieval.maximumResults == 0)
+        #expect(retrieval.includeDeleted == true)
+    }
+
     @Test("MarkdownDocumentLoader parses headings and breaks into sections")
     func markdownLoaderParsing() async throws {
         let mdText = """

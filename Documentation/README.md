@@ -25,6 +25,7 @@ records instead of copying them.
 2. [Integrate a local model](tutorials/first-local-model.md)
 3. [Understand product boundaries](reference/products.md)
 4. [Forward lifecycle and permissions](how-to/host-lifecycle.md)
+5. [Read the competitor comparison and scorecard](reference/competitor-comparison.md)
 
 ### Existing Archon integration
 

@@ -13,6 +13,12 @@ CloudKit sync are supporting boundaries.
 - core working-memory blocks separate from durable memory; and
 - optional CloudKit synchronization and App Intents/Core Spotlight bridges.
 
+`MemoryExtractionPolicy` bounds automatic candidates and keeps destructive
+automatic deletion opt-in. `MemoryRetrievalPolicy` bounds result counts and
+controls whether deleted records may be queried. Durable records remain the
+source of truth; index adapters must follow the `VectorIndex` update/delete
+contract.
+
 Use the [ArchonMemory DocC catalog](../../../Sources/ArchonMemory/Documentation.docc/Articles/GettingStarted.md)
 for memory-specific workflows and the [memory comparison](../../../Sources/ArchonMemory/Documentation.docc/Articles/CompetitorComparison.md)
 for the competitive feature mapping.

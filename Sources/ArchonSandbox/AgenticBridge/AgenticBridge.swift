@@ -1,16 +1,19 @@
 import Foundation
 import CoreGraphics
+import ArchonCore
 #if canImport(WebKit)
 import WebKit
 #endif
 
 /// Bridge connecting Apple AI Agent frameworks (Apple Intelligence, Local LLMs, Transformers) directly to the live Sandbox runtime.
-public final class AgenticBridge: @unchecked Sendable {
+public actor AgenticBridge {
     private weak var engine: SandboxEngine?
     private let toolRegistry = ToolRegistryActor()
+    private let auditSink: any ArchonAuditSink
     
-    public init(engine: SandboxEngine) {
+    public init(engine: SandboxEngine, auditSink: any ArchonAuditSink = NoOpArchonAuditSink()) {
         self.engine = engine
+        self.auditSink = auditSink
     }
     
     // MARK: - Semantic DOM Extraction
@@ -79,12 +82,19 @@ public final class AgenticBridge: @unchecked Sendable {
             errorDesc = rawResponse
         }
         
-        return AgentPatchResult(
+        let result = AgentPatchResult(
             isSuccess: isSuccess,
             executionTimeMs: executionTime,
             rawOutput: rawResponse,
             errorDescription: errorDesc
         )
+        await auditSink.record(ArchonAuditEvent(
+            category: "sandbox",
+            action: "code-patch",
+            outcome: isSuccess ? "succeeded" : "failed",
+            metadata: ["execution-ms": String(Int(executionTime))]
+        ))
+        return result
     }
     
     // MARK: - Tool Management

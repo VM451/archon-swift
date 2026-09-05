@@ -168,6 +168,7 @@ public struct DiscoveryEngine: Sendable {
     
     /// Indexes and searches a local directory path for documents matching search terms.
     private func searchLocalWorkspace(query: String, directoryPath: String) async throws -> [URL] {
+        try Task.checkCancellation()
         let fileManager = FileManager.default
         var isDir: ObjCBool = false
         guard fileManager.fileExists(atPath: directoryPath, isDirectory: &isDir), isDir.boolValue else {
@@ -188,6 +189,7 @@ public struct DiscoveryEngine: Sendable {
         
         while scannedEntries < maxScannedEntries,
               let fileRelativePath = enumerator.nextObject() as? String {
+            try Task.checkCancellation()
             scannedEntries += 1
             let fileURL = URL(fileURLWithPath: directoryPath).appendingPathComponent(fileRelativePath)
             let pathExtension = fileURL.pathExtension.lowercased()

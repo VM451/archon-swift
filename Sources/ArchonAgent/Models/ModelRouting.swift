@@ -55,7 +55,7 @@ public enum AgentModelRouter {
         }
         if (policy.privacy == .localOnly || policy.privacy == .preferLocal) &&
             device.supportsAppleFoundationModels &&
-            policy.preferredRuntime == nil &&
+            (policy.preferredRuntime == nil || policy.preferredRuntime == .foundationModels) &&
             policy.capability == .textGeneration {
             return .appleFoundationModel
         }
@@ -114,7 +114,9 @@ public enum AgentModelRouter {
             .filter { variant in
                 switch policy.privacy {
                 case .localOnly, .customLocalOnly:
-                    return variant.runtime == .coreAI || variant.runtime == .mlx
+                    return variant.runtime == .coreAI
+                        || variant.runtime == .foundationModels
+                        || variant.runtime == .mlx
                 default:
                     return true
                 }

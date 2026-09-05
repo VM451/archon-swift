@@ -28,11 +28,34 @@ public struct SemanticSnapshot: Codable, Equatable, Sendable {
     public let screenID: String
     public let elements: [SemanticElement]
     public let capturedAt: Date
+    public let revision: UInt64
 
-    public init(screenID: String, elements: [SemanticElement], capturedAt: Date = Date()) {
+    public init(
+        screenID: String,
+        elements: [SemanticElement],
+        capturedAt: Date = Date(),
+        revision: UInt64 = 0
+    ) {
         self.screenID = screenID
         self.elements = elements
         self.capturedAt = capturedAt
+        self.revision = revision
+    }
+}
+
+public struct ComputerUseApproval: Codable, Equatable, Sendable {
+    public let actionID: String
+    public let issuedAt: Date
+    public let expiresAt: Date
+
+    public init(actionID: String, issuedAt: Date = Date(), expiresAt: Date? = nil) {
+        self.actionID = actionID
+        self.issuedAt = issuedAt
+        self.expiresAt = expiresAt ?? issuedAt.addingTimeInterval(300)
+    }
+
+    public func isValid(at date: Date = Date()) -> Bool {
+        issuedAt <= date && date <= expiresAt
     }
 }
 
@@ -53,6 +76,7 @@ public struct SemanticAction: Sendable, Identifiable {
     public let description: String
     public let risk: ComputerUseRisk
     public let targetElementID: String?
+    public let precondition: (@Sendable (SemanticSnapshot?) async -> Bool)?
     public let execute: @Sendable () async throws -> SemanticActionResult
     /// Optional host-defined postcondition. It receives the action result and
     /// the fresh post-action semantic snapshot, if observation is available.
@@ -63,6 +87,7 @@ public struct SemanticAction: Sendable, Identifiable {
         description: String,
         risk: ComputerUseRisk,
         targetElementID: String? = nil,
+        precondition: (@Sendable (SemanticSnapshot?) async -> Bool)? = nil,
         verify: (@Sendable (SemanticActionResult, SemanticSnapshot?) async -> Bool)? = nil,
         execute: @escaping @Sendable () async throws -> SemanticActionResult
     ) {
@@ -70,6 +95,7 @@ public struct SemanticAction: Sendable, Identifiable {
         self.description = description
         self.risk = risk
         self.targetElementID = targetElementID
+        self.precondition = precondition
         self.verify = verify
         self.execute = execute
     }
@@ -81,6 +107,15 @@ public protocol ComputerUseObservationProvider: Sendable {
 
 public protocol ComputerUsePermissionPolicy: Sendable {
     func allows(_ risk: ComputerUseRisk, action: SemanticAction) async -> Bool
+
+    func approval(for risk: ComputerUseRisk, action: SemanticAction) async -> ComputerUseApproval?
+}
+
+public extension ComputerUsePermissionPolicy {
+    func approval(for risk: ComputerUseRisk, action: SemanticAction) async -> ComputerUseApproval? {
+        guard await allows(risk, action: action) else { return nil }
+        return ComputerUseApproval(actionID: action.id)
+    }
 }
 
 public struct ReadOnlyComputerUsePolicy: ComputerUsePermissionPolicy, Sendable {
@@ -102,6 +137,8 @@ public enum ComputerUseError: Error, LocalizedError, Equatable, Sendable {
     case actionNotFound(String)
     case permissionDenied(String)
     case observationUnavailable
+    case approvalRequired(String)
+    case staleObservation(String)
     case verificationFailed(String)
     case actionCancelled(String)
     case stopped
@@ -111,6 +148,8 @@ public enum ComputerUseError: Error, LocalizedError, Equatable, Sendable {
         case .actionNotFound(let id): "Computer-use action not found: \(id)"
         case .permissionDenied(let id): "Computer-use permission denied: \(id)"
         case .observationUnavailable: "Computer-use action requires a semantic observation provider."
+        case .approvalRequired(let id): "Computer-use action requires an explicit approval: \(id)"
+        case .staleObservation(let id): "Computer-use observation became stale before action execution: \(id)"
         case .verificationFailed(let id): "Computer-use verification failed: \(id)"
         case .actionCancelled(let id): "Computer-use action was cancelled: \(id)"
         case .stopped: "Computer-use execution was stopped."
@@ -122,6 +161,7 @@ public enum ComputerUseError: Error, LocalizedError, Equatable, Sendable {
 public actor ComputerUseController {
     private let observationProvider: (any ComputerUseObservationProvider)?
     private let permissionPolicy: any ComputerUsePermissionPolicy
+    private let auditSink: any ArchonAuditSink
     private var actions: [String: SemanticAction] = [:]
     private var currentTask: Task<SemanticActionResult, Error>?
     private var currentExecutionID: UUID?
@@ -130,10 +170,12 @@ public actor ComputerUseController {
 
     public init(
         observationProvider: (any ComputerUseObservationProvider)? = nil,
-        permissionPolicy: any ComputerUsePermissionPolicy = ReadOnlyComputerUsePolicy()
+        permissionPolicy: any ComputerUsePermissionPolicy = ReadOnlyComputerUsePolicy(),
+        auditSink: any ArchonAuditSink = NoOpArchonAuditSink()
     ) {
         self.observationProvider = observationProvider
         self.permissionPolicy = permissionPolicy
+        self.auditSink = auditSink
     }
 
     public func register(_ action: SemanticAction) {
@@ -171,7 +213,15 @@ public actor ComputerUseController {
 
     public func execute(actionID: String) async throws -> SemanticActionResult {
         guard let action = actions[actionID] else { throw ComputerUseError.actionNotFound(actionID) }
-        guard await permissionPolicy.allows(action.risk, action: action) else { throw ComputerUseError.permissionDenied(actionID) }
+        guard let approval = await permissionPolicy.approval(for: action.risk, action: action), approval.isValid() else {
+            await auditSink.record(ArchonAuditEvent(
+                category: "computer-use",
+                action: actionID,
+                outcome: "denied",
+                metadata: ["risk": action.risk.rawValue]
+            ))
+            throw ComputerUseError.permissionDenied(actionID)
+        }
 
         guard currentExecutionID == nil else { throw ComputerUseError.actionCancelled(actionID) }
         let executionID = UUID()
@@ -193,7 +243,14 @@ public actor ComputerUseController {
                 throw ComputerUseError.actionCancelled(actionID)
             }
             guard snapshot.elements.contains(where: { $0.id == targetElementID }) else {
-                throw ComputerUseError.verificationFailed(actionID)
+                throw ComputerUseError.staleObservation(actionID)
+            }
+            guard await action.precondition?(snapshot) ?? true else {
+                throw ComputerUseError.staleObservation(actionID)
+            }
+        } else if let precondition = action.precondition {
+            guard await precondition(lastSnapshot) else {
+                throw ComputerUseError.staleObservation(actionID)
             }
         }
         state = .executing
@@ -229,6 +286,15 @@ public actor ComputerUseController {
         guard currentExecutionID == executionID else {
             throw ComputerUseError.actionCancelled(actionID)
         }
+        guard approval.isValid() else {
+            throw ComputerUseError.approvalRequired(actionID)
+        }
+        await auditSink.record(ArchonAuditEvent(
+            category: "computer-use",
+            action: actionID,
+            outcome: "succeeded",
+            metadata: ["risk": action.risk.rawValue]
+        ))
         return result
     }
 

@@ -164,6 +164,38 @@ struct ArchonModelsTests {
         supportsCoreAI: true
     )
 
+    @Test("Runtime capability negotiation rejects unsupported tool contracts")
+    func rejectsUnsupportedRuntimeCapabilities() {
+        let variant = ModelVariant(
+            id: "text-only-coreai",
+            name: "text-only.aimodel",
+            modelID: "example/text-only",
+            source: .localImport,
+            format: .aimodel,
+            runtime: .coreAI,
+            estimatedMemoryBytes: 100,
+            capabilities: ArchonModelCapabilities(
+                tasks: [.textGeneration],
+                supportsStreaming: true,
+                supportsToolCalling: false,
+                supportsStructuredOutput: true
+            )
+        )
+
+        let compatibility = ModelCompatibilityAnalyzer.analyze(
+            variant: variant,
+            device: device,
+            requirements: ModelCapabilityRequirements(
+                task: .textGeneration,
+                requiresStreaming: true,
+                requiresToolCalling: true
+            )
+        )
+
+        #expect(compatibility.status == .unsupportedFormat)
+        #expect(compatibility.canLoad == false)
+    }
+
     @Test("Raw SafeTensors are conversion-required, never directly runnable")
     func refusesRawSafeTensors() {
         let variant = ModelVariant(

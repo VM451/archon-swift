@@ -8,19 +8,22 @@ public actor MemoryExtractor {
     private let embeddingProvider: EmbeddingProvider
     private let llmProvider: LLMProvider
     private let customExtractionPrompt: String?
+    private let policy: MemoryExtractionPolicy
 
     public init(
         vectorStore: VectorStore,
         graphStore: GraphStore? = nil,
         embeddingProvider: EmbeddingProvider,
         llmProvider: LLMProvider,
-        customExtractionPrompt: String? = nil
+        customExtractionPrompt: String? = nil,
+        policy: MemoryExtractionPolicy = .standard
     ) {
         self.vectorStore = vectorStore
         self.graphStore = graphStore
         self.embeddingProvider = embeddingProvider
         self.llmProvider = llmProvider
         self.customExtractionPrompt = customExtractionPrompt
+        self.policy = policy
     }
 
     /// Process incoming conversation turns and update stored memories automatically.
@@ -44,7 +47,7 @@ public actor MemoryExtractor {
         let candidates = try await vectorStore.search(
             query: fullConversationText,
             vector: queryVector,
-            limit: 10,
+            limit: policy.maxCandidates,
             filters: filter
         )
 
@@ -93,7 +96,7 @@ public actor MemoryExtractor {
                 ))
                 
                 // Extract entity triples into Knowledge Graph if graphStore is active
-                if let graphStore = self.graphStore {
+                if policy.enableGraphExtraction, let graphStore = self.graphStore {
                     await self.extractAndStoreGraphTriples(from: op.memory, userId: userId, graphStore: graphStore)
                 }
                 
@@ -148,7 +151,7 @@ public actor MemoryExtractor {
                     userId: userId
                 ))
 
-                if let graphStore = self.graphStore {
+                if policy.enableGraphExtraction, let graphStore = self.graphStore {
                     await self.extractAndStoreGraphTriples(from: op.memory, userId: userId, graphStore: graphStore)
                 }
 
@@ -156,6 +159,7 @@ public actor MemoryExtractor {
                 executedOperations.append(op)
 
             case .delete:
+                guard policy.allowAutomaticDeletion else { continue }
                 guard let targetIdStr = op.id, let targetUUID = UUID(uuidString: targetIdStr) else {
                     continue
                 }

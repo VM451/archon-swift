@@ -74,12 +74,39 @@ struct ToolDispatcherTests {
         #expect(valid.content == "called")
     }
 
+    @Test("Tool effect ledger replays a receipt instead of repeating the side effect")
+    func testToolEffectReceipt() async {
+        let registry = ToolRegistry()
+        let calls = CallCounter()
+        registry.register(ClosureTool(name: "once", description: "Runs once") { _ in
+            await calls.increment()
+            return "completed"
+        })
+        let ledger = InMemoryToolEffectLedger()
+        let dispatcher = ToolDispatcher(registry: registry, effectLedger: ledger)
+        let call = ToolCall(id: "stable-call", name: "once", arguments: "{}")
+
+        _ = await dispatcher.execute(call: call)
+        let replay = await dispatcher.execute(call: call)
+
+        #expect(replay.content == "completed")
+        #expect(await calls.value == 1)
+    }
+
     @Test("Checkpoint state protection encrypts and round-trips state")
     func testCheckpointStateProtection() throws {
         let plaintext = Data("private agent state".utf8)
         let sealed = try CheckpointStateProtector.seal(plaintext)
         #expect(sealed != plaintext)
         #expect(try CheckpointStateProtector.open(sealed) == plaintext)
+    }
+}
+
+private actor CallCounter {
+    private(set) var value = 0
+
+    func increment() {
+        value += 1
     }
 }
 

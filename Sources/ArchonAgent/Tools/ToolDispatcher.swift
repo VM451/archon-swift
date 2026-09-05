@@ -37,10 +37,16 @@ public final class ToolRegistry: @unchecked Sendable {
 public struct ToolDispatcher: Sendable {
     public let registry: ToolRegistry
     public let authorizationPolicy: ToolAuthorizationPolicy
+    public let effectLedger: (any ToolEffectLedger)?
 
-    public init(registry: ToolRegistry = ToolRegistry(), authorizationPolicy: ToolAuthorizationPolicy = ToolAuthorizationPolicy()) {
+    public init(
+        registry: ToolRegistry = ToolRegistry(),
+        authorizationPolicy: ToolAuthorizationPolicy = ToolAuthorizationPolicy(),
+        effectLedger: (any ToolEffectLedger)? = nil
+    ) {
         self.registry = registry
         self.authorizationPolicy = authorizationPolicy
+        self.effectLedger = effectLedger
     }
 
     /// Dispatches a batch of tool calls and returns results mapped by call ID.
@@ -65,9 +71,20 @@ public struct ToolDispatcher: Sendable {
             )
         }
 
+        if let effectLedger, let receipt = try? await effectLedger.receipt(for: call.id) {
+            return ChatMessage.toolResult(receipt.output, toolCallId: call.id)
+        }
+
         do {
             try tool.definition.validate(argumentsJSON: call.arguments)
             let output = try await tool.call(argumentsJSON: call.arguments)
+            if let effectLedger {
+                try? await effectLedger.record(ToolEffectReceipt(
+                    callID: call.id,
+                    toolName: call.name,
+                    output: output
+                ))
+            }
             return ChatMessage.toolResult(output, toolCallId: call.id)
         } catch {
             return ChatMessage.toolResult("Execution Error in '\(call.name)': \(error.localizedDescription)", toolCallId: call.id)

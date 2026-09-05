@@ -14,8 +14,11 @@ boundaries.
 - `GraphInterrupt` supports approval or pause points.
 - Tool registries, model policies, tracing, token accounting, and evaluation
   harnesses remain independently configurable.
+- `ToolEffectLedger` records successful idempotent tool receipts so recovery
+  can replay a completed side effect instead of executing it twice.
 
 The graph does not download models. `ModelPolicy` and the routing layer select
 an explicitly permitted provider; `localOnly` never silently chooses a cloud
-provider. Use the consuming app for credentials, side-effect approval, and
-host-specific model adapters.
+provider and can explicitly prefer Apple's Foundation Models runtime when the
+device reports it available. Use the consuming app for credentials,
+side-effect approval, and host-specific model adapters.

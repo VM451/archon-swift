@@ -101,4 +101,25 @@ struct ProximaVectorIndexAdapterTests {
             )
         }
     }
+
+    @Test("Adapter persists and restores a deterministic snapshot")
+    func persistsAndRestores() async throws {
+        let snapshotURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("proxima-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: snapshotURL) }
+
+        let id = try #require(UUID(uuidString: "00000000-0000-0000-0000-000000000003"))
+        let source = try ProximaVectorIndexAdapter(dimension: 2, configuration: configuration)
+        try await source.upsert(id: id, vector: [1, 0])
+        try await source.persist(to: snapshotURL)
+
+        let restored = try ProximaVectorIndexAdapter(dimension: 2, configuration: configuration)
+        try await restored.restore(from: snapshotURL)
+        let results = try await restored.search(
+            ArchonMemory.VectorIndexQuery(vector: [1, 0], limit: 1)
+        )
+
+        #expect(await restored.count == 1)
+        #expect(results.first?.id == id)
+    }
 }

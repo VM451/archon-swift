@@ -23,23 +23,39 @@ public struct SandboxExecutionRequest: Codable, Hashable, Sendable {
     }
 }
 
+public struct SandboxResourceUsage: Codable, Hashable, Sendable {
+    public let duration: TimeInterval
+    public let outputBytes: Int
+
+    public init(duration: TimeInterval, outputBytes: Int) {
+        self.duration = max(0, duration)
+        self.outputBytes = max(0, outputBytes)
+    }
+}
+
 /// Provider-neutral execution result with an explicit isolation declaration.
 public struct SandboxExecutionResult: Codable, Hashable, Sendable {
     public let output: String
     public let isolationLevel: IsolationLevel
     public let networkAccessPermitted: Bool
     public let duration: TimeInterval
+    public let resourceUsage: SandboxResourceUsage
 
     public init(
         output: String,
         isolationLevel: IsolationLevel,
         networkAccessPermitted: Bool,
-        duration: TimeInterval
+        duration: TimeInterval,
+        resourceUsage: SandboxResourceUsage? = nil
     ) {
         self.output = output
         self.isolationLevel = isolationLevel
         self.networkAccessPermitted = networkAccessPermitted
         self.duration = duration
+        self.resourceUsage = resourceUsage ?? SandboxResourceUsage(
+            duration: duration,
+            outputBytes: output.utf8.count
+        )
     }
 }
 
