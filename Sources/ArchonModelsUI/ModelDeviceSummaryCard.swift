@@ -20,14 +20,35 @@ public struct ModelDeviceSummaryCard: View {
         HStack(alignment: .center, spacing: 12) {
             deviceIcon
 
-            VStack(alignment: .leading, spacing: 3) {
-                headerLine
-                metricsLine
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .center) {
+                    Text(device.deviceDisplayName)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+
+                    Spacer(minLength: 4)
+
+                    thermalBadge
+                }
+
+                HStack(spacing: 6) {
+                    Text(osDisplay)
+
+                    Text("•")
+                        .foregroundStyle(.tertiary)
+
+                    Text(ramString)
+
+                    Text("•")
+                        .foregroundStyle(.tertiary)
+
+                    Text(budgetString)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
             }
-
-            Spacer(minLength: 6)
-
-            thermalBadge
         }
         .padding(.vertical, 2)
         .accessibilityElement(children: .combine)
@@ -49,46 +70,6 @@ public struct ModelDeviceSummaryCard: View {
     }
 
     @ViewBuilder
-    private var headerLine: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(device.deviceDisplayName)
-                .font(.headline)
-                .foregroundStyle(.primary)
-
-            Text("•")
-                .foregroundStyle(.tertiary)
-
-            Text(osDisplay)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .lineLimit(1)
-        .minimumScaleFactor(0.85)
-    }
-
-    @ViewBuilder
-    private var metricsLine: some View {
-        HStack(spacing: 6) {
-            Label(
-                ByteCountFormatter.string(fromByteCount: Int64(device.physicalMemoryBytes), countStyle: .memory) + " RAM",
-                systemImage: "memorychip"
-            )
-
-            Text("•")
-                .foregroundStyle(.tertiary)
-
-            Label(
-                ByteCountFormatter.string(fromByteCount: Int64(device.recommendedModelMemoryBytes), countStyle: .memory) + " Budget",
-                systemImage: "gauge.with.dots.needle.50percent"
-            )
-        }
-        .font(.caption2)
-        .foregroundStyle(.secondary)
-        .lineLimit(1)
-        .minimumScaleFactor(0.85)
-    }
-
-    @ViewBuilder
     private var thermalBadge: some View {
         let (title, icon, color) = thermalVisuals
         HStack(spacing: 3) {
@@ -102,6 +83,14 @@ public struct ModelDeviceSummaryCard: View {
         .padding(.horizontal, 7)
         .padding(.vertical, 3)
         .background(color.opacity(0.12), in: Capsule())
+    }
+
+    private var ramString: String {
+        ByteCountFormatter.string(fromByteCount: Int64(device.physicalMemoryBytes), countStyle: .memory) + " RAM"
+    }
+
+    private var budgetString: String {
+        ByteCountFormatter.string(fromByteCount: Int64(device.recommendedModelMemoryBytes), countStyle: .memory) + " AI Budget"
     }
 
     private var iconName: String {
@@ -138,6 +127,6 @@ public struct ModelDeviceSummaryCard: View {
     }
 
     private var accessibilitySummary: String {
-        "\(device.deviceDisplayName), \(osDisplay), \(ByteCountFormatter.string(fromByteCount: Int64(device.physicalMemoryBytes), countStyle: .memory)) RAM, \(ByteCountFormatter.string(fromByteCount: Int64(device.recommendedModelMemoryBytes), countStyle: .memory)) AI model memory budget, thermal state \(thermalVisuals.0)."
+        "\(device.deviceDisplayName), \(osDisplay), \(ramString), \(budgetString), thermal state \(thermalVisuals.0)."
     }
 }
