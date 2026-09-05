@@ -340,6 +340,10 @@ public struct ModelBrowserView: View {
             }
 
             Section {
+                ModelDeviceSummaryCard(device: device)
+            }
+
+            Section {
                 ForEach(displayedResults) { model in
                     ForEach(model.variants) { variant in
                         let compatibility = ModelCompatibilityAnalyzer.analyze(

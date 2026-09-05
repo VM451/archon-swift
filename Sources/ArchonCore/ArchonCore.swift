@@ -533,6 +533,67 @@ public struct ArchonDeviceCapabilities: Codable, Equatable, Sendable {
             loadedModelMemoryBytes: 0
         )
     }
+
+    /// Marketing or platform-idiomatic name of the host device (e.g. "iPhone 16", "Mac", "iPad").
+    public var deviceDisplayName: String {
+        #if canImport(Darwin)
+        var systemInfo = utsname()
+        if uname(&systemInfo) == 0 {
+            let machineSize = MemoryLayout.size(ofValue: systemInfo.machine)
+            let identifier = withUnsafePointer(to: systemInfo.machine) {
+                $0.withMemoryRebound(to: CChar.self, capacity: machineSize) {
+                    String(cString: $0)
+                }
+            }
+            if let marketing = Self.marketingName(for: identifier) {
+                return marketing
+            }
+        }
+        #endif
+        switch platform {
+        case .iOS: return "iPhone"
+        case .iPadOS: return "iPad"
+        case .macOS: return "Mac"
+        case .visionOS: return "Apple Vision Pro"
+        }
+    }
+
+    private static func marketingName(for identifier: String) -> String? {
+        switch identifier {
+        case "iPhone12,1": return "iPhone 11"
+        case "iPhone12,3": return "iPhone 11 Pro"
+        case "iPhone12,5": return "iPhone 11 Pro Max"
+        case "iPhone12,8": return "iPhone SE (2nd generation)"
+        case "iPhone13,1": return "iPhone 12 mini"
+        case "iPhone13,2": return "iPhone 12"
+        case "iPhone13,3": return "iPhone 12 Pro"
+        case "iPhone13,4": return "iPhone 12 Pro Max"
+        case "iPhone14,2": return "iPhone 13 Pro"
+        case "iPhone14,3": return "iPhone 13 Pro Max"
+        case "iPhone14,4": return "iPhone 13 mini"
+        case "iPhone14,5": return "iPhone 13"
+        case "iPhone14,6": return "iPhone SE (3rd generation)"
+        case "iPhone14,7": return "iPhone 14"
+        case "iPhone14,8": return "iPhone 14 Plus"
+        case "iPhone15,2": return "iPhone 14 Pro"
+        case "iPhone15,3": return "iPhone 14 Pro Max"
+        case "iPhone15,4": return "iPhone 15"
+        case "iPhone15,5": return "iPhone 15 Plus"
+        case "iPhone16,1": return "iPhone 15 Pro"
+        case "iPhone16,2": return "iPhone 15 Pro Max"
+        case "iPhone17,1": return "iPhone 16 Pro"
+        case "iPhone17,2": return "iPhone 16 Pro Max"
+        case "iPhone17,3": return "iPhone 16"
+        case "iPhone17,4": return "iPhone 16 Plus"
+        case "iPhone17,5": return "iPhone 16e"
+        default:
+            if identifier.hasPrefix("iPhone") { return "iPhone" }
+            if identifier.hasPrefix("iPad") { return "iPad" }
+            if identifier.hasPrefix("Mac") { return "Mac" }
+            if identifier.hasPrefix("RealityDevice") { return "Apple Vision Pro" }
+            return nil
+        }
+    }
 }
 
 /// Reads the process-available memory reported by Darwin instead of treating a
