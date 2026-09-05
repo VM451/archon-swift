@@ -82,7 +82,9 @@ public struct ModelLibraryView: View {
                                 for id in ids { try await library.delete(modelID: id) }
                                 await refresh()
                             } catch {
-                                errorMessage = error.localizedDescription
+                                if !error.isCancellation && !Task.isCancelled {
+                                    errorMessage = error.localizedDescription
+                                }
                             }
                         }
                     }
@@ -160,7 +162,9 @@ public struct ModelLibraryView: View {
             models = try await library.installedMLXModels()
             errorMessage = nil
         } catch {
-            errorMessage = error.localizedDescription
+            if !error.isCancellation && !Task.isCancelled {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -213,7 +217,9 @@ public struct ModelLibraryView: View {
             })
             errorMessage = nil
         } catch {
-            errorMessage = error.localizedDescription
+            if !error.isCancellation && !Task.isCancelled {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -253,8 +259,10 @@ public struct ModelLibraryView: View {
                     }
                 }
             } catch {
-                updateStatus[modelID] = error.localizedDescription
-                errorMessage = error.localizedDescription
+                if !error.isCancellation && !Task.isCancelled {
+                    updateStatus[modelID] = error.localizedDescription
+                    errorMessage = error.localizedDescription
+                }
             }
         }
     }
@@ -426,11 +434,14 @@ public struct ModelBrowserView: View {
                 // typing. Debounce them so each keystroke does not start a
                 // separate catalog request.
                 try await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled else { return }
                 await search()
             } catch is CancellationError {
                 // SwiftUI cancels this task when the search identity changes.
             } catch {
-                searchError = error.localizedDescription
+                if !error.isCancellation && !Task.isCancelled {
+                    searchError = error.localizedDescription
+                }
             }
         }
         .task {
@@ -666,7 +677,7 @@ public struct ModelBrowserView: View {
                 hasMoreResults = false
             }
         } catch {
-            if !(error is CancellationError) {
+            if !error.isCancellation && !Task.isCancelled {
                 if isFirstPage { results = [] }
                 hasMoreResults = false
                 searchError = error.localizedDescription
@@ -788,10 +799,10 @@ public struct ModelBrowserView: View {
                     }
                 }
             } catch {
-                if let modelError = error as? ArchonModelsError, modelError == .cancelled {
+                if error.isCancellation || Task.isCancelled || (error as? ArchonModelsError) == .cancelled {
                     phase[variantID] = .cancelled
                     status[variantID] = "Cancelled"
-                } else if !(error is CancellationError) {
+                } else {
                     phase[variantID] = .failed
                     status[variantID] = error.localizedDescription
                 }

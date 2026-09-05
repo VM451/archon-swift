@@ -221,7 +221,9 @@ public struct ModelDetailView: View {
             installedModels = try await library.installedMLXModels()
             errorMessage = nil
         } catch {
-            errorMessage = error.localizedDescription
+            if !error.isCancellation && !Task.isCancelled {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -296,7 +298,9 @@ public struct ModelDetailView: View {
                 try await library.delete(modelID: installed.id)
                 await refreshInstalledModels()
             } catch {
-                errorMessage = error.localizedDescription
+                if !error.isCancellation && !Task.isCancelled {
+                    errorMessage = error.localizedDescription
+                }
             }
         }
     }
@@ -349,7 +353,7 @@ public struct ModelDetailView: View {
                     }
                 }
             } catch {
-                if !(error is CancellationError) {
+                if !error.isCancellation && !Task.isCancelled {
                     phases[variant.id] = .failed
                     statuses[variant.id] = error.localizedDescription
                     errorMessage = error.localizedDescription
@@ -496,7 +500,9 @@ public struct ModelStorageView: View {
             diskUsage = try await library.mlxDiskUsageBytes()
             errorMessage = nil
         } catch {
-            errorMessage = error.localizedDescription
+            if !error.isCancellation && !Task.isCancelled {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -509,7 +515,9 @@ public struct ModelStorageView: View {
             }
             await refresh()
         } catch {
-            errorMessage = error.localizedDescription
+            if !error.isCancellation && !Task.isCancelled {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -519,7 +527,9 @@ public struct ModelStorageView: View {
             try await library.clearTemporaryStorage()
             await refresh()
         } catch {
-            errorMessage = error.localizedDescription
+            if !error.isCancellation && !Task.isCancelled {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 }

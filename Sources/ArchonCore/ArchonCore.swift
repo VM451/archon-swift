@@ -752,3 +752,13 @@ public enum ArchonCoreError: Error, LocalizedError, Equatable, Sendable {
         }
     }
 }
+
+extension Error {
+    /// Returns true if this error represents an asynchronous task or network cancellation.
+    public var isCancellation: Bool {
+        if self is CancellationError { return true }
+        if let urlError = self as? URLError, urlError.code == .cancelled { return true }
+        let nsError = self as NSError
+        return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
+    }
+}

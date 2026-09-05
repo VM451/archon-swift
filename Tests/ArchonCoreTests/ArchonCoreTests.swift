@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import ArchonCore
 
@@ -121,5 +122,39 @@ struct ArchonCoreTests {
         #expect(event.metadata["authorization"] == "<redacted>")
         #expect(event.metadata["provider"] == "local")
         #expect(event.metadata["request-id"] == "abc")
+    }
+
+    @Test("Public network policy requires HTTPS and rejects local destinations")
+    func publicNetworkPolicyFailsClosed() throws {
+        let policy = ArchonNetworkPolicy.publicInternet
+        try policy.validate(URL(string: "https://example.com/model")!)
+        #expect(throws: ArchonNetworkPolicyError.self) {
+            try policy.validate(URL(string: "http://example.com/model")!)
+        }
+        #expect(throws: ArchonNetworkPolicyError.self) {
+            try policy.validate(URL(string: "https://127.0.0.1/model")!)
+        }
+        #expect(throws: ArchonNetworkPolicyError.self) {
+            try policy.validate(URL(string: "https://[::1]/model")!)
+        }
+        try policy.validateResolvedAddresses(["2001:4860:4860::8888"])
+        #expect(throws: ArchonNetworkPolicyError.self) {
+            try policy.validateResolvedAddresses(["10.0.0.4"])
+        }
+        #expect(throws: ArchonNetworkPolicyError.self) {
+            try policy.validateResolvedAddresses(["not-an-address"])
+        }
+    }
+
+    @Test("Error isCancellation detects CancellationError and URLError cancelled")
+    func errorIsCancellationDetection() {
+        #expect(CancellationError().isCancellation)
+        #expect(URLError(.cancelled).isCancellation)
+        #expect(NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled, userInfo: nil).isCancellation)
+
+        #expect(!URLError(.notConnectedToInternet).isCancellation)
+        #expect(!URLError(.timedOut).isCancellation)
+        #expect(!ArchonCoreError.cancelled.isCancellation)
+        #expect(!NSError(domain: "CustomDomain", code: -999, userInfo: nil).isCancellation)
     }
 }
