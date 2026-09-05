@@ -390,9 +390,11 @@ public struct ModelBrowserView: View {
             }
         }
         #if os(macOS)
-        .searchable(text: $query, prompt: "Search MLX models")
+        .searchable(text: $query, prompt: "Search models")
         #else
-        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search MLX models")
+        .safeAreaInset(edge: .bottom) {
+            bottomSearchBar
+        }
         #endif
         .navigationTitle(title)
         .toolbar {
@@ -430,6 +432,40 @@ public struct ModelBrowserView: View {
         } message: {
             Text(searchError ?? "The model catalog could not be queried.")
         }
+    }
+
+    @ViewBuilder
+    private var bottomSearchBar: some View {
+        VStack(spacing: 0) {
+            Divider()
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                TextField("Search models", text: $query)
+                    .textFieldStyle(.plain)
+                    .font(.body)
+                    .autocorrectionDisabled()
+
+                if !query.isEmpty {
+                    Button {
+                        query = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear search")
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+        }
+        .background(.bar)
     }
 
     private var filterMenu: some View {
