@@ -34,7 +34,9 @@ public struct ToolAuthorizationPolicy: Sendable {
 }
 
 public extension Tool {
-    var authorizationRequirement: ToolAuthorizationRequirement { .readOnly }
+    // Custom tools are untrusted by default. Read-only classification must be
+    // granted explicitly by the tool implementation or the registry.
+    var authorizationRequirement: ToolAuthorizationRequirement { .explicitApproval }
 }
 
 public extension FileSystemTool {

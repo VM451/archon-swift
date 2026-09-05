@@ -355,6 +355,9 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
         tags: [String] = [],
         metadata: [String: String] = [:]
     ) async throws -> [DocumentItem] {
+        guard content.utf8.count <= PlainTextDocumentLoader.maxInputBytes else {
+            throw NSError(domain: "DocumentLoader", code: 413, userInfo: [NSLocalizedDescriptionKey: "Document exceeds the maximum supported size."])
+        }
         let chunks = chunker.chunk(text: content)
         let autoTags = tags.isEmpty ? chunker.extractTags(text: content) : tags
         
@@ -437,6 +440,9 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
         userId: String? = nil,
         metadata: [String: String] = [:]
     ) async throws -> [DocumentChunk] {
+        guard data.count <= PlainTextDocumentLoader.maxInputBytes else {
+            throw NSError(domain: "DocumentLoader", code: 413, userInfo: [NSLocalizedDescriptionKey: "Document exceeds the maximum supported size."])
+        }
         let docLoader = loader ?? AutoDocumentLoader()
         let loadedDocs = try await docLoader.load(data: data, filename: filename, metadata: metadata)
         var allChunks: [DocumentChunk] = []

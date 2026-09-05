@@ -48,6 +48,12 @@ public struct FileSystemTool: Tool {
             guard FileManager.default.fileExists(atPath: targetURL.path) else {
                 return "Error: File not found at '\(path)'."
             }
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: targetURL.path),
+                  (attributes[.type] as? FileAttributeType) == .typeRegular,
+                  let size = attributes[.size] as? NSNumber,
+                  size.int64Value <= 8 * 1024 * 1024 else {
+                return "Error: File is too large to read."
+            }
             let text = try String(contentsOf: targetURL, encoding: .utf8)
             return text
 

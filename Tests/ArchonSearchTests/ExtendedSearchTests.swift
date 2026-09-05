@@ -10,6 +10,9 @@ struct ExtendedSearchTests {
         #expect(!SearchURLPolicy.validate(URL(string: "http://127.0.0.1/admin")!))
         #expect(!SearchURLPolicy.validate(URL(string: "http://192.168.1.10/private")!))
         #expect(SearchURLPolicy.validate(URL(string: "https://example.com")!))
+        #expect(!SearchURLPolicy.validate(URL(string: "http://2130706433/")!))
+        #expect(!SearchURLPolicy.validate(URL(string: "http://[::ffff:127.0.0.1]/")!))
+        #expect(!SearchURLPolicy.validate(URL(string: "http://[0:0:0:0:0:0:0:1]/")!))
 
         let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try Data("bounded local content".utf8).write(to: file)

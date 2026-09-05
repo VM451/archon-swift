@@ -48,6 +48,14 @@ struct ToolDispatcherTests {
         #expect(!allowed.content.contains("Authorization required"))
     }
 
+    @Test("Custom tools require explicit approval by default")
+    func customToolsAreFailClosed() async {
+        let registry = ToolRegistry()
+        registry.register(ClosureTool(name: "customSideEffect", description: "custom", parametersSchema: ["type": AnySendable("object")]) { _ in "called" })
+        let result = await ToolDispatcher(registry: registry).execute(call: ToolCall(name: "customSideEffect", arguments: "{}"))
+        #expect(result.content.contains("Authorization required"))
+    }
+
     @Test("ToolDispatcher validates required fields and primitive types")
     func testToolSchemaValidation() async {
         let registry = ToolRegistry()
@@ -63,7 +71,7 @@ struct ToolDispatcherTests {
             ]
         ) { _ in "called" })
 
-        let dispatcher = ToolDispatcher(registry: registry)
+        let dispatcher = ToolDispatcher(registry: registry, authorizationPolicy: ToolAuthorizationPolicy(allowedToolNames: ["needsText"]))
         let missing = await dispatcher.execute(call: ToolCall(name: "needsText", arguments: "{}"))
         #expect(missing.content.contains("missing required field"))
 
@@ -83,7 +91,7 @@ struct ToolDispatcherTests {
             return "completed"
         })
         let ledger = InMemoryToolEffectLedger()
-        let dispatcher = ToolDispatcher(registry: registry, effectLedger: ledger)
+        let dispatcher = ToolDispatcher(registry: registry, authorizationPolicy: ToolAuthorizationPolicy(allowedToolNames: ["once"]), effectLedger: ledger)
         let call = ToolCall(id: "stable-call", name: "once", arguments: "{}")
 
         _ = await dispatcher.execute(call: call)

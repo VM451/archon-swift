@@ -64,11 +64,17 @@ public protocol DocumentLoader: Sendable {
 // MARK: - Plain Text & RTF Loader
 
 public struct PlainTextDocumentLoader: DocumentLoader {
+    public static let maxInputBytes = 8 * 1024 * 1024
     public let supportedExtensions: [String] = ["txt", "text", "rtf", "log", "org"]
 
     public init() {}
 
     public func load(from url: URL) async throws -> [LoadedDocument] {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attributes[.size] as? NSNumber,
+              size.int64Value <= Int64(Self.maxInputBytes) else {
+            throw NSError(domain: "DocumentLoader", code: 413, userInfo: [NSLocalizedDescriptionKey: "Document exceeds the maximum supported size."])
+        }
         let content = try String(contentsOf: url, encoding: .utf8)
         let filename = url.lastPathComponent
         return [
@@ -85,6 +91,9 @@ public struct PlainTextDocumentLoader: DocumentLoader {
     }
 
     public func load(data: Data, filename: String, metadata: [String: String]) async throws -> [LoadedDocument] {
+        guard data.count <= Self.maxInputBytes else {
+            throw NSError(domain: "DocumentLoader", code: 413, userInfo: [NSLocalizedDescriptionKey: "Document exceeds the maximum supported size."])
+        }
         let content = String(decoding: data, as: UTF8.self)
         let ext = (filename as NSString).pathExtension.lowercased()
         return [
@@ -387,6 +396,11 @@ public struct AutoDocumentLoader: DocumentLoader {
     }
 
     public func load(from url: URL) async throws -> [LoadedDocument] {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attributes[.size] as? NSNumber,
+              size.int64Value <= Int64(PlainTextDocumentLoader.maxInputBytes) else {
+            throw NSError(domain: "DocumentLoader", code: 413, userInfo: [NSLocalizedDescriptionKey: "Document exceeds the maximum supported size."])
+        }
         let ext = url.pathExtension.lowercased()
         for loader in loaders {
             if loader.supportedExtensions.contains(ext) {
@@ -397,6 +411,9 @@ public struct AutoDocumentLoader: DocumentLoader {
     }
 
     public func load(data: Data, filename: String, metadata: [String: String]) async throws -> [LoadedDocument] {
+        guard data.count <= PlainTextDocumentLoader.maxInputBytes else {
+            throw NSError(domain: "DocumentLoader", code: 413, userInfo: [NSLocalizedDescriptionKey: "Document exceeds the maximum supported size."])
+        }
         let ext = (filename as NSString).pathExtension.lowercased()
         for loader in loaders {
             if loader.supportedExtensions.contains(ext) {
