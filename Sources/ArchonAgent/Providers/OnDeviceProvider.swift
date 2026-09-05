@@ -10,6 +10,9 @@ public enum OnDeviceBackend: String, Codable, Equatable, Sendable {
 
     /// MLX Swift runtime executing open-source weights over Metal.
     case mlx
+
+    /// No local candidate satisfied the adaptive catalog requirements.
+    case unavailable
 }
 
 /// Runtime preference when multiple on-device engines are available.
@@ -30,8 +33,8 @@ public enum OnDeviceRuntimePreference: String, Codable, Equatable, Sendable {
 
 /// Strategy for routing and sizing local on-device models across Apple Foundation Models, Core AI, and MLX.
 public enum OnDeviceStrategy: Sendable, Equatable {
-    /// Automatically probes hardware (RAM tier, cores, Apple Intelligence support) and balances
-    /// speed, reasoning intelligence, and memory footprint.
+    /// Automatically probes hardware (RAM tier, cores, Apple Intelligence support) and selects
+    /// the best eligible candidate from an `AdaptiveModelCatalog`.
     case adaptive(
         preference: OnDeviceOptimizationPreference = .adaptive,
         runtime: OnDeviceRuntimePreference = .auto
@@ -56,10 +59,12 @@ public enum OnDeviceStrategy: Sendable, Equatable {
 /// iPhone 16 series, M-series Macs & iPads), Apple Foundation Models are preferred
 /// as the primary local AI engine.
 ///
-/// For custom neural models (such as Google Gemma 4/3/2, Qwen, Mistral, Llama) or
-/// devices running on Apple Silicon, this provider seamlessly delegates to
-/// Apple's **Core AI** framework or **MLX Swift**, adaptively sizing the model
-/// variant (1B, 2B/E2B, 4B, 9B) to balance speed, intelligence, and RAM footprint.
+/// For custom neural models (such as Gemma, Qwen, Mistral, Llama, or a future
+/// catalog family) this provider resolves a compatible entry from an
+/// `AdaptiveModelCatalog`, then delegates to Apple's **Core AI** framework or
+/// **MLX Swift**. The selector uses declared runtime, memory, context, device,
+/// quality, speed, energy, thermal, download, and license metadata; it does
+/// not infer runtime compatibility from a model name.
 public final class OnDeviceProvider: LLMProvider, @unchecked Sendable {
     public static let `default` = OnDeviceProvider()
 
@@ -67,6 +72,9 @@ public final class OnDeviceProvider: LLMProvider, @unchecked Sendable {
     public let capabilities: ModelCapabilities
     public let backend: OnDeviceBackend
     public let hardwareProfile: DeviceHardwareProfile
+    /// The generic catalog entry selected for local execution, when one was selected.
+    public let selectedModel: AdaptiveModelCandidate?
+    /// Deprecated compatibility view for callers that still use the Gemma-only API.
     public let selectedGemmaVariant: GemmaVariant?
 
     private let selectedProvider: any LLMProvider
@@ -76,7 +84,8 @@ public final class OnDeviceProvider: LLMProvider, @unchecked Sendable {
         self.init(
             strategy: .adaptive(preference: .adaptive, runtime: .auto),
             hardwareProfile: .current,
-            appleFoundationModelAvailable: nil
+            appleFoundationModelAvailable: nil,
+            catalog: .builtIn
         )
     }
 
@@ -85,7 +94,8 @@ public final class OnDeviceProvider: LLMProvider, @unchecked Sendable {
         self.init(
             strategy: .adaptive(preference: .adaptive, runtime: .auto),
             hardwareProfile: .current,
-            appleFoundationModelAvailable: appleFoundationModelAvailable
+            appleFoundationModelAvailable: appleFoundationModelAvailable,
+            catalog: .builtIn
         )
     }
 
@@ -95,21 +105,26 @@ public final class OnDeviceProvider: LLMProvider, @unchecked Sendable {
     ///   - strategy: The on-device selection and optimization strategy.
     ///   - hardwareProfile: The device hardware profile (defaults to `.current`).
     ///   - appleFoundationModelAvailable: Optional override for deterministic test verification.
+    ///   - catalog: Curated local candidates. The default is the bundled seed;
+    ///     consuming apps can replace it with refreshed model descriptors.
     public init(
         strategy: OnDeviceStrategy = .adaptive(preference: .adaptive, runtime: .auto),
         hardwareProfile: DeviceHardwareProfile = .current,
-        appleFoundationModelAvailable: Bool? = nil
+        appleFoundationModelAvailable: Bool? = nil,
+        catalog: AdaptiveModelCatalog = .builtIn
     ) {
         self.hardwareProfile = hardwareProfile
 
         let (provider, selectedBackend, variant) = Self.resolveProvider(
             for: strategy,
             hardwareProfile: hardwareProfile,
-            appleFoundationModelAvailable: appleFoundationModelAvailable
+            appleFoundationModelAvailable: appleFoundationModelAvailable,
+            catalog: catalog
         )
 
         self.backend = selectedBackend
-        self.selectedGemmaVariant = variant
+        self.selectedModel = variant.candidate
+        self.selectedGemmaVariant = variant.gemmaVariant
         self.selectedProvider = provider
         self.id = provider.id
         self.capabilities = provider.capabilities
@@ -157,9 +172,15 @@ public final class OnDeviceProvider: LLMProvider, @unchecked Sendable {
     /// Creates an adaptive on-device provider balancing speed, intelligence, and RAM.
     public static func adaptive(
         preference: OnDeviceOptimizationPreference = .adaptive,
-        runtime: OnDeviceRuntimePreference = .auto
+        runtime: OnDeviceRuntimePreference = .auto,
+        catalog: AdaptiveModelCatalog = .builtIn,
+        hardwareProfile: DeviceHardwareProfile = .current
     ) -> OnDeviceProvider {
-        OnDeviceProvider(strategy: .adaptive(preference: preference, runtime: runtime))
+        OnDeviceProvider(
+            strategy: .adaptive(preference: preference, runtime: runtime),
+            hardwareProfile: hardwareProfile,
+            catalog: catalog
+        )
     }
 
     /// Creates an on-device provider optimized for speed-first and low memory.
@@ -215,40 +236,124 @@ public final class OnDeviceProvider: LLMProvider, @unchecked Sendable {
     private static func resolveProvider(
         for strategy: OnDeviceStrategy,
         hardwareProfile: DeviceHardwareProfile,
-        appleFoundationModelAvailable: Bool?
-    ) -> (provider: any LLMProvider, backend: OnDeviceBackend, variant: GemmaVariant?) {
+        appleFoundationModelAvailable: Bool?,
+        catalog: AdaptiveModelCatalog
+    ) -> (
+        provider: any LLMProvider,
+        backend: OnDeviceBackend,
+        variant: (candidate: AdaptiveModelCandidate?, gemmaVariant: GemmaVariant?)
+    ) {
         let isAppleModelEligible = appleFoundationModelAvailable
             ?? hardwareProfile.isAppleFoundationModelSupported
 
         switch strategy {
         case .adaptive(let preference, let runtimePref):
             if isAppleModelEligible && runtimePref != .preferCoreAI && runtimePref != .preferMLX {
-                return (AppleFoundationModelProvider.default, .appleFoundationModel, nil)
+                return (
+                    AppleFoundationModelProvider.default,
+                    .appleFoundationModel,
+                    (candidate: nil, gemmaVariant: nil)
+                )
             }
 
-            let variant = GemmaModelCatalog.resolve(
+            guard let candidate = catalog.resolve(
                 for: hardwareProfile,
-                preference: preference
-            )
-
-            if runtimePref == .preferCoreAI {
-                return (CoreAIProvider(variant: variant), .coreAI, variant)
-            } else {
-                return (MLXLocalProvider(variant: variant), .mlx, variant)
+                preference: preference,
+                runtime: runtimePref
+            ) else {
+                return (
+                    UnavailableAdaptiveModelProvider(),
+                    .unavailable,
+                    (candidate: nil, gemmaVariant: nil)
+                )
             }
+            return Self.provider(for: candidate)
 
         case .gemma(let variant, let runtimePref):
-            if runtimePref == .preferCoreAI {
-                return (CoreAIProvider(variant: variant), .coreAI, variant)
-            } else {
-                return (MLXLocalProvider(variant: variant), .mlx, variant)
+            let candidate = AdaptiveModelCatalog.builtIn.candidates.first {
+                $0.id == "\(variant.huggingFaceID)#\(runtimePref == .preferCoreAI ? "coreAI" : "mlx")"
+            } ?? AdaptiveModelCandidate(
+                id: "\(variant.huggingFaceID)#mlx",
+                name: variant.name,
+                family: "Gemma",
+                source: .mlx(
+                    source: variant.asModelSource,
+                    extraEOSTokens: Set(variant.extraEOSTokens)
+                ),
+                capabilities: .mlxLocal,
+                estimatedMemoryBytes: UInt64(variant.estimatedMemoryMB) * 1024 * 1024,
+                maxContextTokens: variant.maxContextTokens,
+                minimumSystemRAMGB: variant.minSystemRAMGB,
+                legacyGemmaVariant: variant
+            )
+            let resolvedCandidate: AdaptiveModelCandidate
+            switch runtimePref {
+            case .preferCoreAI:
+                resolvedCandidate = AdaptiveModelCandidate(
+                    id: "\(variant.coreAIModelIdentifier)#coreAI",
+                    name: variant.name,
+                    family: "Gemma",
+                    source: .coreAI(source: variant.asCoreAISource, computeUnit: .neuralEngineFirst),
+                    capabilities: .coreAI,
+                    estimatedMemoryBytes: candidate.estimatedMemoryBytes,
+                    maxContextTokens: variant.maxContextTokens,
+                    minimumSystemRAMGB: variant.minSystemRAMGB,
+                    legacyGemmaVariant: variant
+                )
+            default:
+                resolvedCandidate = candidate
             }
+            let result = Self.provider(for: resolvedCandidate)
+            return (
+                result.provider,
+                result.backend,
+                (candidate: resolvedCandidate, gemmaVariant: variant)
+            )
 
         case .coreAI(let source):
-            return (CoreAIProvider(source: source), .coreAI, nil)
+            return (
+                CoreAIProvider(source: source),
+                .coreAI,
+                (candidate: nil, gemmaVariant: nil)
+            )
 
         case .explicitMLXSource(let source):
-            return (MLXLocalProvider(source: source), .mlx, nil)
+            return (
+                MLXLocalProvider(source: source),
+                .mlx,
+                (candidate: nil, gemmaVariant: nil)
+            )
+        }
+    }
+
+    private static func provider(
+        for candidate: AdaptiveModelCandidate
+    ) -> (
+        provider: any LLMProvider,
+        backend: OnDeviceBackend,
+        variant: (candidate: AdaptiveModelCandidate?, gemmaVariant: GemmaVariant?)
+    ) {
+        switch candidate.source {
+        case .mlx(let source, let extraEOSTokens):
+            return (
+                MLXLocalProvider(
+                    source: source,
+                    capabilities: candidate.capabilities,
+                    extraEOSTokens: extraEOSTokens
+                ),
+                .mlx,
+                (candidate: candidate, gemmaVariant: candidate.legacyGemmaVariant)
+            )
+        case .coreAI(let source, let computeUnit):
+            return (
+                CoreAIProvider(
+                    source: source,
+                    computeUnit: computeUnit,
+                    capabilities: candidate.capabilities
+                ),
+                .coreAI,
+                (candidate: candidate, gemmaVariant: candidate.legacyGemmaVariant)
+            )
         }
     }
 }

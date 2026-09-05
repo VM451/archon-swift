@@ -44,7 +44,7 @@ hosted services are adapters, not hidden base dependencies.
 - A missing optional dependency fails closed rather than being represented as a
   successful no-op.
 
-The current dependency decision and evidence records live in
-[`context/dependency-decision-log.md`](../../context/dependency-decision-log.md),
-[`context/capability-ownership-matrix.md`](../../context/capability-ownership-matrix.md),
-and the [competitor registry](../../context/competitor-signature-features.md).
+The current dependency boundaries and published evidence live in the
+[product reference](../reference/products.md),
+[competitor comparison](../reference/competitor-comparison.md), and
+[release validation guide](../how-to/validate-a-release.md).

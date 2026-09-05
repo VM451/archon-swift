@@ -24,7 +24,7 @@ public enum ArchonAIModel: Sendable {
 
     // MARK: - Zero-Config Hardware Adaptive
 
-    /// Hardware-adaptive on-device routing (Apple Foundation Model on supported hardware, auto-sized Gemma 4 on older devices).
+    /// Hardware-adaptive on-device routing using the bundled or supplied adaptive catalog.
     case adaptive(
         preference: OnDeviceOptimizationPreference = .adaptive,
         runtime: OnDeviceRuntimePreference = .auto
@@ -96,9 +96,26 @@ public enum ArchonAI: Sendable {
 
     /// Zero-configuration adaptive on-device provider:
     /// - iPhone 15 Pro+, iPhone 16 series, M-series Macs & iPads -> Apple Foundation Model
-    /// - Older devices (iPhone 11-14, iPhone 15 base) -> Auto-sized Google Gemma 4 with 50% headroom guarantee
+    /// - Other devices -> the best eligible entry in the bundled adaptive catalog
     public static var auto: any LLMProvider {
         OnDeviceProvider.default
+    }
+
+    /// Creates a hardware-adaptive provider from an application- or registry-
+    /// supplied catalog. This is the update path for new model releases: the
+    /// app can refresh descriptors without requiring a new provider family.
+    public static func adaptive(
+        preference: OnDeviceOptimizationPreference = .adaptive,
+        runtime: OnDeviceRuntimePreference = .auto,
+        catalog: AdaptiveModelCatalog,
+        hardwareProfile: DeviceHardwareProfile = .current
+    ) -> any LLMProvider {
+        OnDeviceProvider.adaptive(
+            preference: preference,
+            runtime: runtime,
+            catalog: catalog,
+            hardwareProfile: hardwareProfile
+        )
     }
 
     /// Apple Foundation Model on-device runtime.

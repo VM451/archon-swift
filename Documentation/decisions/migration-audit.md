@@ -33,6 +33,6 @@ foreground and background transfers, and public Apple runtime adapters.
 - Do not call the migration complete for signed-app, physical-device, live UI,
   or real-model evidence that this package-only checkout cannot provide.
 
-See the [adoption backlog](../../context/feature-adoption-backlog.md) for open
-follow-up work and the [progress tracker](../../context/progress-tracker.md)
-for dated verification evidence.
+See the [competitor comparison](../reference/competitor-comparison.md) for
+current feature decisions and the [release validation guide](../how-to/validate-a-release.md)
+for the evidence required before a replacement becomes the default.

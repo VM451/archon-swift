@@ -34,6 +34,5 @@ stronger feature, but it has not replaced the local Swift implementation unless
 it passes the local qualification gate.
 
 Evidence and adoption decisions are maintained in the
-[competitor signature registry](../../context/competitor-signature-features.md),
-[adoption backlog](../../context/feature-adoption-backlog.md), and
-[quality scorecard](../../context/quality-scorecard.md).
+[competitor comparison](../reference/competitor-comparison.md) and
+[release validation guide](../how-to/validate-a-release.md).

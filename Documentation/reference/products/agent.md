@@ -22,3 +22,26 @@ an explicitly permitted provider; `localOnly` never silently chooses a cloud
 provider and can explicitly prefer Apple's Foundation Models runtime when the
 device reports it available. Use the consuming app for credentials,
 side-effect approval, and host-specific model adapters.
+
+## Adaptive local model selection
+
+`AdaptiveModelCatalog` is the family-neutral input to
+`OnDeviceProvider.adaptive(...)`. It accepts candidates from any validated
+local family, including MLX Hugging Face sources, imported MLX directories,
+and declared Core AI exports. A candidate carries its runtime contract,
+peak-memory estimate, context, device/platform constraints, optional measured
+quality/speed/prompt-speed/energy/thermal metadata, download size, and license.
+
+The selector applies hard platform, runtime, context, minimum-RAM, Core AI,
+and generic peak-memory gates before ranking eligible candidates. Missing
+benchmark metadata is not invented. Automatic runtime selection keeps MLX
+dynamic weights separate from Core AI exports; Core AI requires an explicit
+preference or a compatible Core AI-only catalog.
+
+The bundled catalog is a small compatibility seed and retains the existing
+Gemma convenience API. Applications should refresh descriptors from
+`ArchonModels` catalog providers (or use `AdaptiveModelCatalog.load(from:)`)
+and pass a new `AdaptiveModelCatalog` to `OnDeviceProvider` or
+`ArchonAI.adaptive(...)` when new model releases are approved. Raw GGUF,
+SafeTensors, and Transformers weights remain
+conversion-required and are not made runnable by catalog metadata alone.

@@ -12,10 +12,21 @@ organized using the Diátaxis model so each document has one job:
 | [Decisions](decisions/) | Historical and migration records | Understand what was retained, replaced, or excluded |
 
 The package's API reference remains in Swift documentation comments and the
-DocC catalog under `Sources/*/Documentation.docc`. The [`context/`](../context/)
-directory remains the engineering source of truth for competitive evidence,
-adoption decisions, quality gates, and progress. This directory links to those
-records instead of copying them.
+DocC catalog under `Sources/*/Documentation.docc`. Published competitive
+decisions and release gates live in the [competitor comparison](reference/competitor-comparison.md)
+and [release validation guide](how-to/validate-a-release.md). Internal agent
+working records are intentionally local-only and are not part of the GitHub
+documentation surface.
+
+## Decision vocabulary
+
+| Decision | Meaning in this SDK |
+| --- | --- |
+| **REUSE** | Existing Apple or Swift capability is sufficient and used directly. |
+| **PARTIAL / ADAPT** | Existing capability is useful but Archon adds a vendor-neutral boundary, policy, or lifecycle layer. |
+| **BUILD** | Archon owns missing local-native behavior because no qualifying replacement exists. |
+| **INSPIRATION** | Cloud, server, or non-native reference used for outcomes and patterns only. |
+| **PENDING** | Evidence is incomplete; no adoption or parity claim is made. |
 
 ## Recommended reading paths
 
@@ -65,5 +76,9 @@ model-specific runtime claims must be validated in the consuming app.
   changes.
 - Run the package verification commands from the root before publishing docs.
 
-See the [quality scorecard](../context/quality-scorecard.md) for the evidence
+See the [competitor comparison and scorecard](reference/competitor-comparison.md)
+and [release validation guide](how-to/validate-a-release.md) for the evidence
 required before a capability or replacement becomes a default.
+
+The concise product-by-product matrix is in the repository
+[README](../README.md#product-decision-matrix).

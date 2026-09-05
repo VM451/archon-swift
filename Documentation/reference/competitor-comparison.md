@@ -5,8 +5,8 @@ registry. It explains what each reference product is strong at, scores the
 relevant aspects, and translates the result into a local-first Archon decision.
 
 **Review snapshot:** 2026-09-05<br>
-**Canonical evidence:** [`context/competitor-signature-features.md`](../../context/competitor-signature-features.md)<br>
-**Canonical quality gates:** [`context/quality-scorecard.md`](../../context/quality-scorecard.md)
+**Canonical evidence:** this comparison and its linked official sources<br>
+**Canonical quality gates:** [`validate a release`](../how-to/validate-a-release.md)
 
 ## Executive summary
 
@@ -101,7 +101,7 @@ failed local, security, recovery, license, or platform gate.
 
 ## 1. Memory systems
 
-Source records: [memory registry](../../context/competitor-signature-features.md#memory).
+Source records: the memory comparison in this document.
 
 ### What users select these products for
 
@@ -147,7 +147,7 @@ Source records: [memory registry](../../context/competitor-signature-features.md
 
 ## 2. Agent orchestration
 
-Source records: [agent registry](../../context/competitor-signature-features.md#agent-orchestration).
+Source records: the agent comparison in this document.
 
 ### What users select these products for
 
@@ -192,7 +192,7 @@ Source records: [agent registry](../../context/competitor-signature-features.md#
 
 ## 3. Search and research
 
-Source records: [search registry](../../context/competitor-signature-features.md#search-and-research).
+Source records: the search comparison in this document.
 
 ### What users select these products for
 
@@ -252,8 +252,7 @@ Source records: [search registry](../../context/competitor-signature-features.md
 
 ## 4. Sandbox, browser, and computer-use systems
 
-Source records: [sandbox registry](../../context/competitor-signature-features.md#sandbox-and-execution)
-and [computer-use registry](../../context/competitor-signature-features.md#browser-and-computer-use-agents).
+Source records: the sandbox and Computer Use comparisons in this document.
 
 ### What users select these products for
 
@@ -310,7 +309,7 @@ and [computer-use registry](../../context/competitor-signature-features.md#brows
 
 ## 5. Models and local runtimes
 
-Source records: [models and runtimes registry](../../context/competitor-signature-features.md#apple-native-model-and-platform-foundations).
+Source records: the models and runtimes comparison in this document.
 
 ### What users select these products for
 
@@ -358,7 +357,7 @@ Source records: [models and runtimes registry](../../context/competitor-signatur
 
 ## 6. Protocols and interoperability
 
-Source records: [protocol registry](../../context/competitor-signature-features.md#protocols-and-interoperability).
+Source records: the protocols comparison in this document.
 
 ### Capability scores — protocol aspects
 
@@ -488,7 +487,7 @@ inspection, cloud demo, or package build into a replacement claim.
 - Keep cloud, hosted browser, localhost-server, and non-Swift references visible
   but label them as adapters or inspiration rather than local replacements.
 - Preserve the exact source links, revisions, licenses, limitations, and open
-  gates in the [competitor registry](../../context/competitor-signature-features.md).
+  gates in this comparison and its linked official sources.
 - Do not change a default dependency or public API from this document alone.
-  Adoption requires the [quality scorecard](../../context/quality-scorecard.md),
+  Adoption requires the [release validation guide](../how-to/validate-a-release.md),
   migration/recovery evidence, and the consuming-app/device gates.

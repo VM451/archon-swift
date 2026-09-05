@@ -6,7 +6,7 @@ import Darwin
 #endif
 
 /// Target Apple platform classification.
-public enum ApplePlatformKind: String, Codable, Equatable, Sendable {
+public enum ApplePlatformKind: String, Codable, CaseIterable, Equatable, Sendable {
     case iOS
     case iPadOS
     case macOS

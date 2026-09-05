@@ -82,6 +82,46 @@ Arrows show composition and service boundaries, not the complete SwiftPM
 dependency graph. Read [`Documentation/architecture.md`](Documentation/architecture.md)
 for the deeper design notes.
 
+## Reuse, partial, build, and pending decisions
+
+`PARTIAL / ADAPT` is the reader-friendly label for the canonical `ADAPT`
+decision. The decision describes what Archon should do with a capability; it
+does not describe how popular or feature-rich the reference product is.
+
+| Decision | Use when | Archon action | Current examples |
+| --- | --- | --- | --- |
+| **REUSE** | A public Apple or Swift package already provides the needed local, in-process capability | Use it directly; keep Archon policy around it | Foundation Models, Core ML, WebKit, SwiftUI, CloudKit, App Intents |
+| **PARTIAL / ADAPT** | An existing component solves part of the problem but misses Archon policy, lifecycle, or native boundary requirements | Wrap it behind vendor-neutral Archon APIs and add the missing contract | MLX Swift, Hugging Face Swift, ProximaKit, official MCP Swift SDK |
+| **BUILD** | No qualifying local-native capability exists, or the existing one is materially incomplete | Own the implementation using public Apple APIs and tested Swift infrastructure | Agent graphs, memory semantics, local search index, sandbox policy, Computer Use safety |
+| **INSPIRATION** | The reference is cloud-hosted, server-dependent, or not native Swift | Extract the user outcome and design pattern; do not make it an Archon core dependency | Mem0, Zep, LangGraph, Tavily, Firecrawl, E2B, Stagehand |
+| **PENDING** | Platform, license, security, maintenance, or user-value evidence is incomplete | Do not adopt or claim parity until the evidence gate closes | Unverified native candidates and unmeasured replacement paths |
+
+The detailed feature-by-feature comparison, scores, evidence, and open gates
+are in [`Documentation/reference/competitor-comparison.md`](Documentation/reference/competitor-comparison.md).
+
+### Product decision matrix
+
+| Product | Verdict | Reuse or audit first | Archon-owned work | Default gate |
+| --- | --- | --- | --- | --- |
+| `ArchonCore` | PARTIAL / ADAPT | Reuse Apple facts; audit host policy | Capability policy, audit, redaction | Permission and availability denial |
+| `ArchonModels` | PARTIAL / ADAPT | Reuse Apple runtimes; audit artifacts | Catalog, lifecycle, validation | Checksum, migration, device fit |
+| `ArchonAgent` | BUILD | Audit orchestration candidates; reuse runtimes | Graph recovery, tools, effect receipts | No duplicate side effects |
+| `ArchonContext` | BUILD | Audit memory ownership first | Ephemeral budgets and provenance | Determinism and cancellation |
+| `ArchonMemory` | BUILD | Audit index options first | Durable memory semantics and retrieval | Recall, deletion, recovery |
+| `ArchonMemoryProxima` | PARTIAL / ADAPT | Audit adapter and device fit first | Optional persistent dense-index adapter | iOS-scale performance and recovery |
+| `ArchonSearch` | BUILD | Audit cloud providers; reuse local primitives | Offline corpus, orchestration, citations | Network-denied local search |
+| `ArchonSandbox` | BUILD | Reuse WebKit; audit isolation limits | Policy, bridge validation, quotas | CSP, paths, cleanup, audit |
+| `ArchonConnect` | PARTIAL / ADAPT | Reuse official MCP SDK; audit conformance | Archon policy, consent, lifecycle | Auth, cancellation, disconnect |
+| `ArchonComputerUse` | BUILD | Reuse Accessibility/DOM/App Intents; audit screenshots | Semantic safety, approvals, postconditions | Stale-state and risk denial |
+| `ArchonModelsUI` | BUILD | Reuse SwiftUI; audit host state | Main-actor model-management surfaces | Accessibility and signed-app UI |
+| `ArchonFull` | REUSE | Audit dependency scope first | Re-export facade only | No optional dependency leaks |
+| `archon-model` | BUILD | Reuse ArgumentParser and Apple tooling; audit reproducibility | Offline/JSON model workflows | Stable CI output and exit codes |
+| `archon-example-app` | BUILD | Audit real host paths first | Golden consuming-host example | Signed app, device, real model |
+
+`Reuse or audit first` is the first engineering action, not a claim that the
+product is complete. A `BUILD` verdict means Archon owns the missing local
+behavior after the reuse audit; it does not mean Apple APIs are ignored.
+
 ## Products
 
 | Product | Responsibility |
@@ -127,9 +167,8 @@ This matrix is intentionally concise. Each competitor column names the
 reference set being compared; it does not imply identical scope or market
 share. The `Native Swift / local in-process core` row is the strict local
 qualification gate. Detailed evidence, user-pull signals, decisions, and
-quality gates live in the [competitor registry](context/competitor-signature-features.md),
-[adoption backlog](context/feature-adoption-backlog.md), and [quality
-scorecard](context/quality-scorecard.md).
+quality gates live in the [competitor comparison](Documentation/reference/competitor-comparison.md)
+and [release validation guide](Documentation/how-to/validate-a-release.md).
 
 | Capability | Archon | Apple<br>Foundation Models<br>Core ML<br>WebKit<br>CloudKit<br>SwiftUI<br>App Intents | Memory<br>Mem0<br>Supermemory<br>Zep<br>Letta<br>CrewAI Memory | Agents<br>LangGraph<br>CrewAI<br>OpenAI Agents SDK<br>LlamaIndex<br>PydanticAI | Search/research<br>Tavily<br>Exa<br>Firecrawl<br>Brave Search<br>Perplexity<br>ChatGPT Search<br>SerpAPI<br>SearXNG<br>Perplexica | Sandbox/browser<br>E2B<br>Modal<br>Daytona<br>Deno Sandbox<br>Browserbase<br>Stagehand<br>TinyFish<br>OpenAI Computer Use<br>Anthropic Computer Use | Models/runtimes<br>MLX Swift<br>Hugging Face Swift<br>AnyLanguageModel<br>Conduit<br>SwiftAgent<br>AgentRunKit<br>Swarm | Protocols<br>MCP Swift SDK<br>A2A<br>AG-UI |
 | --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -254,13 +293,11 @@ artifact preparation benchmarks.
 
 ## Evidence status
 
-The maintained [competitor signature registry](context/competitor-signature-features.md)
+The maintained [competitor comparison](Documentation/reference/competitor-comparison.md)
 records capability evidence separately from independent user-pull evidence. A
 feature is not called “user-loved” from official documentation alone. The
-[adoption backlog](context/feature-adoption-backlog.md) maps each outcome to an
-Archon product, decision, priority, and definition of done. The [quality
-scorecard](context/quality-scorecard.md) defines the weighted score and the
-gates required before a replacement becomes the default.
+[release validation guide](Documentation/how-to/validate-a-release.md) defines
+the evidence gates required before a replacement becomes the default.
 
 The package contains 340 Swift tests across 10 bundles, and the complete
 package-wide suite passes on the configured Xcode toolchain. Signed-app,
@@ -308,10 +345,8 @@ or unavailable result. Test and preview code can inject deterministic mocks.
 - [`Documentation/reference/competitor-comparison.md`](Documentation/reference/competitor-comparison.md) — detailed competitor feature tables, scores, and Archon-fit decisions.
 - [`Documentation/explanation/`](Documentation/explanation/) — architecture, dependency, local-first, and recovery rationale.
 - [`Documentation/decisions/`](Documentation/decisions/) — migration and architectural decision records.
-- [`context/competitor-signature-features.md`](context/competitor-signature-features.md) — capability evidence and local/native qualification.
-- [`context/feature-adoption-backlog.md`](context/feature-adoption-backlog.md) — feature decisions, priorities, and definitions of done.
-- [`context/quality-scorecard.md`](context/quality-scorecard.md) — replacement gates for correctness, safety, performance, and migration.
-- [`context/progress-tracker.md`](context/progress-tracker.md) — dated implementation and verification record.
+- [`Documentation/reference/competitor-comparison.md`](Documentation/reference/competitor-comparison.md) — competitor features, decisions, scores, and evidence limits.
+- [`Documentation/how-to/validate-a-release.md`](Documentation/how-to/validate-a-release.md) — replacement gates for correctness, safety, performance, and migration.
 - [`Examples/README.md`](Examples/README.md) — buildable SwiftUI host.
 - [`Benchmarks/README.md`](Benchmarks/README.md) — opt-in performance checks.
 

@@ -42,6 +42,6 @@ explicitly; do not substitute simulator or package evidence for them.
 ## Replacement gate
 
 An alternative implementation cannot become the default until it meets the
-[quality scorecard](../../context/quality-scorecard.md), including recall,
+[competitor scorecard](../reference/competitor-comparison.md), including recall,
 p95 latency, memory budget, persistence/recovery, migration, privacy, and
 consuming-app evidence.

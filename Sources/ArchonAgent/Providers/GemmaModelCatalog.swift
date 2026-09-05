@@ -157,6 +157,17 @@ public enum GemmaModelCatalog: Sendable {
     /// Default Gemma 4 variant across the system.
     public static let defaultVariant = gemma4_e2b_4bit
 
+    /// All currently bundled Gemma entries. The adaptive resolver consumes
+    /// these through `AdaptiveModelCatalog`; this list remains available for
+    /// source compatibility and explicit Gemma-only selection.
+    public static let allVariants: [GemmaVariant] = [
+        gemma4_e2b_4bit,
+        gemma4_e4b_4bit,
+        gemma4_4b_4bit,
+        gemma4_9b_4bit,
+        gemma4_26b_a4b_4bit
+    ]
+
     // MARK: - Sizing Engine & Model Resolution
 
     /// Resolves the optimal Gemma 4 model variant strictly respecting the 50% process memory headroom rule.
