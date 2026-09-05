@@ -27,10 +27,11 @@ storage for MLX models only; they do not expose legacy Core AI or raw-weight
 installations.
 
 Discovery is incremental: the browser requests one bounded page initially,
-loads another page only when the user reaches the bottom, and shows a
-`ProgressView` during that request. Catalogs that support opaque cursors should
-implement `PaginatedModelCatalogProvider`; existing providers remain supported
-through their bounded `search` method.
+offers an explicit load-more action, and shows a `ProgressView` only during
+that request. Catalog requests are bounded so stalled providers surface an
+error instead of leaving the UI in a permanent loading state. Catalogs that
+support opaque cursors should implement `PaginatedModelCatalogProvider`;
+existing providers remain supported through their bounded `search` method.
 
 Catalog artwork is carried by `ModelDescriptor.logoURL` and persisted in the
 managed manifest when a model is downloaded. `ModelLogoView` renders HTTPS

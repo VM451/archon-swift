@@ -252,6 +252,7 @@ struct ModelBrowserRowView: View {
                 .lineLimit(1)
                 .buttonStyle(.borderedProminent)
                 .buttonBorderShape(.capsule)
+                .foregroundStyle(.background)
         case .failed, .cancelled:
             Button("Retry", action: onRetry)
                 .font(.caption.weight(.semibold))
@@ -268,11 +269,13 @@ struct ModelBrowserRowView: View {
                 Button(action: onDownload) {
                     Text("Download")
                         .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.background)
                         .lineLimit(1)
                         .padding(.horizontal, 6)
                 }
                 .buttonStyle(.borderedProminent)
                 .buttonBorderShape(.capsule)
+                .foregroundStyle(.background)
                 .disabled(!canDownload)
             } else {
                 Text(compatibility.status == .conversionRequired ? "Convert" : "Unavailable")

@@ -54,11 +54,12 @@ App Intents, and adaptive agent catalog use this same MLX-only boundary.
 The bundled Gemma entries remain compatibility conveniences only; they are not
 the MLX discovery allow-list.
 
-The discovery browser is paginated: it loads one bounded page on entry,
-fetches another page only when the user reaches the bottom, and shows a
-loading indicator during that request. Search input is lightly debounced, and
-cursor-capable catalogs use opaque continuation tokens rather than loading the
-entire registry into memory.
+The discovery browser is paginated: it loads one bounded page on entry, offers
+an explicit action for another page, and shows a loading indicator only during
+that request. Catalog requests are bounded so a stalled provider returns an
+actionable failure instead of an indefinite spinner. Search input is lightly
+debounced, and cursor-capable catalogs use opaque continuation tokens rather
+than loading the entire registry into memory.
 
 MLX support is validated, not an automatic promise for every checkpoint:
 `.mlx` packages can be runnable after manifest, resource, runtime, device,
@@ -321,7 +322,7 @@ feature is not called “user-loved” from official documentation alone. The
 [release validation guide](Documentation/how-to/validate-a-release.md) defines
 the evidence gates required before a replacement becomes the default.
 
-The package contains 369 Swift tests across 10 bundles, and the complete
+The package contains 371 Swift tests across 10 bundles, and the complete
 package-wide suite passes on the configured Xcode toolchain. Signed-app,
 physical-device, live UI, real-model, and production-server validation remain
 explicit release gates.

@@ -21,13 +21,22 @@ public struct ExecutionContext: Sendable {
     /// Arbitrary sendable metadata associated with the execution.
     public let metadata: [String: String]
 
+    /// Emits an incremental model response chunk to the graph stream when a
+    /// node is executing through `Graph.stream`.
+    ///
+    /// Nodes that do not stream model output can ignore this callback. The
+    /// callback is intentionally optional so existing contexts created by
+    /// callers remain valid and non-streaming execution has no extra work.
+    private let responseChunkEmitter: (@Sendable (String, Int, ModelResponseChunk) -> Void)?
+
     public init(
         threadId: String = UUID().uuidString,
         runId: String = UUID().uuidString,
         currentNodeId: String = "__start__",
         stepIndex: Int = 0,
         timestamp: Date = Date(),
-        metadata: [String: String] = [:]
+        metadata: [String: String] = [:],
+        responseChunkEmitter: (@Sendable (String, Int, ModelResponseChunk) -> Void)? = nil
     ) {
         self.threadId = threadId
         self.runId = runId
@@ -35,6 +44,13 @@ public struct ExecutionContext: Sendable {
         self.stepIndex = stepIndex
         self.timestamp = timestamp
         self.metadata = metadata
+        self.responseChunkEmitter = responseChunkEmitter
+    }
+
+    /// Publishes a real incremental response chunk to the active graph
+    /// stream. This is a no-op for contexts created outside `Graph.stream`.
+    public func emit(_ chunk: ModelResponseChunk) {
+        responseChunkEmitter?(currentNodeId, stepIndex, chunk)
     }
 
     /// Creates a next-step context for the subsequent node transition.
@@ -45,7 +61,8 @@ public struct ExecutionContext: Sendable {
             currentNodeId: nextNodeId,
             stepIndex: self.stepIndex + 1,
             timestamp: Date(),
-            metadata: self.metadata
+            metadata: self.metadata,
+            responseChunkEmitter: self.responseChunkEmitter
         )
     }
 
@@ -59,7 +76,8 @@ public struct ExecutionContext: Sendable {
             currentNodeId: self.currentNodeId,
             stepIndex: self.stepIndex,
             timestamp: self.timestamp,
-            metadata: newMeta
+            metadata: newMeta,
+            responseChunkEmitter: self.responseChunkEmitter
         )
     }
 }

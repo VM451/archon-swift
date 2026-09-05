@@ -75,15 +75,17 @@ struct SupervisorAndSwarmTests {
 }
 
 @Suite("Agent View Model & UI Binding Tests")
+@MainActor
 struct AgentViewModelTests {
 
     @Test("AgentViewModel tracks execution lifecycle and state updates")
     func testAgentViewModelLifecycle() async throws {
         let builder = GraphBuilder<SimpleAgentState>()
-        builder.addNode("compute") { state in
+        builder.addNode("compute") { (state: SimpleAgentState, context: ExecutionContext) in
+            context.emit(ModelResponseChunk(deltaText: "Computed response"))
             var s = state
             s.count = 99
-            return s
+            return NodeResult<SimpleAgentState>.state(s)
         }
         builder.setEntryPoint("compute")
         builder.addEdge(from: "compute", to: EndNode.id)
@@ -91,40 +93,51 @@ struct AgentViewModelTests {
         let graph = try builder.compile()
         let vm = AgentViewModel(graph: graph, initialState: SimpleAgentState(count: 0))
 
-        vm.start()
-
-        // Wait briefly for main actor execution task
-        try await Task.sleep(nanoseconds: 50_000_000)
+        let execution = vm.start()
+        await execution.value
 
         #expect(vm.state.count == 99)
         #expect(vm.isExecuting == false)
+        #expect(vm.activeStreamingText.isEmpty)
+        #expect(vm.messages.last?.role == .assistant)
+        #expect(vm.messages.last?.content == "Computed response")
         #expect(vm.executionLog.contains(where: { $0.contains("Graph completed") }))
     }
 
-    @Test("AgentViewModel supports cancel and resume after interrupt")
-    func testAgentViewModelCancelAndResume() async throws {
+    @Test("AgentViewModel awaits interruption and resumes through the streamed path")
+    func testAgentViewModelResume() async throws {
         let checkpointer = InMemoryCheckpointer()
         let builder = GraphBuilder<PersistentState>()
 
-        builder.addNode("riskyNode") { state in
+        builder.addNode("riskyNode") { (_: PersistentState) in
+            throw GraphInterrupt.approvalRequired(message: "Approve risky operation?")
+        }
+        builder.addNode("finalize") { state in
             var s = state
             s.data = "done"
             return s
         }
         builder.setEntryPoint("riskyNode")
-        builder.addEdge(from: "riskyNode", to: EndNode.id)
+        builder.addEdge(from: "riskyNode", to: "finalize")
+        builder.addEdge(from: "finalize", to: EndNode.id)
 
         let graph = try builder.compile(checkpointer: checkpointer)
         let vm = AgentViewModel(graph: graph, initialState: PersistentState(step: 0, data: "initial"))
 
-        vm.start()
-        try await Task.sleep(nanoseconds: 50_000_000)
+        let initialExecution = vm.start()
+        await initialExecution.value
 
         #expect(vm.isExecuting == false)
-        #expect(vm.state.data == "done")
+        #expect(vm.pendingInterrupt != nil)
+        #expect(vm.state.data == "initial")
 
-        vm.cancel()
-        #expect(vm.executionLog.contains(where: { $0.contains("cancelled") }))
+        let resumedExecution = vm.resume(approved: true)
+        await resumedExecution.value
+
+        #expect(vm.pendingInterrupt == nil)
+        #expect(vm.isExecuting == false)
+        #expect(vm.state.data == "done")
+        #expect(vm.executionLog.contains(where: { $0.contains("resumed and finished") }))
     }
 }
 

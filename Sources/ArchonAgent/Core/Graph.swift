@@ -5,6 +5,8 @@ public enum GraphEvent<State: AgentState>: Sendable {
     case started(threadId: String, runId: String)
     case nodeStarted(nodeId: String, state: State, step: Int)
     case nodeCompleted(nodeId: String, state: State, duration: TimeInterval, step: Int)
+    /// An incremental response chunk emitted by the currently executing node.
+    case modelResponseChunk(nodeId: String, chunk: ModelResponseChunk, step: Int)
     case edgeEvaluated(from: String, to: String)
     case interrupted(interrupt: GraphInterrupt, state: State, nodeId: String)
     case checkpointSaved(checkpointId: String, nodeId: String)
@@ -67,12 +69,21 @@ public final class Graph<State: AgentState>: Sendable {
                 do {
                     var currentState = initialState
                     var currentNodeId = self.entryPoint
+                    let responseChunkEmitter: @Sendable (String, Int, ModelResponseChunk) -> Void = { nodeID, step, chunk in
+                        continuation.yield(.modelResponseChunk(
+                            nodeId: nodeID,
+                            chunk: chunk,
+                            step: step
+                        ))
+                    }
+
                     var context = ExecutionContext(
                         threadId: threadId,
                         runId: UUID().uuidString,
                         currentNodeId: currentNodeId,
                         stepIndex: 0,
-                        metadata: metadata
+                        metadata: metadata,
+                        responseChunkEmitter: responseChunkEmitter
                     )
 
                     continuation.yield(.started(threadId: threadId, runId: context.runId))
@@ -189,6 +200,33 @@ public final class Graph<State: AgentState>: Sendable {
         with inputs: State? = nil,
         approval: Bool = true
     ) async throws -> State {
+        let stream = try await resumeStream(threadId: threadId, with: inputs, approval: approval)
+        var finalState: State?
+
+        for try await event in stream {
+            switch event {
+            case .completed(let state, _):
+                finalState = state
+            case .interrupted(let interrupt, _, _):
+                throw GraphError.interrupted(message: interrupt.message, threadId: threadId)
+            default:
+                break
+            }
+        }
+
+        guard let finalState else {
+            throw GraphError.graphHalted(reason: "Resumed graph ended without a completed state.")
+        }
+        return finalState
+    }
+
+    /// Resumes an interrupted or historical thread while preserving lifecycle
+    /// and model-response events for consumers that drive a live UI.
+    public func resumeStream(
+        threadId: String,
+        with inputs: State? = nil,
+        approval: Bool = true
+    ) async throws -> AsyncThrowingStream<GraphEvent<State>, Error> {
         guard let checkpointer = self.checkpointer else {
             throw GraphError.graphHalted(reason: "Cannot resume graph without an active checkpointer.")
         }
@@ -217,7 +255,10 @@ public final class Graph<State: AgentState>: Sendable {
         }
 
         if nextNodeId == EndNode.id {
-            return resumeState
+            return AsyncThrowingStream { continuation in
+                continuation.yield(.completed(finalState: resumeState, totalSteps: 0))
+                continuation.finish()
+            }
         }
 
         // Create a sub-execution starting from nextNodeId
@@ -235,7 +276,7 @@ public final class Graph<State: AgentState>: Sendable {
             maxRecursionDepth: self.maxRecursionDepth
         )
 
-        return try await subGraph.invoke(
+        return subGraph.stream(
             initialState: resumeState,
             threadId: threadId,
             metadata: latest.metadata

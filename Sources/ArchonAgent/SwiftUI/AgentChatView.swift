@@ -14,7 +14,7 @@ public struct AgentChatView<State: AgentState>: View {
             // Header Status Bar
             HStack {
                 Circle()
-                    .fill(viewModel.isExecuting ? Color.green : Color.gray)
+                    .fill(viewModel.isExecuting ? .green : .secondary)
                     .frame(width: 8, height: 8)
                 Text(viewModel.isExecuting ? "Executing: \(viewModel.currentNodeId)" : "Idle")
                     .font(.caption)
@@ -44,8 +44,12 @@ public struct AgentChatView<State: AgentState>: View {
                             VStack(alignment: msg.role == .user ? .trailing : .leading, spacing: 4) {
                                 Text(msg.content)
                                     .padding(12)
-                                    .background(msg.role == .user ? Color.purple : Color.secondary.opacity(0.15))
-                                    .foregroundStyle(msg.role == .user ? .white : .primary)
+                                    .background(msg.role == .user
+                                                ? AnyShapeStyle(.tint)
+                                                : AnyShapeStyle(.secondary.opacity(0.15)))
+                                    .foregroundStyle(msg.role == .user
+                                                     ? AnyShapeStyle(.background)
+                                                     : AnyShapeStyle(.primary))
                                     .clipShape(RoundedRectangle(cornerRadius: 16))
 
                                 if let calls = msg.toolCalls, !calls.isEmpty {
@@ -57,13 +61,26 @@ public struct AgentChatView<State: AgentState>: View {
                                         .font(.caption2)
                                         .padding(.horizontal, 8)
                                         .padding(.vertical, 4)
-                                        .background(Color.orange.opacity(0.2))
+                                        .background(.tint.opacity(0.15))
                                         .clipShape(Capsule())
                                     }
                                 }
                             }
                             if msg.role != .user { Spacer() }
                         }
+                    }
+
+                    if !viewModel.activeStreamingText.isEmpty {
+                        HStack {
+                            Text(viewModel.activeStreamingText)
+                                .padding(12)
+                                .background(AnyShapeStyle(.secondary.opacity(0.15)))
+                                .foregroundStyle(.primary)
+                                .clipShape(RoundedRectangle(cornerRadius: 16))
+                            Spacer()
+                        }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("Assistant response in progress")
                     }
                 }
                 .padding()
@@ -85,6 +102,7 @@ public struct AgentChatView<State: AgentState>: View {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.title2)
                 }
+                .accessibilityLabel("Send message")
                 .disabled(inputText.isEmpty || viewModel.isExecuting)
             }
             .padding()
@@ -125,7 +143,7 @@ public struct InterruptApprovalBanner: View {
             }
         }
         .padding()
-        .background(Color.orange.opacity(0.12))
+        .background(.tint.opacity(0.12))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .padding(.horizontal)
     }

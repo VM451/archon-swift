@@ -111,4 +111,30 @@ struct StreamingTests {
         #expect(nodeCount == 1)
         #expect(isFinished == true)
     }
+
+    @Test("Graph.stream forwards node response chunks in order")
+    func testGraphStreamResponseChunks() async throws {
+        let builder = GraphBuilder<SimpleAgentState>()
+        builder.addNode("stream") { (_: SimpleAgentState, context: ExecutionContext) in
+            context.emit(ModelResponseChunk(deltaText: "Hello "))
+            context.emit(ModelResponseChunk(deltaText: "world", isFinished: true))
+            return NodeResult<SimpleAgentState>.unchanged
+        }
+        builder.setEntryPoint("stream")
+        builder.addEdge(from: "stream", to: EndNode.id)
+
+        let graph = try builder.compile()
+        var chunks: [String] = []
+
+        for try await event in graph.stream() {
+            guard case .modelResponseChunk(let nodeId, let chunk, let step) = event else { continue }
+            #expect(nodeId == "stream")
+            #expect(step == 1)
+            if let deltaText = chunk.deltaText {
+                chunks.append(deltaText)
+            }
+        }
+
+        #expect(chunks == ["Hello ", "world"])
+    }
 }

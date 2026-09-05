@@ -9,7 +9,10 @@ boundaries.
 - `AgentState` is the Codable/Sendable state carried through a graph.
 - `GraphBuilder` validates and compiles nodes and static, conditional, or branch
   edges; invalid graphs fail at compile time with `GraphError.invalidGraph`.
-- `Graph` streams lifecycle events or returns a final state.
+- `Graph` streams lifecycle events or returns a final state. Nodes can call
+  `context.emit(ModelResponseChunk(...))` to forward incremental model output
+  as `GraphEvent.modelResponseChunk`; `resumeStream` preserves the same event
+  contract after an approval or recovery boundary.
 - `StateCheckpointer` persists thread history, supports latest-state recovery,
   deletion, and forks.
 - `GraphInterrupt` supports approval or pause points.
@@ -18,6 +21,12 @@ boundaries.
 - `ToolEffectLedger` atomically reserves call IDs, records successful
   idempotent tool receipts, and replays completed effects instead of executing
   them twice.
+
+`AgentViewModel` is `@MainActor`-isolated for SwiftUI safety. Its `start` and
+`resume` methods return awaitable `Task<Void, Never>` handles, so a host can
+bind deterministic lifecycle tests or cancellation to actual execution rather
+than timing sleeps. Completed streamed text is committed as an assistant
+`ChatMessage`.
 
 The graph does not download models. `ModelPolicy` and the routing layer select
 an explicitly permitted provider; `localOnly` never silently chooses a cloud

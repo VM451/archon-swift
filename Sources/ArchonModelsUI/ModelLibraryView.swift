@@ -386,26 +386,12 @@ public struct ModelBrowserView: View {
                     if isLoadingMore {
                         ProgressView("Loading more MLX models…")
                             .frame(maxWidth: .infinity, alignment: .center)
-                    } else if displayedResults.isEmpty {
+                    } else {
                         Button("Load more MLX models", systemImage: "arrow.down.circle") {
                             requestNextPage()
                         }
                         .frame(maxWidth: .infinity, alignment: .center)
-                    } else {
-                        Text("Scroll to load more")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .center)
                     }
-                }
-                .id("model-discovery-page-\(nextOffset)-\(nextContinuationToken ?? "initial")")
-                .task {
-                    // List keeps this footer lazy, so this task starts when
-                    // the user reaches the current page boundary. Empty
-                    // filtered pages keep an explicit button so a restrictive
-                    // filter cannot trigger an unbounded network scan.
-                    guard !displayedResults.isEmpty else { return }
-                    await loadNextPage()
                 }
             }
         }
@@ -451,7 +437,8 @@ public struct ModelBrowserView: View {
             get: { searchError != nil },
             set: { if !$0 { searchError = nil } }
         )) {
-            Button("OK", role: .cancel) {}
+            Button("Retry", action: retrySearch)
+            Button("Cancel", role: .cancel) {}
         } message: {
             Text(searchError ?? "The model catalog could not be queried.")
         }
@@ -629,6 +616,61 @@ public struct ModelBrowserView: View {
     }
 
     @MainActor
+    private func retrySearch() {
+        Task { @MainActor in
+            await search()
+        }
+    }
+
+    private func fetchPage(for request: ModelSearchRequest) async throws -> ModelCatalogPage {
+        let catalog = catalog
+        let pageSize = pageSize
+        let requestTask = Task {
+            if let paginatedCatalog = catalog as? any PaginatedModelCatalogProvider {
+                return try await paginatedCatalog.searchPage(request)
+            }
+            let models = try await catalog.search(request)
+            let boundedModels = Array(models.prefix(pageSize))
+            return ModelCatalogPage(
+                models: boundedModels,
+                hasMore: models.count >= pageSize
+            )
+        }
+        let race = CatalogRequestRace<ModelCatalogPage>()
+
+        return try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { continuation in
+                Task {
+                    await race.install(continuation)
+                    do {
+                        await race.finish(.success(try await requestTask.value))
+                    } catch {
+                        await race.finish(.failure(error))
+                    }
+                }
+
+                let timeoutTask: Task<Void, Never> = Task {
+                    do {
+                        try await Task.sleep(for: .seconds(30))
+                        requestTask.cancel()
+                        await race.finish(.failure(ModelBrowserError.catalogTimedOut))
+                    } catch {
+                        // The request completed or the parent task was cancelled.
+                    }
+                }
+                Task {
+                    await race.setTimeoutTask(timeoutTask)
+                }
+            }
+        }, onCancel: {
+            requestTask.cancel()
+            Task {
+                await race.finish(.failure(CancellationError()))
+            }
+        })
+    }
+
+    @MainActor
     private func loadNextPage() async {
         guard !isLoadingMore else { return }
         let isFirstPage = results.isEmpty && nextOffset == 0 && nextContinuationToken == nil
@@ -652,17 +694,7 @@ public struct ModelBrowserView: View {
                 continuationToken: nextContinuationToken,
                 limit: pageSize
             )
-            let page: ModelCatalogPage
-            if let paginatedCatalog = catalog as? any PaginatedModelCatalogProvider {
-                page = try await paginatedCatalog.searchPage(request)
-            } else {
-                let models = try await catalog.search(request)
-                let boundedModels = Array(models.prefix(pageSize))
-                page = ModelCatalogPage(
-                    models: boundedModels,
-                    hasMore: models.count >= pageSize
-                )
-            }
+            let page = try await fetchPage(for: request)
             try Task.checkCancellation()
 
             let knownIDs = Set(results.map(\.id))
@@ -814,6 +846,51 @@ public struct ModelBrowserView: View {
 enum DownloadPhase: Sendable {
     case queued, resolving, downloading, paused, verifying, installing
     case ready, updateAvailable, failed, cancelled
+}
+
+fileprivate enum ModelBrowserError: LocalizedError {
+    case catalogTimedOut
+
+    var errorDescription: String? {
+        switch self {
+        case .catalogTimedOut:
+            return "The model catalog took too long to respond. Check your connection and try again."
+        }
+    }
+}
+
+/// Resolves a catalog request exactly once without requiring a cancelled
+/// provider to return before the caller can recover from a timeout.
+private actor CatalogRequestRace<Value: Sendable> {
+    private var continuation: CheckedContinuation<Value, any Error>?
+    private var result: Result<Value, any Error>?
+    private var timeoutTask: Task<Void, Never>?
+
+    func install(_ continuation: CheckedContinuation<Value, any Error>) {
+        if let result {
+            continuation.resume(with: result)
+        } else {
+            self.continuation = continuation
+        }
+    }
+
+    func setTimeoutTask(_ task: Task<Void, Never>) {
+        if result != nil {
+            task.cancel()
+        } else {
+            timeoutTask = task
+        }
+    }
+
+    func finish(_ result: Result<Value, any Error>) {
+        guard self.result == nil else { return }
+        self.result = result
+        timeoutTask?.cancel()
+        timeoutTask = nil
+        guard let continuation else { return }
+        self.continuation = nil
+        continuation.resume(with: result)
+    }
 }
 
 private extension ArchonModelTask {

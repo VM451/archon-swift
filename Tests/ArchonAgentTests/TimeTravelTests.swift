@@ -68,4 +68,37 @@ struct HumanInTheLoopTests {
         let resumedResult = try await graph.resume(threadId: threadId, approval: true)
         #expect(resumedResult.data == "Finalized after approval")
     }
+
+    @Test("Resuming a graph preserves streamed response chunks")
+    func testResumeStreamPreservesResponseChunks() async throws {
+        let checkpointer = InMemoryCheckpointer()
+        let builder = GraphBuilder<PersistentState>()
+
+        builder.addNode("pause") { (_: PersistentState) in
+            throw GraphInterrupt.approvalRequired(message: "Approve continuation?")
+        }
+        builder.addNode("continue") { (_: PersistentState, context: ExecutionContext) in
+            context.emit(ModelResponseChunk(deltaText: "Resumed response", isFinished: true))
+            return NodeResult<PersistentState>.unchanged
+        }
+        builder.setEntryPoint("pause")
+        builder.addEdge(from: "pause", to: "continue")
+        builder.addEdge(from: "continue", to: EndNode.id)
+
+        let graph = try builder.compile(checkpointer: checkpointer)
+        let threadId = "resume-stream-thread"
+        await #expect(throws: GraphError.self) {
+            try await graph.invoke(initialState: PersistentState(), threadId: threadId)
+        }
+
+        let stream = try await graph.resumeStream(threadId: threadId, approval: true)
+        var streamedText = ""
+        for try await event in stream {
+            if case .modelResponseChunk(_, let chunk, _) = event {
+                streamedText += chunk.deltaText ?? ""
+            }
+        }
+
+        #expect(streamedText == "Resumed response")
+    }
 }

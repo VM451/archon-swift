@@ -21,8 +21,33 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
+      - name: Select a complete Xcode toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          selected_developer_dir=""
+          while IFS= read -r xcode_app; do
+            developer_dir="$xcode_app/Contents/Developer"
+            if [[ -x "$developer_dir/usr/bin/xcodebuild" && -x "$developer_dir/Toolchains/XcodeDefault.xctoolchain/usr/bin/metal" ]]; then
+              selected_developer_dir="$developer_dir"
+            fi
+          done < <(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' -print | sort)
+
+          if [[ -z "$selected_developer_dir" ]]; then
+            echo "::error::No complete Xcode installation with a usable Metal compiler was found."
+            exit 1
+          fi
+
+          echo "DEVELOPER_DIR=$selected_developer_dir" >> "$GITHUB_ENV"
+          sudo xcode-select --switch "$selected_developer_dir"
+          xcodebuild -version
+          metal_path="$(xcrun --find metal)"
+          test -x "$metal_path"
+
       - name: Show toolchain
-        run: swift --version
+        run: |
+          swift --version
+          xcrun --find metal
 
       - name: Resolve dependencies
         run: swift package resolve
