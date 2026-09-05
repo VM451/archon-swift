@@ -7,7 +7,7 @@ import SwiftUI
 import ArchonCore
 
 /// A compact, accessible header card presenting the host device's hardware identity,
-/// operating system version, unified RAM, AI model budget, and thermal status.
+/// operating system version, unified RAM, and AI model budget.
 @available(iOS 27.0, macOS 27.0, visionOS 27.0, *)
 public struct ModelDeviceSummaryCard: View {
     public let device: ArchonDeviceCapabilities
@@ -21,15 +21,9 @@ public struct ModelDeviceSummaryCard: View {
             deviceIcon
 
             VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .center) {
-                    Text(device.deviceDisplayName)
-                        .font(.headline)
-                        .foregroundStyle(.primary)
-
-                    Spacer(minLength: 4)
-
-                    thermalBadge
-                }
+                Text(device.deviceDisplayName)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
 
                 HStack(spacing: 6) {
                     Text(osDisplay)
@@ -69,22 +63,6 @@ public struct ModelDeviceSummaryCard: View {
         .accessibilityHidden(true)
     }
 
-    @ViewBuilder
-    private var thermalBadge: some View {
-        let (title, icon, color) = thermalVisuals
-        HStack(spacing: 3) {
-            Image(systemName: icon)
-                .font(.caption2)
-            Text(title)
-                .font(.caption2.weight(.medium))
-                .lineLimit(1)
-        }
-        .foregroundStyle(color)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 3)
-        .background(color.opacity(0.12), in: Capsule())
-    }
-
     private var ramString: String {
         ByteCountFormatter.string(fromByteCount: Int64(device.physicalMemoryBytes), countStyle: .memory) + " RAM"
     }
@@ -111,22 +89,7 @@ public struct ModelDeviceSummaryCard: View {
         return device.platform.rawValue
     }
 
-    private var thermalVisuals: (String, String, Color) {
-        switch device.thermalState {
-        case .nominal:
-            return ("Optimal", "bolt.fill", .green)
-        case .fair:
-            return ("Warm", "thermometer.medium", .yellow)
-        case .serious:
-            return ("Hot", "thermometer.high", .orange)
-        case .critical:
-            return ("Throttled", "thermometer.sun.fill", .red)
-        case .unknown:
-            return ("Ready", "checkmark.circle.fill", .secondary)
-        }
-    }
-
     private var accessibilitySummary: String {
-        "\(device.deviceDisplayName), \(osDisplay), \(ramString), \(budgetString), thermal state \(thermalVisuals.0)."
+        "\(device.deviceDisplayName), \(osDisplay), \(ramString), \(budgetString)."
     }
 }
