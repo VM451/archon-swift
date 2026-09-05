@@ -312,36 +312,6 @@ public struct ModelBrowserView: View {
 
     public var body: some View {
         List {
-            Section("Collections and Filters") {
-                Picker("Collection", selection: $collection) {
-                    ForEach(Collection.allCases) { value in
-                        Text(value.title).tag(value)
-                    }
-                }
-                Picker("Task", selection: $selectedTaskRaw) {
-                    Text("All Tasks").tag("")
-                    ForEach(ArchonModelTask.allCases, id: \.rawValue) { task in
-                        Text(task.displayName).tag(task.rawValue)
-                    }
-                }
-                Picker("Runtime", selection: $selectedRuntimeRaw) {
-                    Text("All Runtimes").tag("")
-                    ForEach(ArchonModelRuntime.allCases, id: \.rawValue) { runtime in
-                        Text(runtime.displayName).tag(runtime.rawValue)
-                    }
-                }
-                Picker("Maximum model size", selection: $maximumSizeGB) {
-                    Text("Any size").tag(0)
-                    Text("Up to 2 GB").tag(2)
-                    Text("Up to 4 GB").tag(4)
-                    Text("Up to 8 GB").tag(8)
-                    Text("Up to 16 GB").tag(16)
-                }
-                Toggle("Runs on This Device", isOn: $compatibleOnly)
-                TextField("Publisher", text: $publisherFilter)
-                TextField("License", text: $licenseFilter)
-            }
-
             if isInitialLoading, results.isEmpty {
                 Section {
                     ProgressView("Loading models…")
@@ -454,6 +424,17 @@ public struct ModelBrowserView: View {
         }
         .searchable(text: $query, prompt: "Search models")
         .navigationTitle(title)
+        .toolbar {
+            #if os(macOS)
+            ToolbarItem(placement: .primaryAction) {
+                filterMenu
+            }
+            #else
+            ToolbarItem(placement: .topBarTrailing) {
+                filterMenu
+            }
+            #endif
+        }
         .task(id: "\(query)|\(compatibleOnly)|\(selectedTaskRaw)|\(selectedRuntimeRaw)") {
             do {
                 // Search fields can change several times while the user is
@@ -478,6 +459,68 @@ public struct ModelBrowserView: View {
         } message: {
             Text(searchError ?? "The model catalog could not be queried.")
         }
+    }
+
+    private var filterMenu: some View {
+        Menu {
+            Toggle("Runs on This Device", isOn: $compatibleOnly)
+
+            Divider()
+
+            Picker("Collection", selection: $collection) {
+                ForEach(Collection.allCases) { value in
+                    Text(value.title).tag(value)
+                }
+            }
+
+            Picker("Task", selection: $selectedTaskRaw) {
+                Text("All Tasks").tag("")
+                ForEach(ArchonModelTask.allCases, id: \.rawValue) { task in
+                    Text(task.displayName).tag(task.rawValue)
+                }
+            }
+
+            Picker("Runtime", selection: $selectedRuntimeRaw) {
+                Text("All Runtimes").tag("")
+                ForEach(ArchonModelRuntime.allCases, id: \.rawValue) { runtime in
+                    Text(runtime.displayName).tag(runtime.rawValue)
+                }
+            }
+
+            Picker("Maximum Model Size", selection: $maximumSizeGB) {
+                Text("Any size").tag(0)
+                Text("Up to 2 GB").tag(2)
+                Text("Up to 4 GB").tag(4)
+                Text("Up to 8 GB").tag(8)
+                Text("Up to 16 GB").tag(16)
+            }
+
+            if hasActiveFilters {
+                Divider()
+                Button(role: .destructive) {
+                    resetFilters()
+                } label: {
+                    Label("Reset Filters", systemImage: "arrow.counterclockwise")
+                }
+            }
+        } label: {
+            Image(systemName: hasActiveFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+        }
+        .accessibilityLabel("Filter models")
+    }
+
+    private var hasActiveFilters: Bool {
+        compatibleOnly || collection != .all || !selectedTaskRaw.isEmpty || !selectedRuntimeRaw.isEmpty || maximumSizeGB > 0 || !publisherFilter.isEmpty || !licenseFilter.isEmpty
+    }
+
+    private func resetFilters() {
+        compatibleOnly = false
+        collection = .all
+        selectedTaskRaw = ""
+        selectedRuntimeRaw = ""
+        maximumSizeGB = 0
+        publisherFilter = ""
+        licenseFilter = ""
     }
 
     private var device: ArchonDeviceCapabilities {
