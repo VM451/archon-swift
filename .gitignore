@@ -5,6 +5,7 @@ DerivedData/
 .DS_Store
 *.xcodeproj/
 *.xcworkspace/
+AGENTS.md
 
 # --- Smart exclusions auto-added by 15-git-upload ---
 ._*
