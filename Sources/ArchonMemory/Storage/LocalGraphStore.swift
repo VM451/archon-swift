@@ -130,6 +130,17 @@ public actor LocalGraphStore: GraphStore {
         }
     }
 
+    public func fetchEntity(id: UUID) async throws -> Entity? {
+        try await dbQueue.read { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: "SELECT * FROM graph_entities WHERE id = ?",
+                arguments: [id.uuidString]
+            ) else { return nil }
+            return try Self.rowToEntity(row)
+        }
+    }
+
     public func fetchEntities(userId: String?) async throws -> [Entity] {
         try await dbQueue.read { db in
             var sql = "SELECT * FROM graph_entities WHERE isDeleted = 0"
@@ -182,6 +193,17 @@ public actor LocalGraphStore: GraphStore {
                     "pendingUpload"
                 ]
             )
+        }
+    }
+
+    public func fetchRelation(id: UUID) async throws -> Relation? {
+        try await dbQueue.read { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: "SELECT * FROM graph_relations WHERE id = ?",
+                arguments: [id.uuidString]
+            ) else { return nil }
+            return try Self.rowToRelation(row)
         }
     }
 
@@ -264,29 +286,57 @@ public actor LocalGraphStore: GraphStore {
         }
     }
 
+    public func deleteRelation(id: UUID) async throws {
+        try await dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE graph_relations SET isDeleted = 1, syncState = 'pendingUpload', updatedAt = ? WHERE id = ?",
+                arguments: [Date().timeIntervalSince1970, id.uuidString]
+            )
+        }
+    }
+
     public func deleteAll(userId: String?, agentId: String?, runId: String?) async throws {
         try await dbQueue.write { db in
             let now = Date().timeIntervalSince1970
-            var entitySql = "UPDATE graph_entities SET isDeleted = 1, syncState = 'pendingUpload', updatedAt = ? WHERE 1=1"
-            var relationSql = "UPDATE graph_relations SET isDeleted = 1, syncState = 'pendingUpload', updatedAt = ? WHERE 1=1"
-            var args: [DatabaseValueConvertible] = [now]
+            var entityFilters = ["1=1"]
+            var entityFilterArgs: [DatabaseValueConvertible] = []
+            var relationFilters = ["1=1"]
+            var relationFilterArgs: [DatabaseValueConvertible] = []
             
             if let userId = userId {
-                entitySql += " AND userId = ?"
-                relationSql += " AND userId = ?"
-                args.append(userId)
+                entityFilters.append("userId = ?")
+                entityFilterArgs.append(userId)
+                relationFilters.append("userId = ?")
+                relationFilterArgs.append(userId)
             }
             if let agentId = agentId {
-                entitySql += " AND agentId = ?"
-                args.append(agentId)
+                entityFilters.append("agentId = ?")
+                entityFilterArgs.append(agentId)
             }
             if let runId = runId {
-                entitySql += " AND runId = ?"
-                args.append(runId)
+                entityFilters.append("runId = ?")
+                entityFilterArgs.append(runId)
             }
+
+            // Relations carry user scope but not agent/run scope. When those
+            // filters are requested, select only edges attached to entities in
+            // the requested scope instead of deleting unrelated graph data.
+            if agentId != nil || runId != nil {
+                let entityPredicate = entityFilters.joined(separator: " AND ")
+                relationFilters.append("(sourceEntityId IN (SELECT id FROM graph_entities WHERE \(entityPredicate)) OR targetEntityId IN (SELECT id FROM graph_entities WHERE \(entityPredicate)))")
+                relationFilterArgs.append(contentsOf: entityFilterArgs)
+                relationFilterArgs.append(contentsOf: entityFilterArgs)
+            }
+
+            let entitySql = "UPDATE graph_entities SET isDeleted = 1, syncState = 'pendingUpload', updatedAt = ? WHERE \(entityFilters.joined(separator: " AND "))"
+            let relationSql = "UPDATE graph_relations SET isDeleted = 1, syncState = 'pendingUpload', updatedAt = ? WHERE \(relationFilters.joined(separator: " AND "))"
+            var entityArgs: [DatabaseValueConvertible] = [now]
+            entityArgs.append(contentsOf: entityFilterArgs)
+            var relationArgs: [DatabaseValueConvertible] = [now]
+            relationArgs.append(contentsOf: relationFilterArgs)
             
-            try db.execute(sql: entitySql, arguments: StatementArguments(args))
-            try db.execute(sql: relationSql, arguments: StatementArguments(args))
+            try db.execute(sql: entitySql, arguments: StatementArguments(entityArgs))
+            try db.execute(sql: relationSql, arguments: StatementArguments(relationArgs))
         }
     }
 

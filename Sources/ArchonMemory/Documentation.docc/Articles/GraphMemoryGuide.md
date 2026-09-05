@@ -35,4 +35,4 @@ for triple in triples {
 
 ### CloudKit Multi-Device Graph Sync
 
-Knowledge graph entities and relations are automatically serialized into `ArchonEntity` and `ArchonRelation` `CKRecord` types and synchronized across the user's Apple devices using CloudKit private database subscriptions.
+When CloudKit is enabled, knowledge graph entities and relations are serialized into `ArchonEntity` and `ArchonRelation` `CKRecord` types and synchronized across the user's Apple devices using private database subscriptions.

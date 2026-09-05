@@ -71,11 +71,11 @@ public struct HuggingFaceCatalog: PaginatedModelCatalogProvider, Sendable {
 
     public init(
         baseURL: URL = URL(string: "https://huggingface.co")!,
-        session: any ModelHTTPClient = URLSession.shared,
+        session: (any ModelHTTPClient)? = nil,
         tokenStore: (any ModelTokenStore)? = KeychainModelTokenStore()
     ) {
         self.baseURL = baseURL
-        self.session = session
+        self.session = session ?? ModelDownloadURLPolicy.makeSession()
         self.tokenStore = tokenStore
     }
 
@@ -90,6 +90,7 @@ public struct HuggingFaceCatalog: PaginatedModelCatalogProvider, Sendable {
     }
 
     public func searchPage(_ request: ModelSearchRequest) async throws -> ModelCatalogPage {
+        try ModelDownloadURLPolicy.validate(baseURL)
         if let repositoryID = Self.repositoryID(from: request.query) {
             guard request.offset == 0, request.continuationToken == nil else {
                 return ModelCatalogPage(models: [], hasMore: false)

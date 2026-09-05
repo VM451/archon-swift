@@ -108,6 +108,6 @@ public actor ArchonSearchMonitor {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let data = try JSONEncoder().encode(event)
-        _ = try await URLSession.shared.upload(for: request, from: data)
+        _ = try await SearchURLPolicy.makeSession().upload(for: request, from: data)
     }
 }

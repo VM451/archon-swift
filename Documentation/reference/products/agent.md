@@ -26,9 +26,10 @@ side-effect approval, and host-specific model adapters.
 ## Adaptive local model selection
 
 `AdaptiveModelCatalog` is the family-neutral input to
-`OnDeviceProvider.adaptive(...)`. It accepts candidates from any validated
-local family, including MLX Hugging Face sources, imported MLX directories,
-and declared Core AI exports. A candidate carries its runtime contract,
+`OnDeviceProvider.adaptive(...)`. For user-facing model selection, populate it
+from the MLX-only catalog boundary. It accepts validated MLX Hugging Face
+sources and imported MLX directories; lower-level Core AI candidates remain
+explicit host integrations. A candidate carries its runtime contract,
 peak-memory estimate, context, device/platform constraints, optional measured
 quality/speed/prompt-speed/energy/thermal metadata, download size, and license.
 
@@ -47,10 +48,13 @@ and pass a new `AdaptiveModelCatalog` to `OnDeviceProvider` or
 SafeTensors, and Transformers weights remain
 conversion-required and are not made runnable by catalog metadata alone.
 
-For a dynamic Hugging Face local catalog, request `runtime: .mlx` and a task
-such as `textGeneration` before constructing the adaptive catalog. This asks
-the Hub for MLX-tagged runnable packages instead of relying on its popular raw
-checkpoint list.
+For a dynamic Hugging Face local catalog, wrap it in `MLXModelCatalog` and
+request `runtime: .mlx`, `format: .mlx`, and a task such as `textGeneration`
+before constructing the adaptive catalog. This asks the Hub for MLX-tagged
+runnable packages instead of relying on its popular raw checkpoint list.
+`AdaptiveModelCatalog.load(from:)` applies this MLX boundary automatically for
+AI-agent catalog loading, but explicit `MLXModelCatalog` wrapping remains the
+clearest choice when sharing the catalog with a UI.
 
 See [Supported models and model-family policy](../supported-models.md) for
 catalog wiring, runtime/artifact support, and the AI-agent guidance.

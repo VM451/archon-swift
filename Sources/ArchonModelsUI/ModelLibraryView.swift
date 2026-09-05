@@ -25,7 +25,7 @@ public struct ModelLibraryView: View {
         device: ArchonDeviceCapabilities? = nil
     ) {
         self.library = library
-        self.catalog = catalog
+        self.catalog = catalog.map { MLXModelCatalog(provider: $0) }
         self.downloadManager = downloadManager
         self.deviceOverride = device
     }
@@ -33,7 +33,7 @@ public struct ModelLibraryView: View {
     public var body: some View {
         Group {
             if models.isEmpty, !isRefreshing {
-                ContentUnavailableView("No Installed Models", systemImage: "shippingbox", description: Text("Download or import a runnable model to see it here."))
+                ContentUnavailableView("No Installed MLX Models", systemImage: "shippingbox", description: Text("Download or import a runnable MLX model to see it here."))
             } else {
                 List {
                     ForEach(models) { model in
@@ -81,10 +81,10 @@ public struct ModelLibraryView: View {
                 }
             }
         }
-        .navigationTitle("Model Library")
+        .navigationTitle("MLX Model Library")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button("Import Model", systemImage: "square.and.arrow.down") {
+                Button("Import MLX Model", systemImage: "square.and.arrow.down") {
                     isImporting = true
                 }
                 .disabled(isRefreshing)
@@ -128,7 +128,7 @@ public struct ModelLibraryView: View {
         .task {
             await refresh()
         }
-        .alert("Model Library", isPresented: Binding(
+        .alert("MLX Model Library", isPresented: Binding(
             get: { errorMessage != nil },
             set: { if !$0 { errorMessage = nil } }
         )) {
@@ -149,7 +149,7 @@ public struct ModelLibraryView: View {
         isRefreshing = true
         defer { isRefreshing = false }
         do {
-            models = try await library.installedModels()
+            models = try await library.installedMLXModels()
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -172,6 +172,12 @@ public struct ModelLibraryView: View {
             }
 
             do {
+                let inspection = try await library.inspectArtifact(at: url)
+                guard inspection.runtime == .mlx, inspection.format == .mlx else {
+                    throw ArchonModelsError.unsupportedArtifact(
+                        "Only MLX model artifacts can be added to the user-facing model library."
+                    )
+                }
                 _ = try await library.importArtifact(at: url)
                 importedCount += 1
             } catch {
@@ -246,26 +252,23 @@ public struct ModelLibraryView: View {
     }
 }
 
-/// A small, functional catalog browser. The caller supplies the catalog and
-/// manager so network/auth/runtime policy remains in the host application.
+/// A small, functional MLX catalog browser. The caller supplies the catalog
+/// and manager so network/auth policy remains in the host application; the
+/// browser applies the package's strict MLX-only user-facing policy.
 @available(iOS 27.0, macOS 27.0, visionOS 27.0, *)
 public struct ModelBrowserView: View {
     private enum Collection: String, CaseIterable, Identifiable {
         case all
         case recommended
         case downloaded
-        case appleCoreAI
-        case huggingFace
 
         var id: Self { self }
 
         var title: String {
             switch self {
-            case .all: "All Models"
+            case .all: "All MLX Models"
             case .recommended: "Recommended"
             case .downloaded: "Downloaded"
-            case .appleCoreAI: "Apple / Core AI Ready"
-            case .huggingFace: "Hugging Face"
             }
         }
     }
@@ -290,21 +293,20 @@ public struct ModelBrowserView: View {
     @State private var compatibleOnly = false
     @State private var collection: Collection = .all
     @State private var selectedTaskRaw = ""
-    @State private var selectedRuntimeRaw = ""
     @State private var publisherFilter = ""
     @State private var licenseFilter = ""
     @State private var maximumSizeGB = 0
     @State private var searchError: String?
 
     public init(
-        title: String = "Models Discovery",
+        title: String = "MLX Models",
         catalog: any ModelCatalogProvider,
         library: ModelLibrary = .makeDefault(),
         downloadManager: ModelDownloadManager = ModelDownloadManager(),
         device: ArchonDeviceCapabilities? = nil
     ) {
         self.title = title
-        self.catalog = catalog
+        self.catalog = MLXModelCatalog(provider: catalog)
         self.library = library
         self.downloadManager = downloadManager
         self.deviceOverride = device
@@ -314,7 +316,7 @@ public struct ModelBrowserView: View {
         List {
             if isInitialLoading, results.isEmpty {
                 Section {
-                    ProgressView("Loading models…")
+                    ProgressView("Loading MLX models…")
                         .frame(maxWidth: .infinity, alignment: .center)
                 }
             }
@@ -322,7 +324,7 @@ public struct ModelBrowserView: View {
             if !isInitialLoading, displayedResults.isEmpty, !hasMoreResults {
                 Section {
                     ContentUnavailableView(
-                        "No Models Found",
+                        "No MLX Models Found",
                         systemImage: "shippingbox",
                         description: Text("Try changing the search or filters.")
                     )
@@ -362,10 +364,10 @@ public struct ModelBrowserView: View {
             if hasMoreResults {
                 Section {
                     if isLoadingMore {
-                        ProgressView("Loading more models…")
+                        ProgressView("Loading more MLX models…")
                             .frame(maxWidth: .infinity, alignment: .center)
                     } else if displayedResults.isEmpty {
-                        Button("Load more models", systemImage: "arrow.down.circle") {
+                        Button("Load more MLX models", systemImage: "arrow.down.circle") {
                             requestNextPage()
                         }
                         .frame(maxWidth: .infinity, alignment: .center)
@@ -388,9 +390,9 @@ public struct ModelBrowserView: View {
             }
         }
         #if os(macOS)
-        .searchable(text: $query, prompt: "Search models")
+        .searchable(text: $query, prompt: "Search MLX models")
         #else
-        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search models")
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search MLX models")
         #endif
         .navigationTitle(title)
         .toolbar {
@@ -404,7 +406,7 @@ public struct ModelBrowserView: View {
             }
             #endif
         }
-        .task(id: "\(query)|\(compatibleOnly)|\(selectedTaskRaw)|\(selectedRuntimeRaw)") {
+        .task(id: "\(query)|\(compatibleOnly)|\(selectedTaskRaw)") {
             do {
                 // Search fields can change several times while the user is
                 // typing. Debounce them so each keystroke does not start a
@@ -449,13 +451,6 @@ public struct ModelBrowserView: View {
                 }
             }
 
-            Picker("Runtime", selection: $selectedRuntimeRaw) {
-                Text("All Runtimes").tag("")
-                ForEach(ArchonModelRuntime.allCases, id: \.rawValue) { runtime in
-                    Text(runtime.displayName).tag(runtime.rawValue)
-                }
-            }
-
             Picker("Maximum Model Size", selection: $maximumSizeGB) {
                 Text("Any size").tag(0)
                 Text("Up to 2 GB").tag(2)
@@ -479,14 +474,13 @@ public struct ModelBrowserView: View {
     }
 
     private var hasActiveFilters: Bool {
-        compatibleOnly || collection != .all || !selectedTaskRaw.isEmpty || !selectedRuntimeRaw.isEmpty || maximumSizeGB > 0 || !publisherFilter.isEmpty || !licenseFilter.isEmpty
+        compatibleOnly || collection != .all || !selectedTaskRaw.isEmpty || maximumSizeGB > 0 || !publisherFilter.isEmpty || !licenseFilter.isEmpty
     }
 
     private func resetFilters() {
         compatibleOnly = false
         collection = .all
         selectedTaskRaw = ""
-        selectedRuntimeRaw = ""
         maximumSizeGB = 0
         publisherFilter = ""
         licenseFilter = ""
@@ -499,8 +493,8 @@ public struct ModelBrowserView: View {
     private var displayedResults: [ModelDescriptor] {
         results.compactMap { model in
             let variants = model.variants.filter { variant in
+                guard variant.runtime == .mlx, variant.format == .mlx else { return false }
                 if let task = selectedTask, !variant.capabilities.tasks.contains(task) { return false }
-                if let runtime = selectedRuntime, variant.runtime != runtime { return false }
                 if !publisherFilter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                    !model.publisher.localizedCaseInsensitiveContains(publisherFilter) { return false }
                 if !licenseFilter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -510,8 +504,6 @@ public struct ModelBrowserView: View {
                           size <= Int64(maximumSizeGB) * 1_000_000_000 else { return false }
                 }
                 if collection == .downloaded && !isInstalled(variant) { return false }
-                if collection == .appleCoreAI && variant.runtime != .coreAI && variant.runtime != .foundationModels { return false }
-                if collection == .huggingFace && model.source != .huggingFace { return false }
                 if collection == .recommended {
                     let fit = ModelCompatibilityAnalyzer.analyze(variant: variant, device: device).fit
                     guard fit == .excellentFit || fit == .goodFit else { return false }
@@ -543,10 +535,6 @@ public struct ModelBrowserView: View {
         selectedTaskRaw.isEmpty ? nil : ArchonModelTask(rawValue: selectedTaskRaw)
     }
 
-    private var selectedRuntime: ArchonModelRuntime? {
-        selectedRuntimeRaw.isEmpty ? nil : ArchonModelRuntime(rawValue: selectedRuntimeRaw)
-    }
-
     private func isInstalled(_ variant: ModelVariant) -> Bool {
         installedModels.contains {
             $0.manifest.modelID == variant.modelID &&
@@ -557,7 +545,7 @@ public struct ModelBrowserView: View {
 
     @MainActor
     private func refreshInstalledModels() async {
-        installedModels = (try? await library.installedModels()) ?? []
+        installedModels = (try? await library.installedMLXModels()) ?? []
     }
 
     @MainActor
@@ -596,7 +584,8 @@ public struct ModelBrowserView: View {
             let request = ModelSearchRequest(
                 query: query,
                 task: selectedTask,
-                runtime: selectedRuntime,
+                runtime: .mlx,
+                format: .mlx,
                 compatibleOnly: compatibleOnly,
                 device: compatibleOnly ? device : nil,
                 offset: nextOffset,

@@ -446,6 +446,143 @@ public protocol PaginatedModelCatalogProvider: ModelCatalogProvider {
     func searchPage(_ request: ModelSearchRequest) async throws -> ModelCatalogPage
 }
 
+/// A strict user-facing catalog boundary for locally runnable MLX models.
+///
+/// The wrapped provider may contain Core AI, Foundation Models, remote, or
+/// conversion-required entries, but this catalog never returns them. It also
+/// preserves pagination by carrying the wrapped provider's offset/cursor in an
+/// opaque continuation token while it skips non-MLX pages.
+public struct MLXModelCatalog: PaginatedModelCatalogProvider, Sendable {
+    public let id: String
+    private let provider: any ModelCatalogProvider
+
+    public init(provider: any ModelCatalogProvider) {
+        self.id = "mlx-only.\(provider.id)"
+        self.provider = provider
+    }
+
+    public func search(_ request: ModelSearchRequest) async throws -> [ModelDescriptor] {
+        try await searchPage(request).models
+    }
+
+    public func searchPage(_ request: ModelSearchRequest) async throws -> ModelCatalogPage {
+        guard request.runtime == nil || request.runtime == .mlx,
+              request.format == nil || request.format == .mlx else {
+            return ModelCatalogPage(models: [], hasMore: false)
+        }
+
+        var state = try ContinuationState.decode(request.continuationToken)
+        if request.continuationToken == nil {
+            state = ContinuationState(offset: request.offset, token: nil)
+        }
+
+        guard let paginatedProvider = provider as? any PaginatedModelCatalogProvider else {
+            var mlxRequest = request
+            mlxRequest.runtime = .mlx
+            mlxRequest.format = .mlx
+            mlxRequest.includeVariants = true
+            let models = try await provider.search(mlxRequest)
+                .compactMap { Self.mlxDescriptor($0, includeVariants: request.includeVariants) }
+            return ModelCatalogPage(models: Array(models.prefix(request.limit)), hasMore: false)
+        }
+
+        var models: [ModelDescriptor] = []
+        var hasMore = false
+        var lastState = state
+        var visitedStates = Set<ContinuationState>()
+
+        // A provider page can contain descriptors with no MLX variant even
+        // after a runtime filter. Advance through a small bounded number of
+        // pages so those entries cannot starve the user-visible MLX results.
+        for _ in 0..<8 where models.count < request.limit {
+            guard visitedStates.insert(lastState).inserted else { break }
+
+            var mlxRequest = request
+            mlxRequest.runtime = .mlx
+            mlxRequest.format = .mlx
+            mlxRequest.includeVariants = true
+            mlxRequest.offset = lastState.offset
+            mlxRequest.continuationToken = lastState.token
+
+            let page = try await paginatedProvider.searchPage(mlxRequest)
+            models.append(contentsOf: page.models.compactMap {
+                Self.mlxDescriptor($0, includeVariants: request.includeVariants)
+            })
+            if models.count > request.limit {
+                models = Array(models.prefix(request.limit))
+            }
+
+            let nextState = ContinuationState(
+                offset: lastState.offset + page.models.count,
+                token: page.nextContinuationToken
+            )
+            let madeProgress: Bool
+            if lastState.token != nil {
+                // Cursor providers make offset state meaningless. A repeated
+                // cursor must stop rather than fetching the same page again.
+                madeProgress = nextState.token != lastState.token
+            } else {
+                madeProgress = page.models.count > 0 || nextState.token != nil
+            }
+            hasMore = page.hasMore && madeProgress
+            lastState = nextState
+            guard hasMore else { break }
+        }
+
+        let continuation = hasMore ? try lastState.encoded() : nil
+        return ModelCatalogPage(
+            models: models,
+            hasMore: hasMore,
+            nextContinuationToken: continuation
+        )
+    }
+
+    private static func mlxDescriptor(
+        _ model: ModelDescriptor,
+        includeVariants: Bool
+    ) -> ModelDescriptor? {
+        let variants = model.variants.filter {
+            $0.runtime == .mlx && $0.format == .mlx
+        }
+        guard !variants.isEmpty else { return nil }
+        return ModelDescriptor(
+            id: model.id,
+            name: model.name,
+            publisher: model.publisher,
+            family: model.family,
+            parameterCount: model.parameterCount,
+            tasks: model.tasks,
+            architecture: model.architecture,
+            description: model.description,
+            source: model.source,
+            sourceURL: model.sourceURL,
+            revision: model.revision,
+            license: model.license,
+            gated: model.gated,
+            supportedLanguages: model.supportedLanguages,
+            variants: includeVariants ? variants : []
+        )
+    }
+
+    private struct ContinuationState: Codable, Equatable, Hashable, Sendable {
+        let offset: Int
+        let token: String?
+
+        static func decode(_ value: String?) throws -> ContinuationState {
+            guard let value else { return ContinuationState(offset: 0, token: nil) }
+            guard let data = Data(base64Encoded: value),
+                  let state = try? JSONDecoder().decode(ContinuationState.self, from: data) else {
+                throw ArchonModelsError.invalidResponse
+            }
+            return state
+        }
+
+        func encoded() throws -> String {
+            try JSONEncoder().encode(self).base64EncodedString()
+        }
+    }
+}
+
 public struct StaticModelCatalog: PaginatedModelCatalogProvider, Sendable {
     public let id: String
     public let models: [ModelDescriptor]
@@ -1499,6 +1636,40 @@ public struct ArchonModelManifest: Codable, Equatable, Sendable {
         )
     }
 
+    /// Returns a copy written with the current manifest schema. Migrations are
+    /// intentionally additive and preserve all data that this package knows.
+    public func withCurrentSchemaVersion() -> ArchonModelManifest {
+        ArchonModelManifest(
+            schemaVersion: ArchonModelManifest.currentSchemaVersion,
+            modelID: modelID,
+            modelName: modelName,
+            sourceRepository: sourceRepository,
+            sourceRevision: sourceRevision,
+            license: license,
+            runtime: runtime,
+            format: format,
+            architecture: architecture,
+            supportedDeviceArchitectures: supportedDeviceArchitectures,
+            artifactPath: artifactPath,
+            modelResources: modelResources,
+            tokenizerResources: tokenizerResources,
+            checksum: checksum,
+            modelSizeBytes: modelSizeBytes,
+            parameterCount: parameterCount,
+            platforms: platforms,
+            minimumOS: minimumOS,
+            contextLength: contextLength,
+            precision: precision,
+            quantization: quantization,
+            kvCacheBytesPerToken: kvCacheBytesPerToken,
+            estimatedMemoryBytes: estimatedMemoryBytes,
+            estimatedQualityScore: estimatedQualityScore,
+            estimatedTokensPerSecond: estimatedTokensPerSecond,
+            capabilities: capabilities,
+            isExperimental: isExperimental
+        )
+    }
+
     /// Returns a copy with the developer-validation gate explicitly set.
     public func withExperimental(_ isExperimental: Bool) -> ArchonModelManifest {
         ArchonModelManifest(
@@ -1903,6 +2074,7 @@ public enum ArchonModelsError: Error, LocalizedError, Equatable, Sendable {
     case licenseDenied(String)
     case integrityCheckFailed(expected: String, actual: String)
     case sizeMismatch(expected: Int64, actual: Int64)
+    case downloadSizeExceeded(maximum: Int64)
     case insufficientDiskSpace
     case backgroundTransferFailed(String)
     case downloadInProgress(String)
@@ -1925,6 +2097,7 @@ public enum ArchonModelsError: Error, LocalizedError, Equatable, Sendable {
         case .licenseDenied(let identifier): "The model license is denied by the active policy: \(identifier)."
         case .integrityCheckFailed(let expected, let actual): "Model checksum mismatch. Expected \(expected), received \(actual)."
         case .sizeMismatch(let expected, let actual): "Model size mismatch. Expected \(expected) bytes, received \(actual) bytes."
+        case .downloadSizeExceeded(let maximum): "Model download exceeds the configured maximum of \(maximum) bytes."
         case .insufficientDiskSpace: "There is not enough disk space to install this model."
         case .backgroundTransferFailed(let reason): "Background model transfer failed: \(reason)"
         case .downloadInProgress(let id): "A download is already in progress for \(id)."

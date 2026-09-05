@@ -73,7 +73,7 @@ public struct PlainTextDocumentLoader: DocumentLoader {
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
               let size = attributes[.size] as? NSNumber,
               size.int64Value <= Int64(Self.maxInputBytes) else {
-            throw NSError(domain: "DocumentLoader", code: 413, userInfo: [NSLocalizedDescriptionKey: "Document exceeds the maximum supported size."])
+            throw ArchonMemoryError.inputTooLarge(maxBytes: Self.maxInputBytes)
         }
         let content = try String(contentsOf: url, encoding: .utf8)
         let filename = url.lastPathComponent
@@ -92,7 +92,7 @@ public struct PlainTextDocumentLoader: DocumentLoader {
 
     public func load(data: Data, filename: String, metadata: [String: String]) async throws -> [LoadedDocument] {
         guard data.count <= Self.maxInputBytes else {
-            throw NSError(domain: "DocumentLoader", code: 413, userInfo: [NSLocalizedDescriptionKey: "Document exceeds the maximum supported size."])
+            throw ArchonMemoryError.inputTooLarge(maxBytes: Self.maxInputBytes)
         }
         let content = String(decoding: data, as: UTF8.self)
         let ext = (filename as NSString).pathExtension.lowercased()
@@ -327,23 +327,23 @@ public struct PDFDocumentLoader: DocumentLoader {
     public func load(from url: URL) async throws -> [LoadedDocument] {
         #if canImport(PDFKit)
         guard let pdfDoc = PDFDocument(url: url) else {
-            throw NSError(domain: "PDFDocumentLoader", code: 400, userInfo: [NSLocalizedDescriptionKey: "Failed to open PDF at \(url.path)."])
+            throw ArchonMemoryError.documentLoadFailed("Failed to open PDF at \(url.path).")
         }
         return parse(pdf: pdfDoc, title: url.deletingPathExtension().lastPathComponent, sourceURL: url.absoluteString)
         #else
-        throw NSError(domain: "PDFDocumentLoader", code: 501, userInfo: [NSLocalizedDescriptionKey: "PDFKit is unavailable on this platform."])
+        throw ArchonMemoryError.unsupportedDocumentFormat("PDFKit is unavailable on this platform.")
         #endif
     }
 
     public func load(data: Data, filename: String, metadata: [String: String]) async throws -> [LoadedDocument] {
         #if canImport(PDFKit)
         guard let pdfDoc = PDFDocument(data: data) else {
-            throw NSError(domain: "PDFDocumentLoader", code: 400, userInfo: [NSLocalizedDescriptionKey: "Failed to decode PDF data for \(filename)."])
+            throw ArchonMemoryError.documentLoadFailed("Failed to decode PDF data for \(filename).")
         }
         let title = (filename as NSString).deletingPathExtension
         return parse(pdf: pdfDoc, title: title, sourceURL: metadata["sourceURL"])
         #else
-        throw NSError(domain: "PDFDocumentLoader", code: 501, userInfo: [NSLocalizedDescriptionKey: "PDFKit is unavailable on this platform."])
+        throw ArchonMemoryError.unsupportedDocumentFormat("PDFKit is unavailable on this platform.")
         #endif
     }
 
@@ -399,7 +399,7 @@ public struct AutoDocumentLoader: DocumentLoader {
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
               let size = attributes[.size] as? NSNumber,
               size.int64Value <= Int64(PlainTextDocumentLoader.maxInputBytes) else {
-            throw NSError(domain: "DocumentLoader", code: 413, userInfo: [NSLocalizedDescriptionKey: "Document exceeds the maximum supported size."])
+            throw ArchonMemoryError.inputTooLarge(maxBytes: PlainTextDocumentLoader.maxInputBytes)
         }
         let ext = url.pathExtension.lowercased()
         for loader in loaders {
@@ -412,7 +412,7 @@ public struct AutoDocumentLoader: DocumentLoader {
 
     public func load(data: Data, filename: String, metadata: [String: String]) async throws -> [LoadedDocument] {
         guard data.count <= PlainTextDocumentLoader.maxInputBytes else {
-            throw NSError(domain: "DocumentLoader", code: 413, userInfo: [NSLocalizedDescriptionKey: "Document exceeds the maximum supported size."])
+            throw ArchonMemoryError.inputTooLarge(maxBytes: PlainTextDocumentLoader.maxInputBytes)
         }
         let ext = (filename as NSString).pathExtension.lowercased()
         for loader in loaders {

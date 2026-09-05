@@ -20,10 +20,10 @@ forwarding.
 
 - installed-model library and storage views;
 - Files import and macOS drag-and-drop of compatible model artifacts;
-- Hugging Face discovery, filters, compatibility, and revision checks. The
-  host passes `HuggingFaceCatalog`; the results are not limited by the Gemma
-  compatibility seed, and additional families appear when the catalog can
-  describe their runnable artifacts;
+- MLX-only Hugging Face discovery, filters, compatibility, and revision checks.
+  The host passes `HuggingFaceCatalog`, and the model browser applies
+  `MLXModelCatalog`; additional families appear when the catalog describes
+  validated runnable MLX artifacts;
 - real download lifecycle: pause, resume, retry, redownload, delete, and select;
 - model-library App Intents, discoverable App Shortcuts, and installed-model entity registration;
 - Apple Foundation Model chat when the host device supports it; otherwise the
@@ -59,6 +59,6 @@ and custom model text-generation adapters.
 
 See the [root README](../README.md) for the system design and package map.
 See [supported models and model-family policy](../Documentation/reference/supported-models.md)
-for the discovery/runtime contract and Gemma-seed explanation.
+for the MLX-only discovery/runtime contract and Gemma compatibility explanation.
 See the [feature adoption backlog](../context/feature-adoption-backlog.md) for
 the whole-SDK implementation sequence.

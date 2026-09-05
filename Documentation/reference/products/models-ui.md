@@ -9,12 +9,22 @@ runtime adapters, or model policy. Register the configured library through
 `ModelLibraryIntentRegistry` and inject catalogs/download managers from the
 consuming app.
 
-`ModelBrowserView` renders the injected `ModelCatalogProvider`; it does not
-contain a hidden Gemma-only registry or discover model families on its own. A
-Gemma-only screen means the host catalog returned only Gemma entries (or that
-filters removed the other variants). Configure a `HuggingFaceCatalog`, local,
-static, app-owned, remote, or `CompositeModelCatalog` as described in the
-[supported model policy](../supported-models.md).
+`ModelBrowserView` is an MLX-only user-facing surface. It wraps the injected
+`ModelCatalogProvider` in `MLXModelCatalog`, so Core AI, Foundation Models,
+cloud, raw, and conversion-required variants are removed before rendering.
+The host can configure a `HuggingFaceCatalog`, local, static, app-owned,
+remote, or `CompositeModelCatalog`; the browser applies the MLX boundary to
+that provider as described in the [supported model policy](../supported-models.md).
+
+`ModelLibraryView` likewise lists only installed MLX artifacts and rejects
+non-MLX imports from its user-facing import flow. Lower-level
+`ModelLibrary` APIs remain available for explicit developer-side artifact
+inspection and migration work.
+
+`ModelLibraryViewModel`, model detail/storage views, and the model App Intents
+use the same installed-MLX boundary. App Intents list, delete, and report
+storage for MLX models only; they do not expose legacy Core AI or raw-weight
+installations.
 
 Discovery is incremental: the browser requests one bounded page initially,
 loads another page only when the user reaches the bottom, and shows a

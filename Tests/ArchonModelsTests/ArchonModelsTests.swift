@@ -696,6 +696,57 @@ struct ArchonModelsTests {
         #expect(!secondPage.hasMore)
     }
 
+    @Test("MLX catalog boundary hides non-MLX model variants")
+    func mlxCatalogOnlyReturnsMLXVariants() async throws {
+        let mlxVariant = ModelVariant(
+            id: "qwen-mlx",
+            name: "Qwen MLX",
+            modelID: "mlx-community/Qwen3-8B-4bit",
+            source: .huggingFace,
+            format: .mlx,
+            runtime: .mlx
+        )
+        let coreAIVariant = ModelVariant(
+            id: "qwen-coreai",
+            name: "Qwen Core AI",
+            modelID: "Qwen/Qwen3",
+            source: .appleCoreAI,
+            format: .aimodel,
+            runtime: .coreAI
+        )
+        let catalog = MLXModelCatalog(provider: StaticModelCatalog(models: [
+            ModelDescriptor(
+                id: "mixed-model",
+                name: "Mixed Model",
+                publisher: "Test",
+                source: .developerRegistry,
+                variants: [mlxVariant, coreAIVariant]
+            ),
+            ModelDescriptor(
+                id: "coreai-only",
+                name: "Core AI Only",
+                publisher: "Test",
+                source: .appleCoreAI,
+                variants: [coreAIVariant]
+            )
+        ]))
+
+        let page = try await catalog.searchPage(ModelSearchRequest(query: "", limit: 1))
+
+        #expect(page.models.map(\.id) == ["mixed-model"])
+        #expect(page.models.first?.variants.map(\.runtime) == [.mlx])
+        #expect(page.models.first?.variants.map(\.format) == [.mlx])
+        let continuation = try #require(page.nextContinuationToken)
+        let nextPage = try await catalog.searchPage(ModelSearchRequest(
+            query: "",
+            continuationToken: continuation,
+            limit: 1
+        ))
+        #expect(nextPage.models.isEmpty)
+        #expect(!nextPage.hasMore)
+        #expect(try await catalog.search(ModelSearchRequest(query: "", runtime: .coreAI)).isEmpty)
+    }
+
     @Test("Composite catalog pagination keeps each provider's cursor")
     func paginatesCompositeCatalog() async throws {
         func descriptor(_ id: String) -> ModelDescriptor {

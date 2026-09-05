@@ -1,12 +1,12 @@
 # ``ArchonMemory``
 
-A native Swift, local-first AI memory framework uniting the innovations of Mem0, Supermemory, Letta/MemGPT, and Zep for Apple Silicon and Apple CloudKit.
+A native Swift, local-first AI memory framework uniting the innovations of Mem0, Supermemory, Letta/MemGPT, and Zep for Apple Silicon, with optional Apple CloudKit synchronization.
 
 ## Overview
 
 ArchonMemory provides persistent long-term memory for Apple Intelligence agentic systems, virtual assistants, and conversational native applications running on **iOS 27.0+ and macOS 27.0+**.
 
-It automatically extracts structured user facts, preferences, and entity-relationship knowledge graphs using Apple Foundation Models, indexes float array vectors locally using Apple's `Accelerate.framework` (SIMD/vDSP) and SQLite FTS5, ingests documents and bookmarks (Supermemory), provides 3-tier memory management (Letta/MemGPT), dialogue summarization (Zep), and synchronizes memory state privately across user devices using CloudKit without requiring external backend server infrastructure.
+It automatically extracts structured user facts, preferences, and entity-relationship knowledge graphs using Apple Foundation Models, indexes float array vectors locally using Apple's `Accelerate.framework` (SIMD/vDSP) and SQLite FTS5, ingests documents and bookmarks (Supermemory), provides 3-tier memory management (Letta/MemGPT), dialogue summarization (Zep), and can synchronize memory state privately across user devices using an explicitly configured CloudKit container.
 
 ## Topics
 

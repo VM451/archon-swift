@@ -260,26 +260,33 @@ public struct AdaptiveModelCatalog: Sendable, Equatable {
         extraEOSTokensByModelID: [String: Set<String>] = [:]
     ) {
         self.init(candidates: descriptors.flatMap { descriptor in
-            descriptor.variants.compactMap { variant in
-                AdaptiveModelCandidate(
-                    descriptor: descriptor,
-                    variant: variant,
-                    extraEOSTokens: extraEOSTokensByModelID[descriptor.id] ?? []
-                )
-            }
+            descriptor.variants
+                .filter { $0.runtime == .mlx && $0.format == .mlx }
+                .compactMap { variant in
+                    AdaptiveModelCandidate(
+                        descriptor: descriptor,
+                        variant: variant,
+                        extraEOSTokens: extraEOSTokensByModelID[descriptor.id] ?? []
+                    )
+                }
         })
     }
 
-    /// Fetches descriptors from any Archon model catalog provider and converts
-    /// its directly runnable variants into adaptive candidates. This keeps
-    /// monthly catalog refreshes in the consuming app's catalog/update job;
-    /// the selector itself remains deterministic and side-effect free.
+    /// Fetches MLX descriptors from an Archon model catalog provider and
+    /// converts them into adaptive candidates. The MLX boundary is applied
+    /// here as well as in the UI so an AI agent cannot accidentally populate
+    /// its user-facing local-model choices with Core AI or raw-weight entries.
     public static func load(
         from provider: any ModelCatalogProvider,
         request: ModelSearchRequest = ModelSearchRequest(query: "", includeVariants: true),
         extraEOSTokensByModelID: [String: Set<String>] = [:]
     ) async throws -> AdaptiveModelCatalog {
-        let descriptors = try await provider.search(request)
+        let mlxProvider = MLXModelCatalog(provider: provider)
+        var mlxRequest = request
+        mlxRequest.runtime = .mlx
+        mlxRequest.format = .mlx
+        mlxRequest.includeVariants = true
+        let descriptors = try await mlxProvider.search(mlxRequest)
         return AdaptiveModelCatalog(
             descriptors: descriptors,
             extraEOSTokensByModelID: extraEOSTokensByModelID

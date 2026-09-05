@@ -1,4 +1,5 @@
 import Foundation
+import ArchonCore
 
 /// Defines the operational capabilities of a target LLM or Foundation Model.
 public struct ModelCapabilities: Sendable, Codable, Equatable {
@@ -150,7 +151,7 @@ public struct ModelResponseChunk: Sendable, Codable, Equatable {
 }
 
 /// The unified model abstraction protocol across native Apple Foundation Models and external cloud APIs.
-public protocol LLMProvider: Sendable {
+public protocol LLMProvider: ArchonStructuredOutputProvider {
     var id: String { get }
     var capabilities: ModelCapabilities { get }
 
@@ -168,6 +169,47 @@ public protocol LLMProvider: Sendable {
 }
 
 public extension LLMProvider {
+    func generateStructuredOutput<T: Decodable & Sendable>(
+        prompt: String,
+        responseSchema: T.Type
+    ) async throws -> T {
+        let response = try await generate(
+            prompt: [.user(prompt)],
+            tools: [],
+            options: GenerationOptions(responseFormatJSON: true)
+        )
+        let text = response.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidate: String
+        if let fenceStart = text.range(of: "```"),
+           let fenceEnd = text.range(of: "```", range: fenceStart.upperBound..<text.endIndex) {
+            let fenced = text[fenceStart.upperBound..<fenceEnd.lowerBound]
+            candidate = fenced.replacingOccurrences(of: "json", with: "", options: [.caseInsensitive], range: fenced.startIndex..<fenced.index(fenced.startIndex, offsetBy: min(4, fenced.count)))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            candidate = text
+        }
+        let decoder = JSONDecoder()
+        if let data = candidate.data(using: .utf8),
+           let decoded = try? decoder.decode(T.self, from: data) {
+            return decoded
+        }
+
+        // Some providers add a short explanation around otherwise valid JSON.
+        // Recover only a single top-level object/array candidate; never attempt
+        // heuristic field extraction or silently synthesize missing values.
+        for (opening, closing) in [("{", "}"), ("[", "]")] {
+            guard let start = candidate.firstIndex(of: Character(opening)),
+                  let end = candidate.lastIndex(of: Character(closing)),
+                  start < end else { continue }
+            let embedded = String(candidate[start...end])
+            if let data = embedded.data(using: .utf8),
+               let decoded = try? decoder.decode(T.self, from: data) {
+                return decoded
+            }
+        }
+        throw GraphError.stateDeserializationFailed("Structured provider returned invalid JSON.")
+    }
+
     func generate(prompt: [ChatMessage]) async throws -> ModelResponse {
         try await generate(prompt: prompt, tools: [], options: GenerationOptions())
     }

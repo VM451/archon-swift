@@ -214,4 +214,56 @@ struct ModelRoutingTests {
 
         #expect(selection == .unavailable("No compatible local model satisfies the requested policy."))
     }
+
+    @Test("Model routing enforces streaming, tool, and structured-output requirements")
+    func enforcesFullCapabilityContract() {
+        let device = ArchonDeviceCapabilities(
+            platform: .iOS,
+            osVersion: ArchonOSVersion(major: 27),
+            physicalMemoryBytes: 8_000_000_000,
+            availableMemoryBytes: 6_000_000_000,
+            processorCount: 6,
+            deviceArchitecture: "arm64",
+            supportsAppleFoundationModels: false,
+            supportsCoreAI: true
+        )
+        let variant = ModelVariant(
+            id: "text-no-json",
+            name: "text-no-json.aimodel",
+            modelID: "example/text-no-json",
+            source: .archonRegistry,
+            format: .aimodel,
+            runtime: .coreAI,
+            sizeBytes: 100,
+            estimatedMemoryBytes: 100,
+            capabilities: ArchonModelCapabilities(
+                tasks: [.textGeneration],
+                supportsStreaming: true,
+                supportsToolCalling: true,
+                supportsStructuredOutput: false
+            )
+        )
+
+        let selection = AgentModelRouter.select(
+            policy: ModelPolicy(
+                privacy: .localOnly,
+                requirements: ModelCapabilityRequirements(
+                    task: .textGeneration,
+                    requiresStreaming: true,
+                    requiresToolCalling: true,
+                    requiresStructuredOutput: true
+                )
+            ),
+            device: device,
+            candidates: [ModelDescriptor(
+                id: variant.modelID,
+                name: "Text No JSON",
+                publisher: "Example",
+                source: .archonRegistry,
+                variants: [variant]
+            )]
+        )
+
+        #expect(selection == .unavailable("No compatible local model satisfies the requested policy."))
+    }
 }

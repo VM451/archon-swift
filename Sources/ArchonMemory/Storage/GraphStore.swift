@@ -7,12 +7,14 @@ public protocol GraphStore: Sendable {
     
     /// Fetch an entity by its exact name and optional user ID.
     func fetchEntity(name: String, userId: String?) async throws -> Entity?
+    func fetchEntity(id: UUID) async throws -> Entity?
     
     /// Fetch all entities matching optional filters.
     func fetchEntities(userId: String?) async throws -> [Entity]
     
     /// Save or update a relationship edge between two entities.
     func saveRelation(_ relation: Relation) async throws
+    func fetchRelation(id: UUID) async throws -> Relation?
     
     /// Retrieve outgoing relationships and target entities from a source entity.
     func fetchRelations(from sourceEntityId: UUID) async throws -> [(relation: Relation, target: Entity)]
@@ -22,6 +24,7 @@ public protocol GraphStore: Sendable {
     
     /// Delete an entity and its associated relationship edges.
     func deleteEntity(id: UUID) async throws
+    func deleteRelation(id: UUID) async throws
     
     /// Delete all graph entities and relations matching a scope.
     func deleteAll(userId: String?, agentId: String?, runId: String?) async throws
@@ -31,4 +34,10 @@ public protocol GraphStore: Sendable {
     
     /// Mark graph entities and relations as synced.
     func markGraphSynced(entityIds: [UUID], relationIds: [UUID]) async throws
+}
+
+public extension GraphStore {
+    func fetchEntity(id: UUID) async throws -> Entity? { nil }
+    func fetchRelation(id: UUID) async throws -> Relation? { nil }
+    func deleteRelation(id: UUID) async throws {}
 }

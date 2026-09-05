@@ -6,9 +6,9 @@ import OSLog
 /// Integrates stored memories into iOS/macOS Spotlight system search via CoreSpotlight framework.
 public actor CoreSpotlightIndexer {
     public static let shared = CoreSpotlightIndexer()
-    public static let domainIdentifier = "com.mem0.swift.memories"
+    public static let domainIdentifier = "com.archon.memory.memories"
     
-    private let logger = Logger(subsystem: "com.mem0.swift", category: "CoreSpotlightIndexer")
+    private let logger = Logger(subsystem: "com.archon.memory.swift", category: "CoreSpotlightIndexer")
 
     public init() {}
 
@@ -53,6 +53,19 @@ public actor CoreSpotlightIndexer {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             CSSearchableIndex.default().deleteSearchableItems(withIdentifiers: idStrings) { error in
                 if let error = error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
+    /// Removes every item owned by Archon from the configured Spotlight domain.
+    public func deindexAll() async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            CSSearchableIndex.default().deleteSearchableItems(withDomainIdentifiers: [Self.domainIdentifier]) { error in
+                if let error {
                     continuation.resume(throwing: error)
                 } else {
                     continuation.resume()

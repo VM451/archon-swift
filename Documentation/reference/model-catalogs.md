@@ -13,12 +13,12 @@ public protocol PaginatedModelCatalogProvider: ModelCatalogProvider {
 }
 ```
 
-Catalog discovery is data-driven and model-family neutral. The package does
-not maintain a universal model allow-list. In particular,
-`AdaptiveModelCatalog.builtIn` is a small Gemma compatibility seed, while
-`ModelBrowserView` displays the catalog provider supplied by the host app. For
-the complete support statement and the reason a discovery screen can appear
-Gemma-only, read [Supported models and model-family policy](supported-models.md).
+Catalog discovery is data-driven. User-facing discovery is strict MLX-only:
+`MLXModelCatalog` filters every wrapped provider to `.mlx` runtime and format.
+The lower-level contracts remain family-neutral for host integrations, and
+`AdaptiveModelCatalog.builtIn` retains a small Gemma compatibility seed. For
+the complete support statement, read [Supported models and model-family
+policy](supported-models.md).
 
 ## Catalog types
 
@@ -32,6 +32,7 @@ Gemma-only, read [Supported models and model-family policy](supported-models.md)
 | `RemoteModelCatalog` | HTTP registry returning model descriptors | Yes |
 | `HuggingFaceCatalog` | Hugging Face metadata and repository inventory | Yes |
 | `CompositeModelCatalog` | Ordered composition of other catalogs | Inherits its providers |
+| `MLXModelCatalog` | Strict MLX-only wrapper around another catalog | Inherits its provider |
 
 Local discovery reads manifests and does not create a download URL. A caller
 must import a local artifact through `ModelLibrary.importArtifact(at:manifest:)`
@@ -59,16 +60,31 @@ It requests the next page only after the user reaches the bottom, shows a real
 no more results. Search text is lightly debounced so typing does not start one
 network request per keystroke.
 
+`ModelBrowserView` and the catalog used for `ModelLibraryView` update checks
+automatically wrap their provider in `MLXModelCatalog`. If a host uses the
+catalog APIs directly for user-facing discovery, it must apply the same
+wrapper:
+
+```swift
+let catalog = MLXModelCatalog(provider: HuggingFaceCatalog())
+```
+
+`ModelLibrary.installedMLXModels()` and
+`ModelLibrary.mlxDiskUsageBytes()` provide the matching installed-library
+boundary. `ModelLibraryViewModel`, `ModelLibraryView`, `ModelDetailView`,
+`ModelStorageView`, and model App Intents use these APIs, so legacy or
+developer-only non-MLX installations do not appear in user-facing model
+management.
+
 `compatibleOnly` filters variants using the supplied device snapshot. It can
 therefore hide otherwise valid catalog entries on a constrained device; it is
 not a model-family filter.
 
-For `HuggingFaceCatalog`, use `runtime: .mlx` when the user is looking for
-downloadable local MLX packages. That adds the Hub's `mlx` tag filter and
-prevents popular raw SafeTensors/Transformers repositories from crowding out
-directly runnable MLX results. Omitting the runtime intentionally performs a
-broad artifact search, where raw checkpoints remain visible as
-`conversionRequired`.
+For `HuggingFaceCatalog`, the MLX wrapper also sends `runtime: .mlx` and
+`format: .mlx`. That adds the Hub's `mlx` tag filter and prevents popular raw
+SafeTensors/Transformers repositories from crowding out directly runnable MLX
+results. A raw `HuggingFaceCatalog` can still be used for lower-level metadata
+or conversion inspection, but it is not a user-facing discovery catalog.
 
 ## Authentication
 

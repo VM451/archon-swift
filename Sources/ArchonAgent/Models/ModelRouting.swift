@@ -14,15 +14,20 @@ public struct ModelPolicy: Codable, Equatable, Sendable {
     public let privacy: ModelPrivacyPolicy
     public let capability: ArchonModelTask
     public let preferredRuntime: ArchonModelRuntime?
+    /// Optional requirements for the full runtime contract. When omitted,
+    /// routing preserves the legacy task-only behavior.
+    public let requirements: ModelCapabilityRequirements?
 
     public init(
         privacy: ModelPrivacyPolicy = .preferLocal,
         capability: ArchonModelTask = .textGeneration,
-        preferredRuntime: ArchonModelRuntime? = nil
+        preferredRuntime: ArchonModelRuntime? = nil,
+        requirements: ModelCapabilityRequirements? = nil
     ) {
         self.privacy = privacy
         self.capability = capability
         self.preferredRuntime = preferredRuntime
+        self.requirements = requirements
     }
 }
 
@@ -108,9 +113,10 @@ public enum AgentModelRouter {
         policy: ModelPolicy,
         device: ArchonDeviceCapabilities
     ) -> ModelVariant? {
-        variants
+        let requirements = policy.requirements ?? ModelCapabilityRequirements(task: policy.capability)
+        return variants
             .filter { policy.preferredRuntime == nil || $0.runtime == policy.preferredRuntime }
-            .filter { $0.capabilities.tasks.contains(policy.capability) }
+            .filter { ModelRuntimeCapabilities(runtime: $0.runtime, capabilities: $0.capabilities).satisfies(requirements) }
             .filter { variant in
                 switch policy.privacy {
                 case .localOnly, .customLocalOnly:
@@ -121,7 +127,7 @@ public enum AgentModelRouter {
                     return true
                 }
             }
-            .filter { ModelCompatibilityAnalyzer.analyze(variant: $0, device: device).canLoad }
+            .filter { ModelCompatibilityAnalyzer.analyze(variant: $0, device: device, requirements: requirements).canLoad }
             .sorted { lhs, rhs in
                 let lhsFit = ModelCompatibilityAnalyzer.analyze(variant: lhs, device: device).fit
                 let rhsFit = ModelCompatibilityAnalyzer.analyze(variant: rhs, device: device).fit

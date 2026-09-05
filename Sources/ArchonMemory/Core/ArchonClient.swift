@@ -41,6 +41,8 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
     public let ragRetriever: RAGRetriever
 
     private let logger = Logger(subsystem: "com.archon.memory.swift", category: "ArchonClient")
+    private var scheduledSyncTask: Task<Void, Never>?
+    private var syncInProgress = false
 
     public init(config: ArchonConfig = ArchonConfig()) async throws {
         self.config = config
@@ -54,7 +56,7 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
         if let gStore = config.customGraphStore {
             self.graphStore = gStore
         } else {
-            self.graphStore = try LocalGraphStore()
+            self.graphStore = try LocalGraphStore(databasePath: Self.graphDatabasePath(for: config.databasePath))
         }
         
         self.extractor = MemoryExtractor(
@@ -73,11 +75,13 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
         self.ragRetriever = RAGRetriever(index: kbIndex)
 
         if config.enableAutoSync {
-            let engine = CloudKitSyncEngine(containerId: config.cloudKitContainerId)
-            self.syncEngine = engine
-            Task {
-                try? await engine.setupZoneAndSubscriptions()
+            guard let containerId = config.cloudKitContainerId,
+                  !containerId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw ArchonMemoryError.invalidConfiguration("enableAutoSync requires cloudKitContainerId.")
             }
+            let engine = CloudKitSyncEngine(containerId: containerId, changeTokenURL: config.cloudKitChangeTokenPath.map(URL.init(fileURLWithPath:)))
+            self.syncEngine = engine
+            try await engine.setupZoneAndSubscriptions()
         } else {
             self.syncEngine = nil
         }
@@ -85,6 +89,15 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
         self.spotlightIndexer = CoreSpotlightIndexer.shared
         
         await ArchonClientIntentRegistry.shared.register(self)
+    }
+
+    private static func graphDatabasePath(for databasePath: String?) -> String? {
+        guard let databasePath else { return nil }
+        let url = URL(fileURLWithPath: databasePath)
+        let baseName = url.deletingPathExtension().lastPathComponent
+        return url.deletingLastPathComponent()
+            .appendingPathComponent(baseName + "-graph.sqlite")
+            .path
     }
 
     // MARK: - Public Client Core APIs
@@ -125,10 +138,8 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
             }
         }
 
-        if config.enableAutoSync, let syncEngine = syncEngine, !affected.isEmpty {
-            Task {
-                try? await syncEngine.upload(memories: affected)
-            }
+        if config.enableAutoSync, !affected.isEmpty {
+            scheduleSync()
         }
 
         return changeset
@@ -169,10 +180,8 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
             }
         }
 
-        if config.enableAutoSync, let syncEngine = syncEngine {
-            Task {
-                try? await syncEngine.upload(memories: items)
-            }
+        if config.enableAutoSync {
+            scheduleSync()
         }
 
         return item
@@ -202,6 +211,14 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
         }
 
         try await vectorStore.saveBatch(items: items)
+        for item in items {
+            try await vectorStore.logHistory(item: MemoryHistoryItem(
+                memoryId: item.id,
+                action: .add,
+                newMemory: item.memory,
+                userId: userId
+            ))
+        }
         
         let batchItems = items
         if config.enableSpotlightIndexing, !batchItems.isEmpty {
@@ -211,10 +228,8 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
             }
         }
 
-        if config.enableAutoSync, let syncEngine = syncEngine, !batchItems.isEmpty {
-            Task {
-                try? await syncEngine.upload(memories: batchItems)
-            }
+        if config.enableAutoSync, !batchItems.isEmpty {
+            scheduleSync()
         }
 
         return items
@@ -267,7 +282,7 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
     @discardableResult
     public func update(id: UUID, memory: String) async throws -> MemoryItem {
         guard var existing = try await vectorStore.fetch(id: id) else {
-            throw NSError(domain: "ArchonMemory", code: 404, userInfo: [NSLocalizedDescriptionKey: "Memory not found"])
+            throw ArchonMemoryError.memoryNotFound(id)
         }
 
         let oldText = existing.memory
@@ -296,10 +311,8 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
             }
         }
 
-        if config.enableAutoSync, let syncEngine = syncEngine {
-            Task {
-                try? await syncEngine.upload(memories: updatedItems)
-            }
+        if config.enableAutoSync {
+            scheduleSync()
         }
 
         return existing
@@ -324,16 +337,53 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
                 try? await indexer.deindex(ids: [deleteId])
             }
         }
+        if config.enableAutoSync {
+            scheduleSync()
+        }
     }
 
     /// Bulk delete all memories matching a specific user, agent, or run session.
     public func deleteAll(userId: String? = nil, agentId: String? = nil, runId: String? = nil) async throws {
+        try await deleteAll(userId: userId, agentId: agentId, runId: runId, schedule: true)
+    }
+
+    private func deleteAll(
+        userId: String?,
+        agentId: String?,
+        runId: String?,
+        schedule: Bool
+    ) async throws {
+        let existing = try await vectorStore.fetchAll(
+            filters: MemoryFilter(userId: userId, agentId: agentId, runId: runId),
+            limit: nil,
+            offset: nil
+        )
         try await vectorStore.deleteAll(userId: userId, agentId: agentId, runId: runId)
         try await graphStore.deleteAll(userId: userId, agentId: agentId, runId: runId)
+        for item in existing {
+            try await vectorStore.logHistory(item: MemoryHistoryItem(
+                memoryId: item.id,
+                action: .delete,
+                oldMemory: item.memory,
+                userId: item.userId
+            ))
+        }
+        if config.enableSpotlightIndexing, !existing.isEmpty {
+            try? await spotlightIndexer.deindex(ids: existing.map(\.id))
+        }
+        if config.enableAutoSync, schedule {
+            scheduleSync()
+        }
     }
 
     /// Completely wipe all stored memories, history logs, documents, and working blocks.
     public func reset() async throws {
+        if config.enableAutoSync {
+            try await deleteAll(userId: nil, agentId: nil, runId: nil, schedule: false)
+            try await sync()
+        } else if config.enableSpotlightIndexing {
+            try? await spotlightIndexer.deindexAll()
+        }
         try await vectorStore.reset()
         try await graphStore.deleteAll(userId: nil, agentId: nil, runId: nil)
     }
@@ -341,6 +391,35 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
     /// Retrieve audit history logs.
     public func history(memoryId: UUID? = nil, userId: String? = nil) async throws -> [MemoryHistoryItem] {
         return try await vectorStore.fetchHistory(memoryId: memoryId, userId: userId)
+    }
+
+    /// Permanently forgets a memory from local indexes while retaining a
+    /// tombstone long enough for an enabled CloudKit sync to propagate it.
+    public func forget(id: UUID) async throws {
+        try await delete(id: id)
+    }
+
+    /// Exports durable local memory state as portable JSON for backup or
+    /// account migration. Deleted memory tombstones are included explicitly.
+    public func export(
+        userId: String? = nil,
+        agentId: String? = nil,
+        runId: String? = nil
+    ) async throws -> Data {
+        let memories = try await vectorStore.fetchAll(
+            filters: MemoryFilter(userId: userId, agentId: agentId, runId: runId, includeDeleted: true),
+            limit: nil,
+            offset: nil
+        )
+        let history = try await vectorStore.fetchHistory(memoryId: nil, userId: userId)
+        let entities = try await graphStore.fetchEntities(userId: userId)
+        let relations = try await graphStore.fetchTriples(userId: userId)
+        return try JSONEncoder().encode(ArchonMemoryExport(
+            memories: memories,
+            history: history,
+            entities: entities,
+            relations: relations
+        ))
     }
 
     // MARK: - Supermemory Document & Bookmark Ingestion
@@ -356,7 +435,7 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
         metadata: [String: String] = [:]
     ) async throws -> [DocumentItem] {
         guard content.utf8.count <= PlainTextDocumentLoader.maxInputBytes else {
-            throw NSError(domain: "DocumentLoader", code: 413, userInfo: [NSLocalizedDescriptionKey: "Document exceeds the maximum supported size."])
+            throw ArchonMemoryError.inputTooLarge(maxBytes: PlainTextDocumentLoader.maxInputBytes)
         }
         let chunks = chunker.chunk(text: content)
         let autoTags = tags.isEmpty ? chunker.extractTags(text: content) : tags
@@ -441,7 +520,7 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
         metadata: [String: String] = [:]
     ) async throws -> [DocumentChunk] {
         guard data.count <= PlainTextDocumentLoader.maxInputBytes else {
-            throw NSError(domain: "DocumentLoader", code: 413, userInfo: [NSLocalizedDescriptionKey: "Document exceeds the maximum supported size."])
+            throw ArchonMemoryError.inputTooLarge(maxBytes: PlainTextDocumentLoader.maxInputBytes)
         }
         let docLoader = loader ?? AutoDocumentLoader()
         let loadedDocs = try await docLoader.load(data: data, filename: filename, metadata: metadata)
@@ -536,7 +615,10 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
     /// Trigger bi-directional CloudKit delta sync pass manually.
     public func sync() async throws {
         guard let syncEngine = syncEngine else { return }
-        
+        guard !syncInProgress else { throw ArchonCloudKitError.syncInProgress }
+        syncInProgress = true
+        defer { syncInProgress = false }
+
         let pendingUploads = try await vectorStore.fetchPendingSyncItems()
         if !pendingUploads.isEmpty {
             try await syncEngine.upload(memories: pendingUploads)
@@ -551,7 +633,116 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
                 relationIds: pendingRelations.map { $0.id }
             )
         }
+
+        let changes = try await syncEngine.fetchChanges()
+        try await applyRemoteChanges(changes, using: syncEngine)
+        try await syncEngine.commitChangeToken(changes.newChangeToken)
     }
+
+    private func scheduleSync() {
+        guard syncEngine != nil, scheduledSyncTask == nil else { return }
+        scheduledSyncTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.sync()
+            } catch {
+                await self.recordAutomaticSyncFailure(error)
+            }
+            await self.finishScheduledSync()
+        }
+    }
+
+    private func recordAutomaticSyncFailure(_ error: Error) {
+        logger.error("Automatic CloudKit sync failed: \(error.localizedDescription, privacy: .public)")
+    }
+
+    private func finishScheduledSync() {
+        scheduledSyncTask = nil
+    }
+
+    private func applyRemoteChanges(
+        _ changes: CloudKitSyncEngine.SyncFetchResult,
+        using syncEngine: CloudKitSyncEngine
+    ) async throws {
+        var syncedMemoryIDs: [UUID] = []
+        for remote in changes.updatedMemories {
+            if let local = try await vectorStore.fetch(id: remote.id) {
+                let winner = syncEngine.resolveConflicts(local: local, remote: remote)
+                if winner != local {
+                    try await vectorStore.save(item: winner)
+                    syncedMemoryIDs.append(winner.id)
+                }
+            } else {
+                try await vectorStore.save(item: remote)
+                syncedMemoryIDs.append(remote.id)
+            }
+        }
+        if !syncedMemoryIDs.isEmpty {
+            try await vectorStore.markSynced(ids: syncedMemoryIDs)
+        }
+
+        var syncedEntityIDs: [UUID] = []
+        var syncedRelationIDs: [UUID] = []
+        for remote in changes.updatedEntities {
+            if let local = try await graphStore.fetchEntity(id: remote.id) {
+                let winner = syncEngine.resolveEntityConflicts(local: local, remote: remote)
+                if winner != local {
+                    try await graphStore.saveEntity(winner)
+                    syncedEntityIDs.append(winner.id)
+                }
+            } else {
+                try await graphStore.saveEntity(remote)
+                syncedEntityIDs.append(remote.id)
+            }
+        }
+        for remote in changes.updatedRelations {
+            if let local = try await graphStore.fetchRelation(id: remote.id) {
+                let winner = syncEngine.resolveRelationConflicts(local: local, remote: remote)
+                if winner != local {
+                    try await graphStore.saveRelation(winner)
+                    syncedRelationIDs.append(winner.id)
+                }
+            } else {
+                try await graphStore.saveRelation(remote)
+                syncedRelationIDs.append(remote.id)
+            }
+        }
+        if !syncedEntityIDs.isEmpty || !syncedRelationIDs.isEmpty {
+            try await graphStore.markGraphSynced(entityIds: syncedEntityIDs, relationIds: syncedRelationIDs)
+        }
+
+        var deletedMemoryIDs: [UUID] = []
+        var deletedEntityIDs: [UUID] = []
+        var deletedRelationIDs: [UUID] = []
+        for deleted in changes.deletedRecords {
+            switch deleted.recordType {
+            case "ArchonMemory":
+                if try await vectorStore.fetch(id: deleted.id) != nil {
+                    try await vectorStore.delete(id: deleted.id)
+                    deletedMemoryIDs.append(deleted.id)
+                }
+            case "ArchonEntity":
+                if try await graphStore.fetchEntity(id: deleted.id) != nil {
+                    try await graphStore.deleteEntity(id: deleted.id)
+                    deletedEntityIDs.append(deleted.id)
+                }
+            case "ArchonRelation":
+                if try await graphStore.fetchRelation(id: deleted.id) != nil {
+                    try await graphStore.deleteRelation(id: deleted.id)
+                    deletedRelationIDs.append(deleted.id)
+                }
+            default:
+                continue
+            }
+        }
+        if !deletedMemoryIDs.isEmpty {
+            try await vectorStore.markSynced(ids: deletedMemoryIDs)
+        }
+        if !deletedEntityIDs.isEmpty || !deletedRelationIDs.isEmpty {
+            try await graphStore.markGraphSynced(entityIds: deletedEntityIDs, relationIds: deletedRelationIDs)
+        }
+    }
+
 
     // MARK: - CoreMemoryManager & MemoryAgentTool Protocol Compliance
 

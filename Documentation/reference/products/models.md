@@ -20,11 +20,10 @@ conversion-required and unsupported runtime/format pairs fail closed.
 
 `ModelRuntimeCapabilities` and `ModelCapabilityRequirements` negotiate task,
 streaming, tool-calling, and structured-output requirements before loading.
-The lifecycle remains runtime-neutral: Foundation Models, Core ML, MLX, and
-Hugging Face integrations are adapters selected by the consuming host.
-
-`ArchonModels` does not restrict discovery to Gemma. `ModelDescriptor.family`
-is descriptive data, and a host can register any family whose variant has a
-truthful runtime, format, resource, capability, license, platform, and memory
-contract. The bundled Gemma catalog is only a compatibility seed; it is not the
-source of truth for the application's complete model-discovery list.
+The lifecycle retains lower-level runtime-neutral contracts, but the package's
+user-facing discovery is MLX-only. `ModelDescriptor.family` remains descriptive
+data, and a host can register any family whose variant has a truthful MLX
+format, resource, capability, license, platform, and memory contract. Core AI,
+Foundation Models, cloud, raw, and conversion-required variants are not
+returned by the discovery boundary. The bundled Gemma catalog is only a
+compatibility convenience; it is not the source of truth for MLX discovery.

@@ -33,9 +33,10 @@ Archon does not infer either value from a model name.
 | Transformers files | None in the base artifact contract | `conversionRequired` |
 | Unknown | None | `conversionRequired` or rejected during validation |
 
-Raw weights may be discoverable, but they are not installed as `Ready` models.
+Raw weights may be inspected through lower-level APIs, but they are not
+returned by user-facing MLX discovery and are not installed as `Ready` models.
 Conversion is a developer-side concern and must produce a declared runnable
-artifact with a validated runtime contract.
+MLX artifact with a validated runtime contract.
 
 ## Resource rules
 
@@ -61,4 +62,5 @@ validated catalog or manifest result removes the experimental restriction.
 See [model lifecycle](model-lifecycle.md) for operations and
 [model catalogs](model-catalogs.md) for discovery behavior. See [supported
 models and model-family policy](supported-models.md) for the distinction
-between family-neutral catalog support and a runnable runtime artifact.
+between lower-level family-neutral catalog support and the user-facing
+MLX-only runnable runtime artifact.

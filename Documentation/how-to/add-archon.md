@@ -37,8 +37,10 @@ The application, not the package, provides:
 - semantic observations, user approvals, and side-effect policy.
 
 For model discovery, inject the catalog that the application intends users to
-browse. The model UI is data-driven; the bundled Gemma adaptive seed is not a
-complete discovery registry. See [Supported models and model-family policy](../reference/supported-models.md).
+browse. `ModelBrowserView` and `ModelLibraryView` apply the package's
+MLX-only discovery boundary automatically; wrap direct catalog calls in
+`MLXModelCatalog`. The bundled Gemma adaptive seed is only a compatibility
+convenience. See [Supported models and model-family policy](../reference/supported-models.md).
 
 ## 4. Select a policy
 

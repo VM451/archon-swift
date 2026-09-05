@@ -57,8 +57,15 @@ public struct ModelDetailView: View {
                 }
             }
 
-            Section("Variants") {
-                ForEach(model.variants) { variant in
+            Section("MLX Variants") {
+                if mlxVariants.isEmpty {
+                    ContentUnavailableView(
+                        "MLX Variant Unavailable",
+                        systemImage: "shippingbox",
+                        description: Text("This model is not published as a directly runnable MLX artifact.")
+                    )
+                }
+                ForEach(mlxVariants) { variant in
                     let compatibility = ModelCompatibilityAnalyzer.analyze(variant: variant, device: device)
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(alignment: .firstTextBaseline) {
@@ -121,17 +128,7 @@ public struct ModelDetailView: View {
                 }
             }
 
-            if model.variants.contains(where: { $0.format.requiresConversion }) {
-                Section("Conversion") {
-                    Text("This model has no directly runnable Archon representation. Convert it during development before offering it for local inference.")
-                        .foregroundStyle(.secondary)
-                    Text("archon-model convert \(model.id)")
-                        .font(.body.monospaced())
-                        .textSelection(.enabled)
-                }
-            }
-
-            if model.variants.contains(where: \.isExperimental) {
+            if mlxVariants.contains(where: \.isExperimental) {
                 Section("Experimental") {
                     Text("This export is Experimental until runtime, output, and device validation have passed. It cannot be selected for local inference yet.")
                         .foregroundStyle(.secondary)
@@ -154,6 +151,10 @@ public struct ModelDetailView: View {
 
     private var device: ArchonDeviceCapabilities {
         deviceOverride ?? .current
+    }
+
+    private var mlxVariants: [ModelVariant] {
+        model.variants.filter { $0.runtime == .mlx && $0.format == .mlx }
     }
 
     @ViewBuilder
@@ -214,7 +215,7 @@ public struct ModelDetailView: View {
     @MainActor
     private func refreshInstalledModels() async {
         do {
-            installedModels = try await library.installedModels()
+            installedModels = try await library.installedMLXModels()
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -223,6 +224,10 @@ public struct ModelDetailView: View {
 
     @MainActor
     private func beginDownload(_ variant: ModelVariant) {
+        guard variant.runtime == .mlx, variant.format == .mlx else {
+            errorMessage = "Only MLX model variants can be downloaded through the user-facing model library."
+            return
+        }
         start(
             variant: variant,
             operation: {
@@ -359,7 +364,7 @@ public struct ModelDetailView: View {
                 fromByteCount: Int64(min(memory, UInt64(Int64.max))),
                 countStyle: .memory
             ))
-        } else if variant.runtime == .mlx || variant.runtime == .coreAI {
+        } else if variant.runtime == .mlx {
             values.append("Peak RAM estimate unavailable")
         }
         if let contextLength = variant.contextLength {
@@ -424,16 +429,16 @@ public struct ModelStorageView: View {
     public var body: some View {
         List {
             Section("Storage") {
-                LabeledContent("Installed models", value: "\(models.count)")
-                LabeledContent("Disk usage", value: ByteCountFormatter.string(fromByteCount: diskUsage, countStyle: .file))
+                LabeledContent("Installed MLX models", value: "\(models.count)")
+                LabeledContent("MLX disk usage", value: ByteCountFormatter.string(fromByteCount: diskUsage, countStyle: .file))
                 Button("Clear Temporary Download Data", role: .destructive) {
                     Task { await clearTemporaryStorage() }
                 }
             }
 
-            Section("Installed Models") {
+            Section("Installed MLX Models") {
                 if models.isEmpty {
-                    ContentUnavailableView("No Installed Models", systemImage: "shippingbox")
+                    ContentUnavailableView("No Installed MLX Models", systemImage: "shippingbox")
                 } else {
                     ForEach(models) { model in
                         VStack(alignment: .leading, spacing: 3) {
@@ -449,7 +454,7 @@ public struct ModelStorageView: View {
                 }
             }
         }
-        .navigationTitle("Model Storage")
+        .navigationTitle("MLX Model Storage")
         .toolbar {
             ToolbarItem {
                 Button("Refresh", systemImage: "arrow.clockwise") {
@@ -461,13 +466,13 @@ public struct ModelStorageView: View {
         .task {
             await refresh()
         }
-        .alert("Model Storage", isPresented: Binding(
+        .alert("MLX Model Storage", isPresented: Binding(
             get: { errorMessage != nil },
             set: { if !$0 { errorMessage = nil } }
         )) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(errorMessage ?? "Unknown model-storage error.")
+            Text(errorMessage ?? "Unknown MLX model-storage error.")
         }
     }
 
@@ -476,8 +481,8 @@ public struct ModelStorageView: View {
         isRefreshing = true
         defer { isRefreshing = false }
         do {
-            models = try await library.installedModels()
-            diskUsage = try await library.diskUsageBytes()
+            models = try await library.installedMLXModels()
+            diskUsage = try await library.mlxDiskUsageBytes()
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription

@@ -10,10 +10,11 @@ The directory must contain one or more Archon model packages with a valid
 are source artifacts and require developer-side conversion before they can be
 installed as runnable models.
 
-This tutorial is family-neutral. The local catalog can contain Gemma, Qwen,
-Mistral, Llama, or another family as long as each entry has a validated
-manifest and runnable runtime contract. The bundled Gemma compatibility seed
-belongs to adaptive provider convenience APIs, not to `LocalModelCatalog`.
+This tutorial is MLX-only for user-facing discovery. The local catalog can
+contain Gemma, Qwen, Mistral, Llama, or another family as long as each entry
+has a validated MLX manifest and runnable runtime contract. The bundled Gemma
+compatibility seed belongs to adaptive provider convenience APIs, not to
+`LocalModelCatalog`.
 
 ## 1. Discover compatible local models
 
@@ -23,10 +24,12 @@ import ArchonCore
 import ArchonModels
 
 func localModels(in directory: URL) async throws -> [ModelDescriptor] {
-    let catalog = LocalModelCatalog(locations: [directory])
+    let catalog = MLXModelCatalog(provider: LocalModelCatalog(locations: [directory]))
     return try await catalog.search(
         ModelSearchRequest(
             query: "",
+            runtime: .mlx,
+            format: .mlx,
             compatibleOnly: true,
             device: ArchonDeviceCapabilities.current
         )
@@ -59,9 +62,9 @@ manager, and runtime adapter.
 
 ## 4. Load through an explicit runtime
 
-Provide a `ModelRuntimeAdapter` for the declared runtime, then use
-`ModelLoadManager`. If Core AI, MLX, a tokenizer, or a model-specific function
-adapter is unavailable, the load must fail closed.
+Provide the MLX `ModelRuntimeAdapter` for the declared runtime, then use
+`ModelLoadManager`. If MLX, a tokenizer, or a model-specific function adapter
+is unavailable, the load must fail closed.
 
 ## What this tutorial does not do
 

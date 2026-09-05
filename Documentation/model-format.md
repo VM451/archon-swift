@@ -7,8 +7,9 @@ model contract is now split by concern:
   compatibility, resource rules, and installation state machine.
 - [Model catalogs](reference/model-catalogs.md) — local, static, direct URL,
   Apple, Archon, Hugging Face, remote, and composite discovery.
-- [Supported models](reference/supported-models.md) — model-family neutrality,
-  runtime/artifact support, catalog wiring, and the Gemma compatibility seed.
+- [Supported models](reference/supported-models.md) — MLX-only user-facing
+  discovery, model-family coverage within MLX, catalog wiring, and the Gemma
+  compatibility convenience.
 - [Model lifecycle](reference/model-lifecycle.md) — library, downloads,
   background transfers, runtime loading, and failure posture.
 - [Executable reference](reference/executables.md) — `archon-model` commands

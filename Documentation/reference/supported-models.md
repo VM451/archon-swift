@@ -2,10 +2,12 @@
 
 ## Short answer
 
-Archon is **model-family neutral**, not Gemma-only. A model family such as
-Qwen, Mistral, Llama, Phi, Gemma, or a future family can be represented by
-Archon's catalog contracts without adding a new family enum or changing the
-selection algorithm.
+Archon's user-facing model discovery is **MLX-only**. A model family such as
+Qwen, Mistral, Llama, Phi, Gemma, or a future family may appear only when its
+catalogued variant is a runnable MLX package. The package's lower-level model
+contracts remain family-neutral for lifecycle and host integration, but users
+are never offered Core AI, Foundation Models, cloud providers, or raw
+conversion-required checkpoints by the discovery surface.
 
 That does not mean that every checkpoint is automatically runnable. Archon
 separates four different questions:
@@ -20,35 +22,27 @@ separates four different questions:
 Only a model that passes the applicable checks is offered as runnable. A model
 name, repository name, file extension, or family label is never enough.
 
-## Why Gemma may be the only model shown
+## What users see
 
-`GemmaModelCatalog` is a curated compatibility catalog retained for the
-historical convenience APIs. `AdaptiveModelCatalog.builtIn` currently exposes
-that small Gemma seed so existing callers keep their default behavior. It is
-not the complete Archon model catalog and it is not an allow-list of supported
-families.
+`ModelBrowserView` and the optional catalog used by `ModelLibraryView` wrap
+the host provider in `MLXModelCatalog`. That boundary forces `.mlx` runtime
+and format constraints, removes non-MLX variants from mixed descriptors, and
+keeps pagination opaque while it skips non-MLX pages. A Core AI, Foundation
+Models, remote-only, raw, or conversion-required entry therefore cannot reach
+the user through these package UI paths.
 
-`ModelBrowserView` also does not discover models by itself. It renders the
-`ModelCatalogProvider` supplied by the consuming app. Therefore, a discovery
-screen that shows only Gemma usually means that the host supplied the bundled
-Gemma seed or another Gemma-only static catalog. It does not mean that
-`ArchonModels` or `ArchonAgent` support only Gemma.
-
-To show additional families, supply a catalog containing their descriptors and
-variants, or compose the built-in/local/remote providers described in the
-[model catalog reference](model-catalogs.md). To use those same models for
-adaptive on-device routing, convert the returned descriptors into an
-`AdaptiveModelCatalog`.
+`GemmaModelCatalog` remains only as a compatibility convenience for existing
+provider APIs. It is not the discovery source and it does not restrict MLX
+discovery to Gemma. To offer Qwen, Mistral, Llama, Phi, or another family,
+catalogue its validated MLX variant and pass the catalog to the browser.
 
 ## Runtime and artifact support
 
 | Model/runtime path | What Archon can represent | Conditions for runnable use |
 | --- | --- | --- |
-| Apple Foundation Models | Apple's system model on eligible Apple platforms | The host device and OS must provide the framework capability; this is a system-model path, not a Gemma catalog entry. |
-| Core AI | Any model family with a declared `.aimodel` or Core AI bundle variant | The export, manifest, resources, runtime, functions, and device fit must validate; the consuming app supplies any model-specific adapter. |
 | MLX | Any model family for which a compatible MLX package is catalogued or imported | The variant must declare `.mlx`/MLX, include the required model and tokenizer resources, fit the current memory envelope, and be supported by the linked MLX runtime/model configuration. |
-| Explicit remote providers | Provider-specific model identifiers such as OpenAI, Claude, Gemini, or an Ollama endpoint | The consuming app explicitly selects the provider, owns credentials or endpoint policy, and accepts the network boundary. This is not local model discovery. |
-| Raw `GGUF`, `SafeTensors`, or Transformers files | Source artifacts can be described and inspected | The base package reports them as `conversionRequired`; developer-side preparation must produce a validated runnable Core AI or MLX artifact before load. |
+| Core AI, Foundation Models, or remote providers | Lower-level adapters remain available for explicit host integrations | These paths are not returned by the user-facing model-discovery boundary. |
+| Raw `GGUF`, `SafeTensors`, or Transformers files | Source artifacts can be described and inspected by lower-level APIs | They are never shown by MLX discovery; developer-side preparation must produce a validated runnable MLX artifact before load. |
 
 The discovery data model can describe text, vision, audio, embedding, image
 generation, and classification tasks. A particular runtime/provider still has
@@ -58,24 +52,34 @@ inference adapter.
 ## Supported catalog sources
 
 `ArchonModels` intentionally does not ship a universal, silently changing
-model list. The application chooses the catalog source:
+model list. The application chooses the source, then uses the strict MLX
+boundary for user-facing discovery:
 
 - `StaticModelCatalog` for app-owned or release-pinned descriptors;
 - `LocalModelCatalog` for validated manifests already in the app's model
   library;
 - `HuggingFaceCatalog` for explicit Hugging Face metadata and runnable MLX
   package discovery;
-- `AppleCoreAIModelCatalog` for app- or registry-supplied Core AI entries;
-- `ArchonCompatibleModelCatalog` or `RemoteModelCatalog` for an explicit
-  developer/HTTP registry; and
+- `AppleCoreAIModelCatalog`, `ArchonCompatibleModelCatalog`, or
+  `RemoteModelCatalog` for lower-level explicit host integrations; and
 - `CompositeModelCatalog` for deterministic local, curated, and remote
-  composition.
+  composition before it is wrapped by `MLXModelCatalog`.
+
+For example:
+
+```swift
+let browserCatalog = MLXModelCatalog(
+    provider: HuggingFaceCatalog(tokenStore: KeychainModelTokenStore())
+)
+let browser = ModelBrowserView(catalog: browserCatalog)
+```
 
 The `ModelBrowserView` should receive the same configured provider that the
 application intends users to browse. An empty result is valid, and
 `compatibleOnly` can hide catalogued variants that do not fit the current
-device. Raw or conversion-required variants may remain visible but must not
-have an enabled Run/Use action.
+device. The browser's MLX boundary omits every non-MLX and
+conversion-required variant before rendering; those entries are available only
+through lower-level developer APIs.
 
 The browser is intentionally incremental: it requests one bounded page on
 entry, follows the catalog's offset or opaque continuation token only when the
@@ -83,22 +87,25 @@ user reaches the bottom, and displays a loading state while the next page is
 being fetched. This keeps a large remote registry out of the initial view
 render and memory footprint.
 
-For Hugging Face local-model discovery, request the runtime explicitly:
+For direct catalog use, request the runtime and format explicitly as well as
+using `MLXModelCatalog`:
 
 ```swift
-let models = try await HuggingFaceCatalog().search(ModelSearchRequest(
+let models = try await MLXModelCatalog(provider: HuggingFaceCatalog()).search(ModelSearchRequest(
     query: "Qwen",
     task: .textGeneration,
     runtime: .mlx,
+    format: .mlx,
     compatibleOnly: true,
     device: ArchonDeviceCapabilities.current
 ))
 ```
 
 The MLX request uses Hugging Face's `mlx` tag filter and examines the returned
-repository inventories before applying the caller's result limit. A search
-without a runtime remains a broad artifact search and may therefore surface
-raw, conversion-required checkpoints before runnable packages.
+repository inventories before applying the caller's result limit. Calling the
+strict wrapper is required for user-facing discovery; a raw
+`HuggingFaceCatalog` remains a lower-level metadata/conversion API and may
+surface non-MLX artifacts when used directly.
 
 ## Example: discover more than Gemma
 
@@ -121,7 +128,7 @@ let qwenVariant = ModelVariant(
     estimatedMemoryBytes: 400 * 1024 * 1024
 )
 
-let catalog = StaticModelCatalog(models: [
+let catalog = MLXModelCatalog(provider: StaticModelCatalog(models: [
     ModelDescriptor(
         id: "qwen3-0.6b",
         name: "Qwen3 0.6B",
@@ -130,19 +137,20 @@ let catalog = StaticModelCatalog(models: [
         source: .huggingFace,
         variants: [qwenVariant]
     )
-])
+]))
 
 let browser = ModelBrowserView(catalog: catalog)
 ```
 
-For a changing catalog, use `HuggingFaceCatalog`, an app-owned registry, or a
-`CompositeModelCatalog`. For adaptive local routing, use the same descriptors:
+For a changing catalog, wrap `HuggingFaceCatalog`, an app-owned registry, or a
+`CompositeModelCatalog` in `MLXModelCatalog`. For adaptive local routing, use
+the same descriptors:
 
 ```swift
 import ArchonAgent
 
 let adaptiveCatalog = AdaptiveModelCatalog(descriptors: try await catalog.search(
-    ModelSearchRequest(query: "", task: .textGeneration, runtime: .mlx,
+    ModelSearchRequest(query: "", task: .textGeneration, runtime: .mlx, format: .mlx,
                        includeVariants: true)
 ))
 let provider = ArchonAI.adaptive(
@@ -160,24 +168,25 @@ missing a safe peak-memory estimate or does not fit the current device.
 
 When answering questions or changing an application that uses this package:
 
-1. Do not describe Archon as Gemma-only. Describe Gemma as the bundled
-   compatibility seed and convenience API.
+1. Describe user-facing discovery as MLX-only. Gemma is only a bundled
+   compatibility convenience, not the discovery allow-list.
 2. Treat `ModelDescriptor.family` as data. Never add a family switch merely to
    support a new model name.
-3. Check the injected `ModelCatalogProvider` before diagnosing a discovery
-   problem. The UI cannot show entries that the host catalog did not return.
+3. Ensure user-facing catalogs are wrapped in `MLXModelCatalog`; the UI cannot
+   show entries that the host catalog did not return, and the wrapper removes
+   every non-MLX variant.
 4. Preserve paginated discovery. Do not replace a bounded page request with a
    large “load everything” query; pass provider continuation tokens through
    unchanged.
 5. Distinguish discoverable, conversion-required, device-compatible, and
    runnable states. Do not infer support from a model name or raw file format.
-6. For a new local family, register a validated MLX or Core AI variant, then
-   use `AdaptiveModelCatalog(descriptors:)` or `AdaptiveModelCandidate` for
+6. For a new local family, register a validated MLX variant, then use
+   `AdaptiveModelCatalog(descriptors:)` or `AdaptiveModelCandidate` for
    routing. Keep tokenizer/function adapters at the consuming-app boundary.
 7. Read this page together with the [model contract](model-contract.md),
    [catalog reference](model-catalogs.md), [lifecycle reference](model-lifecycle.md),
    and [ArchonAgent product guide](products/agent.md).
 
-The package's promise is broad, validated, data-driven model support—not an
-unbounded guarantee that every model checkpoint can execute on every Apple
+The package's user promise is validated, data-driven MLX model discovery—not
+an unbounded guarantee that every model checkpoint can execute on every Apple
 device without preparation.

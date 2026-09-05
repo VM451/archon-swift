@@ -17,7 +17,7 @@ all-base-products re-export; optional adapters remain separate.
 | Language | Swift 6.4, strict-concurrency settings |
 | Platforms | iOS 27, macOS 27, visionOS 27 |
 | Package manager | Swift Package Manager |
-| Runtime posture | Apple-first; Core AI and MLX adapters where available |
+| Runtime posture | MLX-only user-facing model discovery; explicit host adapters remain separate |
 | Default safety posture | Typed errors, bounded operations, fail closed |
 | App boundary | The consuming app owns credentials, entitlements, permissions, and host adapters |
 
@@ -33,17 +33,26 @@ all-base-products re-export; optional adapters remain separate.
 
 ## Supported model families
 
-Archon is **not Gemma-only**. Its model contracts are family-neutral: Qwen,
-Mistral, Llama, Phi, Gemma, and future families can be described and selected
-through the same catalog and runtime boundaries. The bundled Gemma entries are
-only a small compatibility seed used by legacy convenience APIs and the
-default adaptive catalog; they are not the complete discovery list.
+Archon's user-facing model discovery is **MLX-only**, not a generic AI-model
+browser. Qwen, Mistral, Llama, Phi, Gemma, and future families can appear when
+their validated MLX variants are catalogued. Core AI, Foundation Models, cloud
+providers, raw checkpoints, and conversion-required artifacts are not returned
+by the discovery UI.
 
-The model-discovery UI displays the `ModelCatalogProvider` injected by the
-consuming app. If it shows only Gemma, inspect that catalog configuration
-before assuming the package has a model-family restriction. Use a static,
-local, Hugging Face, app-owned registry, or composite catalog to expose the
-families and variants the app has approved.
+`ModelBrowserView` and `ModelLibraryView` apply `MLXModelCatalog` automatically.
+When using catalog APIs directly for user-facing results, wrap the host
+provider explicitly:
+
+```swift
+let catalog = MLXModelCatalog(provider: HuggingFaceCatalog())
+```
+
+For installed-model management, use `ModelLibrary.installedMLXModels()` and
+`ModelLibrary.mlxDiskUsageBytes()`; the package's model UI, storage views,
+App Intents, and adaptive agent catalog use this same MLX-only boundary.
+
+The bundled Gemma entries remain compatibility conveniences only; they are not
+the MLX discovery allow-list.
 
 The discovery browser is paginated: it loads one bounded page on entry,
 fetches another page only when the user reaches the bottom, and shows a
@@ -51,11 +60,11 @@ loading indicator during that request. Search input is lightly debounced, and
 cursor-capable catalogs use opaque continuation tokens rather than loading the
 entire registry into memory.
 
-Support is broad but validated, not an automatic promise for every checkpoint:
-`.aimodel`/Core AI bundles and `.mlx` packages can be runnable after manifest,
-resource, runtime, device, memory, license, and model-adapter checks. Raw
-`GGUF`, `SafeTensors`, and Transformers files remain discoverable but are
-`conversionRequired` until prepared into a declared runnable artifact.
+MLX support is validated, not an automatic promise for every checkpoint:
+`.mlx` packages can be runnable after manifest, resource, runtime, device,
+memory, license, and model-adapter checks. Raw `GGUF`, `SafeTensors`, and
+Transformers files remain lower-level conversion inputs and are excluded from
+user-facing discovery.
 
 Read the canonical [supported models and model-family policy](Documentation/reference/supported-models.md),
 [model catalog reference](Documentation/reference/model-catalogs.md), and
@@ -234,10 +243,12 @@ import Foundation
 import ArchonModels
 
 func findCompatibleModels(in libraryURL: URL) async throws -> [ModelDescriptor] {
-    let catalog = LocalModelCatalog(locations: [libraryURL])
+    let catalog = MLXModelCatalog(provider: LocalModelCatalog(locations: [libraryURL]))
     return try await catalog.search(
         ModelSearchRequest(
             query: "",
+            runtime: .mlx,
+            format: .mlx,
             compatibleOnly: true,
             device: ArchonDeviceCapabilities.current
         )
@@ -245,30 +256,30 @@ func findCompatibleModels(in libraryURL: URL) async throws -> [ModelDescriptor] 
 }
 ```
 
-For network-backed Hugging Face discovery, use the separate catalog explicitly
-and let the host app decide whether network access is permitted.
+For network-backed Hugging Face discovery, use the MLX-only wrapper and let the
+host app decide whether network access is permitted.
 
 ```swift
 import ArchonModels
 
 func searchHuggingFace() async throws -> [ModelDescriptor] {
-    let catalog = HuggingFaceCatalog(tokenStore: KeychainModelTokenStore())
+    let catalog = MLXModelCatalog(
+        provider: HuggingFaceCatalog(tokenStore: KeychainModelTokenStore())
+    )
     return try await catalog.search(
-        ModelSearchRequest(query: "Qwen", task: .textGeneration, runtime: .mlx,
+        ModelSearchRequest(query: "Qwen", task: .textGeneration, runtime: .mlx, format: .mlx,
                            compatibleOnly: true,
                            device: ArchonDeviceCapabilities.current)
     )
 }
 ```
 
-For Hugging Face, specifying `runtime: .mlx` makes discovery ask the Hub for
-MLX-tagged repositories instead of only the most-downloaded generic
-checkpoints. Raw results are still useful for conversion workflows, but they
-are not directly runnable. Catalog results can be empty, and a compatible
-model can still require a model-family text adapter supplied by the consuming
-app. Never assume the first result is runnable; inspect the returned variant
-and run `ModelCompatibilityAnalyzer` before presenting an install or load
-action.
+For Hugging Face, `MLXModelCatalog` asks the Hub for MLX-tagged repositories
+and removes any non-MLX result before returning it. Catalog results can be
+empty, and a compatible model can still require a model-family text adapter
+supplied by the consuming app. Never assume the first result is runnable;
+inspect the returned variant and run `ModelCompatibilityAnalyzer` before
+presenting an install or load action.
 
 The buildable example is a macOS SwiftPM executable:
 
@@ -282,7 +293,7 @@ forwarding. This package-only checkout does not provide a signed `.app`.
 
 ## Model lifecycle
 
-`ArchonModels` supports static, local-library, direct-URL, Apple Core AI, and
+`ArchonModels` supports MLX-filtered static, local-library, direct-URL, and
 HTTP-backed catalogs; Hugging Face metadata; Keychain-backed tokens;
 device-fit analysis; single-file or directory artifacts; checksum and resource
 validation; resumable foreground/background downloads; atomic installation;
@@ -290,16 +301,16 @@ revision checks; and App Intents. `LocalModelCatalog` is offline.
 HTTP-backed catalogs are network-dependent and must be selected deliberately by
 the host app.
 
-Runnable Core AI and MLX artifacts are distinct from raw `GGUF`, `SafeTensors`,
-and Transformers files. Unsupported or conversion-required artifacts are never
+Runnable MLX artifacts are distinct from raw `GGUF`, `SafeTensors`, and
+Transformers files. Unsupported or conversion-required artifacts are never
 reported as Ready. See [`Documentation/model-format.md`](Documentation/model-format.md).
 
 The developer-only `archon-model` executable handles inspection, validation,
 packaging, conversion through Apple's `coreai-models` exporter, and local
 artifact preparation benchmarks.
 
-For the distinction between the Gemma compatibility seed and application-
-supplied model catalogs, see the [supported model policy](Documentation/reference/supported-models.md).
+For the MLX-only discovery boundary and Gemma compatibility details, see the
+[supported model policy](Documentation/reference/supported-models.md).
 
 ## Evidence status
 
@@ -309,7 +320,7 @@ feature is not called “user-loved” from official documentation alone. The
 [release validation guide](Documentation/how-to/validate-a-release.md) defines
 the evidence gates required before a replacement becomes the default.
 
-The package contains 358 Swift tests across 10 bundles, and the complete
+The package contains 364 Swift tests across 10 bundles, and the complete
 package-wide suite passes on the configured Xcode toolchain. Signed-app,
 physical-device, live UI, real-model, and production-server validation remain
 explicit release gates.
@@ -352,7 +363,7 @@ or unavailable result. Test and preview code can inject deterministic mocks.
 - [`Documentation/tutorials/`](Documentation/tutorials/) — end-to-end local model tutorial.
 - [`Documentation/how-to/`](Documentation/how-to/) — integration, lifecycle, MCP, sandbox, semantic action, and release guides.
 - [`Documentation/reference/`](Documentation/reference/) — product, model, policy, and executable contracts.
-- [`Documentation/reference/supported-models.md`](Documentation/reference/supported-models.md) — supported runtimes, model-family neutrality, catalog wiring, and the Gemma-seed explanation.
+- [`Documentation/reference/supported-models.md`](Documentation/reference/supported-models.md) — MLX-only discovery, supported model families, catalog wiring, and the Gemma compatibility explanation.
 - [`Documentation/reference/competitor-comparison.md`](Documentation/reference/competitor-comparison.md) — detailed competitor feature tables, scores, and Archon-fit decisions.
 - [`Documentation/explanation/`](Documentation/explanation/) — architecture, dependency, local-first, and recovery rationale.
 - [`Documentation/decisions/`](Documentation/decisions/) — migration and architectural decision records.

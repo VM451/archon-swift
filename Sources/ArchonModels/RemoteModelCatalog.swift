@@ -15,14 +15,14 @@ public struct RemoteModelCatalog: PaginatedModelCatalogProvider, Sendable {
     public init(
         id: String,
         endpoint: URL,
-        session: any ModelHTTPClient = URLSession.shared,
+        session: (any ModelHTTPClient)? = nil,
         headers: [String: String] = [:],
         tokenStore: (any ModelTokenStore)? = nil,
         tokenService: String? = nil
     ) {
         self.id = id
         self.endpoint = endpoint
-        self.session = session
+        self.session = session ?? ModelDownloadURLPolicy.makeSession()
         self.headers = headers
         self.tokenStore = tokenStore
         self.tokenService = tokenService
@@ -33,6 +33,7 @@ public struct RemoteModelCatalog: PaginatedModelCatalogProvider, Sendable {
     }
 
     public func searchPage(_ request: ModelSearchRequest) async throws -> ModelCatalogPage {
+        try ModelDownloadURLPolicy.validate(endpoint)
         var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)
         var queryItems = components?.queryItems ?? []
         queryItems.append(contentsOf: [

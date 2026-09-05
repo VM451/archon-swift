@@ -4,7 +4,7 @@ Integrate persistent AI user memory into your Apple Intelligence app in 5 minute
 
 ## Overview
 
-ArchonMemory is purpose-built for Apple Foundation Models and CloudKit. It automatically extracts, stores, retrieves, and deduplicates conversational context locally and across user devices.
+ArchonMemory is purpose-built for Apple Foundation Models and optional CloudKit. It extracts, stores, retrieves, and deduplicates conversational context locally by default.
 
 ### 1. Add SPM Dependency
 
@@ -18,13 +18,17 @@ dependencies: [
 
 ### 2. Zero-Configuration Initialization
 
-By default, `ArchonConfig` utilizes Apple Foundation Models for structured memory extraction and Apple CloudKit for private multi-device sync:
+By default, `ArchonConfig` uses Apple Foundation Models for structured memory extraction and keeps persistence local. Enable private multi-device sync only after configuring the consuming app's CloudKit entitlement and container:
 
 ```swift
 import ArchonMemory
 
-// Defaults to Apple Foundation Models + CloudKit private database
 let archon = try await ArchonClient(config: ArchonConfig())
+
+let syncedArchon = try await ArchonClient(config: ArchonConfig(
+    cloudKitContainerId: "iCloud.com.example.myapp",
+    enableAutoSync: true
+))
 ```
 
 ### 3. Extract Facts from Conversation Turns

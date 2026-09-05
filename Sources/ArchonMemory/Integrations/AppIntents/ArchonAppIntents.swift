@@ -23,7 +23,7 @@ public struct SearchMemoriesIntent: AppIntent {
 
     public func perform() async throws -> some IntentResult & ReturnsValue<[String]> {
         guard let client = await ArchonClientIntentRegistry.shared.current() else {
-            throw NSError(domain: "ArchonMemory.AppIntents", code: 1, userInfo: [NSLocalizedDescriptionKey: "ArchonClient shared instance not initialized"])
+            throw ArchonMemoryError.invalidConfiguration("ArchonClient shared instance is not initialized.")
         }
         
         let results = try await client.search(query: query, userId: userId, limit: 5)
@@ -54,7 +54,7 @@ public struct AddMemoryIntent: AppIntent {
 
     public func perform() async throws -> some IntentResult & ReturnsValue<String> {
         guard let client = await ArchonClientIntentRegistry.shared.current() else {
-            throw NSError(domain: "ArchonMemory.AppIntents", code: 1, userInfo: [NSLocalizedDescriptionKey: "ArchonClient shared instance not initialized"])
+            throw ArchonMemoryError.invalidConfiguration("ArchonClient shared instance is not initialized.")
         }
         
         let message = Message(role: .user, content: memoryText)

@@ -61,15 +61,73 @@ public struct ModelDownloadPolicy: Sendable, Equatable {
     public let maxAttempts: Int
     public let initialBackoff: TimeInterval
     public let maximumBackoff: TimeInterval
+    /// Absolute per-download cap. This protects callers even when the server
+    /// omits Content-Length and the manifest has no expected size.
+    public let maximumDownloadBytes: Int64
 
     public init(
         maxAttempts: Int = 3,
         initialBackoff: TimeInterval = 1,
-        maximumBackoff: TimeInterval = 30
+        maximumBackoff: TimeInterval = 30,
+        maximumDownloadBytes: Int64 = 16 * 1024 * 1024 * 1024
     ) {
         self.maxAttempts = max(1, maxAttempts)
         self.initialBackoff = max(0, initialBackoff)
         self.maximumBackoff = max(self.initialBackoff, maximumBackoff)
+        self.maximumDownloadBytes = max(1, maximumDownloadBytes)
+    }
+}
+
+enum ModelDownloadURLPolicy {
+    private final class RedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+        func urlSession(
+            _ session: URLSession,
+            task: URLSessionTask,
+            willPerformHTTPRedirection response: HTTPURLResponse,
+            newRequest request: URLRequest,
+            completionHandler: @escaping (URLRequest?) -> Void
+        ) {
+            guard let url = request.url, (try? ModelDownloadURLPolicy.validate(url)) != nil else {
+                completionHandler(nil)
+                return
+            }
+            completionHandler(request)
+        }
+    }
+
+    static func makeSession() -> URLSession {
+        URLSession(configuration: .ephemeral, delegate: RedirectDelegate(), delegateQueue: nil)
+    }
+
+    static func validate(_ url: URL) throws {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "https" || scheme == "http",
+              let rawHost = components.host?.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")),
+              !rawHost.isEmpty,
+              rawHost != "localhost",
+              !rawHost.hasSuffix(".local"),
+              !isPrivateAddress(rawHost) else {
+            throw ArchonModelsError.invalidResponse
+        }
+    }
+
+    private static func isPrivateAddress(_ host: String) -> Bool {
+        let normalized = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        if normalized.contains(":") || (normalized.split(separator: ".").count == 1 && Int(normalized) != nil) {
+            return true
+        }
+        if normalized == "::1" || normalized == "0:0:0:0:0:0:0:1" || normalized.hasPrefix("fc") || normalized.hasPrefix("fd") || normalized.hasPrefix("fe80:") {
+            return true
+        }
+        let octets = normalized.split(separator: ".").compactMap { Int($0) }
+        guard octets.count == 4, octets.allSatisfy({ (0...255).contains($0) }) else { return false }
+        switch (octets[0], octets[1]) {
+        case (0, _), (10, _), (127, _), (169, 254), (192, 168), (172, 16...31):
+            return true
+        default:
+            return false
+        }
     }
 }
 
@@ -415,9 +473,14 @@ public actor ModelLoadManager {
 /// Actor-isolated model library. Every install is staged and committed only after validation.
 public actor ModelLibrary {
     public let rootURL: URL
+    /// Optional lifecycle coordinator. Supplying the host's load manager lets
+    /// deletion and replacement unload resident artifacts before filesystem
+    /// mutation.
+    public let loadManager: ModelLoadManager
 
-    public init(rootURL: URL? = nil) {
+    public init(rootURL: URL? = nil, loadManager: ModelLoadManager = ModelLoadManager()) {
         self.rootURL = rootURL ?? Self.defaultRootURL()
+        self.loadManager = loadManager
     }
 
     public static func makeDefault() -> ModelLibrary {
@@ -435,13 +498,29 @@ public actor ModelLibrary {
             guard (try? directory.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { return nil }
             let manifestURL = directory.appendingPathComponent(ArchonModelManifest.filename)
             guard let data = try? Data(contentsOf: manifestURL) else { return nil }
-            let manifest = try JSONDecoder().decode(ArchonModelManifest.self, from: data)
+            let decodedManifest = try JSONDecoder().decode(ArchonModelManifest.self, from: data)
+            let manifest = decodedManifest.schemaVersion < ArchonModelManifest.currentSchemaVersion
+                ? decodedManifest.withCurrentSchemaVersion()
+                : decodedManifest
+            if manifest != decodedManifest {
+                let migratedData = try JSONEncoder.archonEncoder.encode(manifest)
+                try migratedData.write(to: manifestURL, options: .atomic)
+            }
             let installedAt = (try? directory.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date()
             let installed = InstalledModel(id: directory.lastPathComponent, directoryURL: directory, manifest: manifest, installedAt: installedAt)
             let validation = ModelManifestValidator.validate(manifest, artifactAt: installed.artifactURL)
             guard validation.isValid else { throw ArchonModelsError.invalidManifest(validation.errors) }
             return installed
         }.sorted { $0.id < $1.id }
+    }
+
+    /// Returns the models eligible for the package's user-facing local model
+    /// surfaces. Lower-level inspection APIs remain available for hosts that
+    /// need to reason about other artifact families explicitly.
+    public func installedMLXModels() throws -> [InstalledModel] {
+        try installedModels().filter {
+            $0.manifest.runtime == .mlx && $0.manifest.format == .mlx
+        }
     }
 
     public func contains(modelID: String) throws -> Bool {
@@ -454,7 +533,7 @@ public actor ModelLibrary {
 
     /// Compares installed source revisions with a catalog without downloading or mutating anything.
     public func checkForUpdates(using catalog: any ModelCatalogProvider) async throws -> [ModelUpdateCandidate] {
-        let models = try installedModels()
+        let models = try installedMLXModels()
         var updates: [ModelUpdateCandidate] = []
 
         for model in models {
@@ -624,27 +703,41 @@ public actor ModelLibrary {
         )
     }
 
-    public func delete(modelID: String) throws {
+    public func delete(modelID: String) async throws {
         try ensureRoot()
-        let matches = try FileManager.default.contentsOfDirectory(
+        let entries = try FileManager.default.contentsOfDirectory(
             at: rootURL,
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
-        ).filter { directory in
-            guard (try? directory.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { return false }
+        )
+        var matches: [(directory: URL, installed: InstalledModel?)] = []
+        for directory in entries {
+            guard (try? directory.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { continue }
             if safeComponent(modelID) == directory.lastPathComponent || modelID == directory.lastPathComponent {
-                return true
+                matches.append((directory, try? installedModelFromDirectory(directory)))
+                continue
             }
             let manifestURL = directory.appendingPathComponent(ArchonModelManifest.filename)
             guard let data = try? Data(contentsOf: manifestURL),
                   let manifest = try? JSONDecoder().decode(ArchonModelManifest.self, from: data) else {
-                return false
+                continue
             }
-            return manifest.modelID == modelID
+            if manifest.modelID == modelID {
+                matches.append((directory, try? installedModelFromDirectory(directory)))
+            }
         }
         for match in matches {
-            try FileManager.default.removeItem(at: match)
+            if let installed = match.installed {
+                await loadManager.unload(installed)
+            }
+            try FileManager.default.removeItem(at: match.directory)
         }
+    }
+
+    /// Unloads a resident model before an update replaces its installation.
+    public func prepareForReplacement(modelID: String) async throws {
+        guard let installed = try installedModel(id: modelID) else { return }
+        await loadManager.unload(installed)
     }
 
     /// Removes only Archon-created staging and backup directories, never installed models.
@@ -663,8 +756,29 @@ public actor ModelLibrary {
         }
     }
 
+    /// Disk usage for the MLX-only user-facing library surfaces.
+    public func mlxDiskUsageBytes() throws -> Int64 {
+        try installedMLXModels().reduce(into: Int64(0)) { total, model in
+            total += directorySize(at: model.directoryURL)
+        }
+    }
+
     private func ensureRoot() throws {
         try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        var managedRootURL = rootURL
+        try? managedRootURL.setResourceValues(values)
+    }
+
+    private func installedModelFromDirectory(_ directory: URL) throws -> InstalledModel {
+        let manifestURL = directory.appendingPathComponent(ArchonModelManifest.filename)
+        let decodedManifest = try JSONDecoder().decode(ArchonModelManifest.self, from: Data(contentsOf: manifestURL))
+        let manifest = decodedManifest.schemaVersion < ArchonModelManifest.currentSchemaVersion
+            ? decodedManifest.withCurrentSchemaVersion()
+            : decodedManifest
+        let installedAt = (try? directory.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date()
+        return InstalledModel(id: directory.lastPathComponent, directoryURL: directory, manifest: manifest, installedAt: installedAt)
     }
 
     private func directorySize(at url: URL) -> Int64 {
@@ -706,17 +820,18 @@ public actor ModelDownloadManager {
     private var backgroundJobs: [String: BackgroundDownloadJob] = [:]
 
     public init(
-        session: URLSession = .shared,
+        session: URLSession? = nil,
         tokenStore: (any ModelTokenStore)? = KeychainModelTokenStore(),
         policy: ModelDownloadPolicy = ModelDownloadPolicy(),
         licensePolicy: ModelLicensePolicy? = nil,
         byteStreamProvider: ModelByteStreamProvider? = nil
     ) {
+        let effectiveSession = session ?? ModelDownloadURLPolicy.makeSession()
         if let byteStreamProvider {
             self.byteStreamProvider = byteStreamProvider
         } else {
             self.byteStreamProvider = { request in
-                let (bytes, response) = try await session.bytes(for: request)
+                let (bytes, response) = try await effectiveSession.bytes(for: request)
                 guard let httpResponse = response as? HTTPURLResponse else {
                     throw ArchonModelsError.invalidResponse
                 }
@@ -941,6 +1056,7 @@ public actor ModelDownloadManager {
         guard let installed = try await library.installedModel(id: candidate.installedModelID) else {
             throw ArchonModelsError.updateUnavailable(candidate.installedModelID)
         }
+        try await library.prepareForReplacement(modelID: installed.id)
         let request = ModelDownloadRequest(
             variant: variant,
             modelName: installed.manifest.modelName,
@@ -1013,6 +1129,12 @@ public actor ModelDownloadManager {
                let freeBytes = (fileSystemAttributes[.systemFreeSize] as? NSNumber)?.int64Value,
                max(expectedTotal - existingBytes, 0) > freeBytes {
                 throw ArchonModelsError.insufficientDiskSpace
+            }
+            if let expectedTotal, expectedTotal > policy.maximumDownloadBytes {
+                throw ArchonModelsError.downloadSizeExceeded(maximum: policy.maximumDownloadBytes)
+            }
+            if existingBytes > policy.maximumDownloadBytes {
+                throw ArchonModelsError.downloadSizeExceeded(maximum: policy.maximumDownloadBytes)
             }
 
             let authorizationToken = request.variant.source == .huggingFace
@@ -1115,6 +1237,9 @@ public actor ModelDownloadManager {
             // trusted progress.
             let existingBytes: Int64 = 0
             let expectedTotal = request.variant.sizeBytes ?? pending.compactMap(\.expectedSize).reduceIfComplete()
+            if let expectedTotal, expectedTotal > policy.maximumDownloadBytes {
+                throw ArchonModelsError.downloadSizeExceeded(maximum: policy.maximumDownloadBytes)
+            }
             if let expectedTotal,
                let fileSystemAttributes = try? FileManager.default.attributesOfFileSystem(forPath: library.rootURL.path),
                let freeBytes = (fileSystemAttributes[.systemFreeSize] as? NSNumber)?.int64Value,
@@ -1175,6 +1300,9 @@ public actor ModelDownloadManager {
                         continuation.yield(ModelDownloadEvent(variantID: id, state: .resolving))
                     case .downloading(let bytesDownloaded, let totalBytes):
                         let aggregate = completedBytes + bytesDownloaded
+                        if aggregate > policy.maximumDownloadBytes {
+                            throw ArchonModelsError.downloadSizeExceeded(maximum: policy.maximumDownloadBytes)
+                        }
                         let progress = expectedTotal.map { min(1, Double(aggregate) / Double(max($0, 1))) } ?? 0
                         continuation.yield(ModelDownloadEvent(variantID: id, state: .downloading(
                             progress: progress,
@@ -1206,6 +1334,9 @@ public actor ModelDownloadManager {
                     throw ArchonModelsError.backgroundTransferFailed("Transfer completed without its staged artifact.")
                 }
                 completedBytes += fileSize(at: targetURL)
+                if completedBytes > policy.maximumDownloadBytes {
+                    throw ArchonModelsError.downloadSizeExceeded(maximum: policy.maximumDownloadBytes)
+                }
             }
 
             try Task.checkCancellation()
@@ -1268,6 +1399,7 @@ public actor ModelDownloadManager {
     private func pendingDownloads(for variant: ModelVariant) throws -> [PendingModelDownload] {
         if variant.resources.isEmpty && variant.tokenizerResources.isEmpty {
             guard let url = variant.downloadURL else { throw ArchonModelsError.noDownloadURL }
+            try ModelDownloadURLPolicy.validate(url)
             return [PendingModelDownload(url: url, relativePath: nil, expectedSize: variant.sizeBytes, checksum: variant.sha256)]
         }
 
@@ -1280,6 +1412,7 @@ public actor ModelDownloadManager {
             guard let url = resource.url else {
                 throw ArchonModelsError.noDownloadURL
             }
+            try ModelDownloadURLPolicy.validate(url)
             guard paths.insert(resource.relativePath).inserted else {
                 throw ArchonModelsError.invalidManifest(["Resource path is duplicated: \(resource.relativePath)"])
             }
@@ -1297,6 +1430,7 @@ public actor ModelDownloadManager {
            let filename = URLComponents(url: url, resolvingAgainstBaseURL: false)?.path.split(separator: "/").last.map(String.init),
            isSafeRelativePath(filename),
            !paths.contains(filename) {
+            try ModelDownloadURLPolicy.validate(url)
             pending.insert(PendingModelDownload(url: url, relativePath: filename, expectedSize: nil, checksum: nil), at: 0)
         }
         guard !pending.isEmpty else { throw ArchonModelsError.noDownloadURL }
@@ -1336,6 +1470,11 @@ public actor ModelDownloadManager {
             currentBytes = 0
         }
 
+        guard completedBytesBeforeFile >= 0,
+              completedBytesBeforeFile + currentBytes <= policy.maximumDownloadBytes else {
+            throw ArchonModelsError.downloadSizeExceeded(maximum: policy.maximumDownloadBytes)
+        }
+
         var request = URLRequest(url: pending.url)
         if let authorizationToken {
             request.setValue("Bearer \(authorizationToken)", forHTTPHeaderField: "Authorization")
@@ -1368,6 +1507,10 @@ public actor ModelDownloadManager {
         }
         try handle.seekToEnd()
         let responseLength = response.expectedContentLength > 0 ? response.expectedContentLength : nil
+        if let responseLength,
+           completedBytesBeforeFile + currentBytes + responseLength > policy.maximumDownloadBytes {
+            throw ArchonModelsError.downloadSizeExceeded(maximum: policy.maximumDownloadBytes)
+        }
         let inferredTotal = totalBytes ?? responseLength.map { $0 + completedBytesBeforeFile + currentBytes }
         var buffer = Data()
         buffer.reserveCapacity(64 * 1024)
@@ -1377,6 +1520,9 @@ public actor ModelDownloadManager {
             for try await byte in bytes {
                 try Task.checkCancellation()
                 buffer.append(byte)
+                if completedBytesBeforeFile + reportedBytes + Int64(buffer.count) > policy.maximumDownloadBytes {
+                    throw ArchonModelsError.downloadSizeExceeded(maximum: policy.maximumDownloadBytes)
+                }
                 if buffer.count >= 64 * 1024 {
                     try handle.write(contentsOf: buffer)
                     reportedBytes += Int64(buffer.count)

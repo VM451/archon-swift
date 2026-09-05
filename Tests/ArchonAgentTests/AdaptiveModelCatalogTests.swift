@@ -147,6 +147,16 @@ struct AdaptiveModelCatalogTests {
             sizeBytes: 2 * 1024 * 1024 * 1024,
             estimatedMemoryBytes: 3 * 1024 * 1024 * 1024
         )
+        let coreAIVariant = ModelVariant(
+            id: "mistral-coreai-variant",
+            name: "Mistral Core AI export",
+            modelID: "mistral-coreai",
+            source: .appleCoreAI,
+            format: .aimodel,
+            runtime: .coreAI,
+            supportedPlatforms: [.macOS],
+            estimatedMemoryBytes: 3 * 1024 * 1024 * 1024
+        )
         let provider = StaticModelCatalog(models: [
             ModelDescriptor(
                 id: "mistral-3b",
@@ -155,6 +165,14 @@ struct AdaptiveModelCatalogTests {
                 family: "Mistral",
                 source: .huggingFace,
                 variants: [variant]
+            ),
+            ModelDescriptor(
+                id: "mistral-coreai",
+                name: "Mistral Core AI",
+                publisher: "Mistral",
+                family: "Mistral",
+                source: .appleCoreAI,
+                variants: [coreAIVariant]
             )
         ])
 
@@ -165,6 +183,7 @@ struct AdaptiveModelCatalogTests {
 
         #expect(catalog.candidates.first?.family == "Mistral")
         #expect(catalog.candidates.first?.id == "mistral-variant")
+        #expect(catalog.candidates.count == 1)
     }
 
     @Test("Core AI candidates are selected only when explicitly requested")

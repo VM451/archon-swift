@@ -42,7 +42,9 @@ public final class ModelLibraryViewModel: ObservableObject {
         device: ArchonDeviceCapabilities? = nil
     ) {
         self.library = library
-        self.catalog = catalog
+        // Keep every user-facing model-management operation on the MLX
+        // contract, even when the host passes a family-neutral provider.
+        self.catalog = catalog.map { MLXModelCatalog(provider: $0) }
         self.downloadManager = downloadManager
         self.deviceOverride = device
     }
@@ -50,7 +52,7 @@ public final class ModelLibraryViewModel: ObservableObject {
     public func refresh() async {
         state = .loading
         do {
-            models = try await library.installedModels()
+            models = try await library.installedMLXModels()
             lastError = nil
             state = .loaded
         } catch {
@@ -73,6 +75,12 @@ public final class ModelLibraryViewModel: ObservableObject {
     }
 
     public func download(_ request: ModelDownloadRequest) async {
+        guard request.variant.runtime == .mlx, request.variant.format == .mlx else {
+            let message = "Only MLX model variants can be downloaded through the user-facing model library."
+            lastError = message
+            state = .failed(message)
+            return
+        }
         do {
             let events = try await downloadManager.download(request, into: library, on: device)
             for try await event in events {
