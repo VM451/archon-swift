@@ -45,15 +45,16 @@ struct ModelBrowserRowView: View {
             }
             .opacity(0)
 
-            HStack(alignment: .center, spacing: 12) {
+            HStack(alignment: .center, spacing: 14) {
                 modelIcon
 
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 5) {
                         Text(model.publisher)
                             .font(.caption)
                             .fontWeight(.semibold)
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
 
                         if let size = variant.sizeBytes {
                             Text("•")
@@ -62,14 +63,17 @@ struct ModelBrowserRowView: View {
                             Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                                .lineLimit(1)
                         }
                     }
 
                     Text(variant.name)
-                        .font(.body.weight(.semibold))
+                        .font(.headline)
                         .foregroundStyle(.primary)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .layoutPriority(1)
 
                     HStack(spacing: 6) {
                         fitBadge
@@ -77,9 +81,11 @@ struct ModelBrowserRowView: View {
                         Text(variant.runtime.displayName)
                             .font(.caption2.weight(.medium))
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(Color.secondary.opacity(0.12), in: Capsule())
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                     .padding(.top, 1)
 
@@ -91,16 +97,13 @@ struct ModelBrowserRowView: View {
                         Text(message)
                             .font(.caption2)
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
                     }
                 }
 
                 Spacer(minLength: 8)
 
                 actionControl
-
-                Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.tertiary)
             }
             .padding(.vertical, 4)
         }
@@ -146,11 +149,13 @@ struct ModelBrowserRowView: View {
                 .font(.caption2)
             Text(compatibility.fit.displayName)
                 .font(.caption2.weight(.medium))
+                .lineLimit(1)
         }
         .foregroundStyle(color)
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
         .background(color.opacity(0.12), in: Capsule())
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func fitVisuals(_ fit: ModelFitRating) -> (String, Color) {
@@ -206,7 +211,7 @@ struct ModelBrowserRowView: View {
                 let canDownload = variant.downloadURL != nil || !variant.resources.isEmpty || !variant.tokenizerResources.isEmpty
                 Button(action: onDownload) {
                     Text("Download")
-                        .font(.caption.weight(.bold))
+                        .font(.subheadline.weight(.semibold))
                         .padding(.horizontal, 4)
                 }
                 .buttonStyle(.borderedProminent)
