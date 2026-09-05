@@ -45,8 +45,9 @@ struct ModelBrowserRowView: View {
             }
             .opacity(0)
 
-            HStack(alignment: .center, spacing: 14) {
+            HStack(alignment: .center, spacing: 12) {
                 modelIcon
+                    .fixedSize(horizontal: true, vertical: false)
 
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 5) {
@@ -72,8 +73,6 @@ struct ModelBrowserRowView: View {
                         .foregroundStyle(.primary)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .layoutPriority(1)
 
                     HStack(spacing: 6) {
                         fitBadge
@@ -104,6 +103,8 @@ struct ModelBrowserRowView: View {
                 Spacer(minLength: 8)
 
                 actionControl
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(2)
             }
             .padding(.vertical, 4)
         }
@@ -195,11 +196,13 @@ struct ModelBrowserRowView: View {
         case .paused:
             Button("Resume", action: onResume)
                 .font(.caption.weight(.semibold))
+                .lineLimit(1)
                 .buttonStyle(.borderedProminent)
                 .buttonBorderShape(.capsule)
         case .failed, .cancelled:
             Button("Retry", action: onRetry)
                 .font(.caption.weight(.semibold))
+                .lineLimit(1)
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.capsule)
         case .ready:
@@ -212,7 +215,8 @@ struct ModelBrowserRowView: View {
                 Button(action: onDownload) {
                     Text("Download")
                         .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 4)
+                        .lineLimit(1)
+                        .padding(.horizontal, 6)
                 }
                 .buttonStyle(.borderedProminent)
                 .buttonBorderShape(.capsule)
@@ -221,6 +225,7 @@ struct ModelBrowserRowView: View {
                 Text(compatibility.status == .conversionRequired ? "Convert" : "Unavailable")
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(.tertiary)
+                    .lineLimit(1)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(Color.secondary.opacity(0.08), in: Capsule())
@@ -238,6 +243,7 @@ struct ModelBrowserRowView: View {
                     .font(.caption2.weight(.bold))
                 Text("Installed")
                     .font(.caption.weight(.semibold))
+                    .lineLimit(1)
             }
             .foregroundStyle(.tint)
             .padding(.horizontal, 8)
