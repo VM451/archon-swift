@@ -56,6 +56,7 @@ struct ModelBrowserRowView: View {
                         .foregroundStyle(.primary)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
+                        .minimumScaleFactor(0.85)
 
                     fitBadge
                         .padding(.top, 1)
@@ -83,7 +84,7 @@ struct ModelBrowserRowView: View {
     @ViewBuilder
     private var metadataHeader: some View {
         HStack(spacing: 4) {
-            Text(model.publisher)
+            Text(displayPublisher)
                 .fontWeight(.semibold)
                 .lineLimit(1)
 
@@ -102,6 +103,14 @@ struct ModelBrowserRowView: View {
         }
         .font(.caption)
         .foregroundStyle(.secondary)
+        .minimumScaleFactor(0.85)
+    }
+
+    private var displayPublisher: String {
+        if model.publisher == "Google DeepMind" {
+            return "Google"
+        }
+        return model.publisher
     }
 
     @ViewBuilder
@@ -145,9 +154,10 @@ struct ModelBrowserRowView: View {
             Text(compatibility.fit.displayName)
                 .font(.caption2.weight(.medium))
                 .lineLimit(1)
+                .minimumScaleFactor(0.85)
         }
         .foregroundStyle(color)
-        .padding(.horizontal, 7)
+        .padding(.horizontal, 6)
         .padding(.vertical, 2.5)
         .background(color.opacity(0.12), in: Capsule())
     }
@@ -201,7 +211,7 @@ struct ModelBrowserRowView: View {
         case .ready:
             readyBadge
         default:
-            if isInstalled {
+            if isInstalled || variant.source == .appleCoreAI || variant.runtime == .foundationModels {
                 readyBadge
             } else if compatibility.canLoad {
                 let canDownload = variant.downloadURL != nil || !variant.resources.isEmpty || !variant.tokenizerResources.isEmpty
@@ -228,22 +238,31 @@ struct ModelBrowserRowView: View {
 
     @ViewBuilder
     private var readyBadge: some View {
-        Menu {
-            Button("Redownload", action: onRedownload)
-        } label: {
-            HStack(spacing: 3) {
-                Image(systemName: "checkmark")
-                    .font(.caption2.weight(.bold))
-                Text("Installed")
-                    .font(.caption.weight(.semibold))
-                    .lineLimit(1)
+        if variant.downloadURL != nil {
+            Menu {
+                Button("Redownload", action: onRedownload)
+            } label: {
+                installedBadgeLabel(title: "Installed")
             }
-            .foregroundStyle(.tint)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(Color.accentColor.opacity(0.12), in: Capsule())
+            .accessibilityLabel("\(variant.name) installed. Tap for options.")
+        } else {
+            installedBadgeLabel(title: variant.source == .appleCoreAI ? "System" : "Ready")
+                .accessibilityLabel("\(variant.name) \(variant.source == .appleCoreAI ? "system model" : "ready").")
         }
-        .accessibilityLabel("\(variant.name) installed. Tap for options.")
+    }
+
+    private func installedBadgeLabel(title: String) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: "checkmark")
+                .font(.caption2.weight(.bold))
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+        }
+        .foregroundStyle(.tint)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color.accentColor.opacity(0.12), in: Capsule())
     }
 }
 
