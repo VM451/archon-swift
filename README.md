@@ -101,26 +101,32 @@ are in [`Documentation/reference/competitor-comparison.md`](Documentation/refere
 
 ### Product decision matrix
 
-| Product | Verdict | Reuse or audit first | Archon-owned work | Default gate |
+| Product | Verdict | Reuse or audit first / GitHub repositories | Archon-owned work | Default gate |
 | --- | --- | --- | --- | --- |
-| `ArchonCore` | PARTIAL / ADAPT | Reuse Apple facts; audit host policy | Capability policy, audit, redaction | Permission and availability denial |
-| `ArchonModels` | PARTIAL / ADAPT | Reuse Apple runtimes; audit artifacts | Catalog, lifecycle, validation | Checksum, migration, device fit |
-| `ArchonAgent` | BUILD | Audit orchestration candidates; reuse runtimes | Graph recovery, tools, effect receipts | No duplicate side effects |
-| `ArchonContext` | BUILD | Audit memory ownership first | Ephemeral budgets and provenance | Determinism and cancellation |
-| `ArchonMemory` | BUILD | Audit index options first | Durable memory semantics and retrieval | Recall, deletion, recovery |
-| `ArchonMemoryProxima` | PARTIAL / ADAPT | Audit adapter and device fit first | Optional persistent dense-index adapter | iOS-scale performance and recovery |
-| `ArchonSearch` | BUILD | Audit cloud providers; reuse local primitives | Offline corpus, orchestration, citations | Network-denied local search |
-| `ArchonSandbox` | BUILD | Reuse WebKit; audit isolation limits | Policy, bridge validation, quotas | CSP, paths, cleanup, audit |
-| `ArchonConnect` | PARTIAL / ADAPT | Reuse official MCP SDK; audit conformance | Archon policy, consent, lifecycle | Auth, cancellation, disconnect |
-| `ArchonComputerUse` | BUILD | Reuse Accessibility/DOM/App Intents; audit screenshots | Semantic safety, approvals, postconditions | Stale-state and risk denial |
-| `ArchonModelsUI` | BUILD | Reuse SwiftUI; audit host state | Main-actor model-management surfaces | Accessibility and signed-app UI |
-| `ArchonFull` | REUSE | Audit dependency scope first | Re-export facade only | No optional dependency leaks |
-| `archon-model` | BUILD | Reuse ArgumentParser and Apple tooling; audit reproducibility | Offline/JSON model workflows | Stable CI output and exit codes |
-| `archon-example-app` | BUILD | Audit real host paths first | Golden consuming-host example | Signed app, device, real model |
+| `ArchonCore` | PARTIAL / ADAPT | Reuse Apple facts; audit [apple/swift-foundation](https://github.com/apple/swift-foundation), [apple/swift-system](https://github.com/apple/swift-system), [apple/swift-log](https://github.com/apple/swift-log), [apple/swift-crypto](https://github.com/apple/swift-crypto) | Capability policy, audit, redaction | Permission and availability denial |
+| `ArchonModels` | PARTIAL / ADAPT | Reuse Apple runtimes; audit [ml-explore/mlx-swift](https://github.com/ml-explore/mlx-swift), [ml-explore/mlx-swift-lm](https://github.com/ml-explore/mlx-swift-lm), [huggingface/swift-huggingface](https://github.com/huggingface/swift-huggingface), [huggingface/swift-transformers](https://github.com/huggingface/swift-transformers) | Catalog, lifecycle, validation | Checksum, migration, device fit |
+| `ArchonAgent` | BUILD | Audit [langchain-ai/langgraph](https://github.com/langchain-ai/langgraph), [crewAIInc/crewAI](https://github.com/crewAIInc/crewAI), [openai/openai-agents-python](https://github.com/openai/openai-agents-python), [Tom-Ryder/AgentRunKit](https://github.com/Tom-Ryder/AgentRunKit), [christopherkarani/Conduit](https://github.com/christopherkarani/Conduit) | Graph recovery, tools, effect receipts | No duplicate side effects |
+| `ArchonContext` | BUILD | Audit [mem0ai/mem0](https://github.com/mem0ai/mem0), [letta-ai/letta](https://github.com/letta-ai/letta), [getzep/zep](https://github.com/getzep/zep), [crewAIInc/crewAI](https://github.com/crewAIInc/crewAI) for context ownership patterns | Ephemeral budgets and provenance | Determinism and cancellation |
+| `ArchonMemory` | BUILD | Audit [mem0ai/mem0](https://github.com/mem0ai/mem0), [supermemoryai/supermemory](https://github.com/supermemoryai/supermemory), [getzep/zep](https://github.com/getzep/zep), [letta-ai/letta](https://github.com/letta-ai/letta), [christopherkarani/Wax](https://github.com/christopherkarani/Wax), [vivekptnk/ProximaKit](https://github.com/vivekptnk/ProximaKit), [gregyoung14/RecallKit](https://github.com/gregyoung14/RecallKit) | Durable memory semantics and retrieval | Recall, deletion, recovery |
+| `ArchonMemoryProxima` | PARTIAL / ADAPT | Audit [vivekptnk/ProximaKit](https://github.com/vivekptnk/ProximaKit), [gregyoung14/RecallKit](https://github.com/gregyoung14/RecallKit), [christopherkarani/Wax](https://github.com/christopherkarani/Wax) and device fit first | Optional persistent dense-index adapter | iOS-scale performance and recovery |
+| `ArchonSearch` | BUILD | Audit [tavily-ai/tavily-python](https://github.com/tavily-ai/tavily-python), [exa-labs/exa-py](https://github.com/exa-labs/exa-py), [mendableai/firecrawl](https://github.com/mendableai/firecrawl), [searxng/searxng](https://github.com/searxng/searxng), [ItzCrazyKns/Perplexica](https://github.com/ItzCrazyKns/Perplexica), [brave/brave-browser](https://github.com/brave/brave-browser); reuse local primitives | Offline corpus, orchestration, citations | Network-denied local search |
+| `ArchonSandbox` | BUILD | Reuse WebKit; audit [e2b-dev/e2b](https://github.com/e2b-dev/e2b), [modal-labs/modal-client](https://github.com/modal-labs/modal-client), [daytonaio/daytona](https://github.com/daytonaio/daytona), [denoland/deno](https://github.com/denoland/deno) for isolation and lifecycle patterns | Policy, bridge validation, quotas | CSP, paths, cleanup, audit |
+| `ArchonConnect` | PARTIAL / ADAPT | Reuse [modelcontextprotocol/swift-sdk](https://github.com/modelcontextprotocol/swift-sdk); audit [modelcontextprotocol/servers](https://github.com/modelcontextprotocol/servers) and conformance | Archon policy, consent, lifecycle | Auth, cancellation, disconnect |
+| `ArchonComputerUse` | BUILD | Reuse Accessibility/DOM/App Intents; audit [browserbase/stagehand](https://github.com/browserbase/stagehand), [anthropics/anthropic-cookbook](https://github.com/anthropics/anthropic-cookbook), [openai/openai-agents-python](https://github.com/openai/openai-agents-python) for semantic and fallback action patterns | Semantic safety, approvals, postconditions | Stale-state and risk denial |
+| `ArchonModelsUI` | BUILD | Reuse SwiftUI; audit [apple/swift-book](https://github.com/apple/swift-book), [pointfreeco/swift-navigation](https://github.com/pointfreeco/swift-navigation) and host state | Main-actor model-management surfaces | Accessibility and signed-app UI |
+| `ArchonFull` | REUSE | Audit [VM451/archon-swift](https://github.com/VM451/archon-swift) and [swiftlang/swift-package-manager](https://github.com/swiftlang/swift-package-manager) dependency scope first | Re-export facade only | No optional dependency leaks |
+| `archon-model` | BUILD | Reuse [apple/swift-argument-parser](https://github.com/apple/swift-argument-parser) and [swiftlang/swift-package-manager](https://github.com/swiftlang/swift-package-manager); audit reproducibility | Offline/JSON model workflows | Stable CI output and exit codes |
+| `archon-example-app` | BUILD | Audit real host paths in [VM451/archon-swift](https://github.com/VM451/archon-swift) and [apple/swift-book](https://github.com/apple/swift-book) | Golden consuming-host example | Signed app, device, real model |
 
 `Reuse or audit first` is the first engineering action, not a claim that the
 product is complete. A `BUILD` verdict means Archon owns the missing local
 behavior after the reuse audit; it does not mean Apple APIs are ignored.
+
+The GitHub links in the third column are direct repository references. Multiple
+links are intentionally grouped in one cell so each product's reuse and audit
+surface is visible without adding another wide comparison table. A link is an
+audit target, not an adoption decision or proof that the repository qualifies
+for Archon's local-native core.
 
 ## Products
 
