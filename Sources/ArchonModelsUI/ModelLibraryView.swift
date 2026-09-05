@@ -329,67 +329,32 @@ public struct ModelBrowserView: View {
                 }
             }
 
-            ForEach(displayedResults) { model in
-                Section(model.name) {
+            Section {
+                ForEach(displayedResults) { model in
                     ForEach(model.variants) { variant in
                         let compatibility = ModelCompatibilityAnalyzer.analyze(
                             variant: variant,
                             device: device,
                             isInstalled: isInstalled(variant)
                         )
-                        HStack {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(model.publisher)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                Text(variant.name)
-                                Text("\(variant.runtime.rawValue) · \(compatibility.status.displayName) · \(compatibility.fit.displayName)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                if let message = status[variant.id] {
-                                    Text(message)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                if let value = progress[variant.id] {
-                                    ProgressView(value: value)
-                                }
-                            }
-                            Spacer()
-                            switch phase[variant.id] {
-                            case .downloading:
-                                Button("Pause") { pause(variantID: variant.id) }
-                                Button("Cancel", role: .cancel) { cancel(variantID: variant.id) }
-                            case .paused:
-                                Button("Resume") { resume(variant, descriptor: model) }
-                                Button("Cancel", role: .cancel) { cancel(variantID: variant.id) }
-                            case .failed, .cancelled:
-                                Button("Retry") { retry(variant, descriptor: model) }
-                            case .ready:
-                                Button("Redownload") { redownload(variant, descriptor: model) }
-                            default:
-                                if isInstalled(variant) {
-                                    Button("Redownload") { redownload(variant, descriptor: model) }
-                                } else {
-                                    Button(compatibility.canLoad ? "Download" : compatibility.status == .conversionRequired ? "Conversion required" : "Unavailable") {
-                                        beginDownload(variant, descriptor: model)
-                                    }
-                                    .disabled(
-                                        !compatibility.canLoad ||
-                                        (variant.downloadURL == nil && variant.resources.isEmpty && variant.tokenizerResources.isEmpty)
-                                    )
-                                }
-                            }
-                            NavigationLink("Details") {
-                                ModelDetailView(
-                                    model: model,
-                                    device: deviceOverride,
-                                    library: library,
-                                    downloadManager: downloadManager
-                                )
-                            }
-                            .font(.caption)
-                        }
+                        ModelBrowserRowView(
+                            model: model,
+                            variant: variant,
+                            compatibility: compatibility,
+                            device: device,
+                            phase: phase[variant.id],
+                            progress: progress[variant.id],
+                            statusMessage: status[variant.id],
+                            isInstalled: isInstalled(variant),
+                            library: library,
+                            downloadManager: downloadManager,
+                            onDownload: { beginDownload(variant, descriptor: model) },
+                            onPause: { pause(variantID: variant.id) },
+                            onResume: { resume(variant, descriptor: model) },
+                            onCancel: { cancel(variantID: variant.id) },
+                            onRetry: { retry(variant, descriptor: model) },
+                            onRedownload: { redownload(variant, descriptor: model) }
+                        )
                     }
                 }
             }
@@ -422,7 +387,11 @@ public struct ModelBrowserView: View {
                 }
             }
         }
+        #if os(macOS)
         .searchable(text: $query, prompt: "Search models")
+        #else
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search models")
+        #endif
         .navigationTitle(title)
         .toolbar {
             #if os(macOS)
@@ -792,7 +761,7 @@ public struct ModelBrowserView: View {
     }
 }
 
-private enum DownloadPhase {
+enum DownloadPhase: Sendable {
     case queued, resolving, downloading, paused, verifying, installing
     case ready, updateAvailable, failed, cancelled
 }
