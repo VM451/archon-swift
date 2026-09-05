@@ -11,6 +11,7 @@ doc comments and DocC catalogs.
 - [Model lifecycle](model-lifecycle.md)
 - [Policies and typed failures](policies-and-errors.md)
 - [Executables](executables.md)
+- [Decision framework](decision-framework.md)
 - [Competitor comparison and scorecard](competitor-comparison.md)
 
 ## Decision summary

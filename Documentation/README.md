@@ -13,9 +13,10 @@ organized using the Diátaxis model so each document has one job:
 
 The package's API reference remains in Swift documentation comments and the
 DocC catalog under `Sources/*/Documentation.docc`. Published competitive
-decisions and release gates live in the [competitor comparison](reference/competitor-comparison.md)
-and [release validation guide](how-to/validate-a-release.md). Internal agent
-working records are intentionally local-only and are not part of the GitHub
+decisions and release gates live in the [decision framework](reference/decision-framework.md),
+[competitor comparison](reference/competitor-comparison.md), and [release
+validation guide](how-to/validate-a-release.md). Internal agent working
+records are intentionally local-only and are not part of the GitHub
 documentation surface.
 
 ## Decision vocabulary
