@@ -53,21 +53,30 @@ struct MLXProviderTests {
             }
         }
     }
+
+    @Test("Uncatalogued MLX sources are rejected before first-use download")
+    func rejectsUncataloguedSourceBeforeDownload() async {
+        let provider = MLXLocalProvider(model: "example/uncatalogued-model")
+
+        await #expect(throws: MLXLocalProviderError.memoryEstimateUnavailable) {
+            try await provider.prepare()
+        }
+    }
 }
 
 @Suite("Automatic On-Device Backend Selection Tests")
 struct OnDeviceProviderTests {
 
-    @Test("Automatic provider uses MLX when Apple Foundation Models are unavailable")
-    func selectsMLXWhenAppleModelIsUnavailable() {
+    @Test("Automatic provider fails closed when the smallest model exceeds the safe budget")
+    func rejectsUnsafeFallbackWhenAppleModelIsUnavailable() {
         let provider = OnDeviceProvider(
             strategy: .adaptive(preference: .adaptive),
             hardwareProfile: .iPhone12Base,
             appleFoundationModelAvailable: false
         )
 
-        #expect(provider.backend == .mlx)
-        #expect(provider.id.hasPrefix("mlx."))
+        #expect(provider.backend == .unavailable)
+        #expect(provider.id == "ondevice.unavailable")
         #expect(provider.capabilities.isOnDevice)
     }
 

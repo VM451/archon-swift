@@ -5,39 +5,42 @@ import ArchonCore
 import Darwin
 #endif
 
-/// Target Apple platform classification.
+/// Target Apple platform classification supported by the package.
 public enum ApplePlatformKind: String, Codable, CaseIterable, Equatable, Sendable {
     case iOS
     case iPadOS
     case macOS
+    case visionOS
 }
 
 /// Hardware classification tier based on physical unified memory and per-process memory limits.
 public enum HardwareMemoryTier: String, Codable, Equatable, Sendable {
     /// Ultra-light tier (< 5 GB physical RAM, e.g. iPhone 11/12/13/14 base with 4GB RAM, entry iPad).
-    /// Enforces strict 50% process headroom: LLM budget capped at ~1.0 – 1.4 GB.
+    /// Applies the smallest predicted process envelope and the full reserve policy.
     case ultraLight
 
     /// Balanced tier (5 GB – 7.9 GB physical RAM, e.g. iPhone 13 Pro, iPhone 14 Pro, iPhone 15 base with 6GB RAM).
-    /// Enforces 50% process headroom: LLM budget capped at ~1.5 – 2.0 GB.
+    /// Applies the conservative predicted process envelope and reserve policy.
     case balanced
 
     /// Performance tier (>= 8 GB physical RAM, e.g. iPhone 15 Pro/Max, iPhone 16 series, M-series Macs & iPads).
-    /// LLM budget: >= 3.5 GB.
+    /// The actual model budget still depends on current headroom and peak estimate.
     case performance
 }
 
-/// Device hardware profiling and process memory budget manager across iOS, iPadOS, and macOS.
+/// Device hardware profiling and process memory budget manager across iOS, iPadOS, macOS, and visionOS.
 ///
-/// On Apple mobile platforms (iOS and iPadOS), the operating system's jetsam memory manager
-/// enforces strict per-process memory ceilings that are significantly lower than total physical RAM.
+/// On Apple mobile platforms (iOS, iPadOS, and visionOS), the operating system's
+/// memory-pressure manager enforces process limits that can be significantly lower
+/// than total physical RAM. Apple does not publish one fixed per-app GB limit for
+/// all devices; the process-limit values below are conservative app heuristics.
 ///
 /// To prevent Out-Of-Memory (OOM) process termination (`EXC_RESOURCE: MEMORY`), `DeviceHardwareProfile`
-/// calculates a **Safe Model Memory Budget** (by default 50% of the app's process memory limit),
-/// ensuring the remaining 50% is reserved for application UI, view hierarchies, image caches,
-/// checkpointers, and background tasks.
+/// calculates a **Safe Model Memory Budget** from the predicted process envelope,
+/// current headroom, application growth, runtime/framework allocations, loaded
+/// models, and a dynamic safety margin.
 public struct DeviceHardwareProfile: Sendable, Equatable {
-    /// Target Apple platform family (iOS, iPadOS, or macOS).
+    /// Target Apple platform family (iOS, iPadOS, macOS, or visionOS).
     public let platform: ApplePlatformKind
 
     /// Total physical RAM installed on device in bytes.
@@ -48,7 +51,8 @@ public struct DeviceHardwareProfile: Sendable, Equatable {
         Double(physicalMemoryBytes) / 1_073_741_824.0
     }
 
-    /// Estimated maximum memory limit (jetsam ceiling) allowed for this app process in bytes.
+    /// Conservative app estimate of the process memory ceiling in bytes. This is
+    /// not an Apple-guaranteed or App-Review-published limit.
     public let appProcessMemoryLimitBytes: UInt64
 
     /// Estimated process memory limit in gigabytes.
@@ -56,15 +60,34 @@ public struct DeviceHardwareProfile: Sendable, Equatable {
         Double(appProcessMemoryLimitBytes) / 1_073_741_824.0
     }
 
-    /// Currently available memory for this process before jetsam termination in bytes.
+    /// Current/advisory process headroom in bytes when exposed by the OS.
     public let availableProcessMemoryBytes: UInt64
 
     /// Safe memory allocation budget ratio reserved for local AI models (default: 0.50 / 50%).
     public let modelMemoryBudgetFraction: Double
 
-    /// Safe maximum memory in bytes that a local model is permitted to allocate.
+    /// Safe maximum predicted peak memory in bytes that a local model is
+    /// permitted to allocate after app, runtime, and pressure reserves. This is
+    /// a conservative prediction, not Apple's limit.
     public var safeModelMemoryBudgetBytes: UInt64 {
-        UInt64(Double(appProcessMemoryLimitBytes) * modelMemoryBudgetFraction)
+        let processHeadroom = min(availableProcessMemoryBytes, appProcessMemoryLimitBytes)
+        let applicationReserve = max(
+            UInt64(applicationGrowthMinimumGB * 1_073_741_824.0),
+            UInt64(Double(physicalMemoryBytes) * applicationGrowthFraction)
+        )
+        let runtimeReserve = UInt64(runtimeReserveMB * 1_048_576)
+        let safetyReserve = max(
+            UInt64(safetyReserveMB * 1_048_576),
+            UInt64(Double(appProcessMemoryLimitBytes) * safetyFraction)
+        )
+        let reservedEnvelope = subtract(
+            processHeadroom,
+            applicationReserve,
+            runtimeReserve,
+            safetyReserve
+        )
+        let policyCap = UInt64(Double(appProcessMemoryLimitBytes) * modelMemoryBudgetFraction)
+        return min(reservedEnvelope, policyCap)
     }
 
     /// Safe maximum model budget in megabytes.
@@ -104,7 +127,8 @@ public struct DeviceHardwareProfile: Sendable, Equatable {
 
         let gigabytes = Double(physicalMemoryBytes) / 1_073_741_824.0
 
-        // Derive process limit if not explicitly provided based on platform jetsam curves
+        // Derive a conservative app safety limit if the host has not supplied a
+        // measured value. Apple limits are dynamic and device/app-state specific.
         let processLimit: UInt64
         if let explicitLimit = appProcessMemoryLimitBytes {
             processLimit = explicitLimit
@@ -113,14 +137,15 @@ public struct DeviceHardwareProfile: Sendable, Equatable {
             case .macOS:
                 // macOS has unified virtual memory: process limit is roughly 75% of physical RAM
                 processLimit = UInt64(Double(physicalMemoryBytes) * 0.75)
-            case .iOS, .iPadOS:
-                // iOS jetsam limits: ~45% of physical memory on 4GB-6GB devices, ~65% on 8GB+ devices
-                if gigabytes < 5.0 {
-                    processLimit = UInt64(2.0 * 1024.0 * 1024.0 * 1024.0) // ~2.0 GB
+            case .iOS, .iPadOS, .visionOS:
+                // Conservative mobile/visionOS fallback tiers; runtime headroom
+                // from ArchonDeviceCapabilities remains the primary gate.
+                if gigabytes <= 4.0 {
+                    processLimit = UInt64(1.5 * 1024.0 * 1024.0 * 1024.0) // ~1.5 GiB
                 } else if gigabytes < 7.9 {
-                    processLimit = UInt64(3.0 * 1024.0 * 1024.0 * 1024.0) // ~3.0 GB
+                    processLimit = UInt64(2.25 * 1024.0 * 1024.0 * 1024.0) // ~2.25 GiB
                 } else {
-                    processLimit = UInt64(5.2 * 1024.0 * 1024.0 * 1024.0) // ~5.2 GB
+                    processLimit = UInt64(3.0 * 1024.0 * 1024.0 * 1024.0) // ~3.0 GiB
                 }
             }
         }
@@ -152,12 +177,14 @@ public struct DeviceHardwareProfile: Sendable, Equatable {
         } else {
             detectedPlatform = .iOS
         }
+        #elseif os(visionOS)
+        detectedPlatform = .visionOS
         #else
         detectedPlatform = .macOS
         #endif
 
         var availableBytes: UInt64 = memoryBytes / 2
-        #if os(iOS) || os(tvOS) || os(watchOS)
+        #if os(iOS) || os(visionOS) || os(tvOS) || os(watchOS)
         let procAvailable = os_proc_available_memory()
         if procAvailable > 0 {
             availableBytes = UInt64(procAvailable)
@@ -181,7 +208,7 @@ public struct DeviceHardwareProfile: Sendable, Equatable {
 
     // MARK: iOS Hardware Profiles
 
-    /// Simulated iPhone 12 / 13 base (4 GB RAM, ~2.0 GB process limit, ~1.0 GB 50% model budget).
+    /// Simulated iPhone 12 / 13 base (4 GB RAM, conservative ~1.5 GiB process envelope).
     public static let iPhone12Base = DeviceHardwareProfile(
         platform: .iOS,
         physicalMemoryBytes: 4 * 1024 * 1024 * 1024,
@@ -192,7 +219,7 @@ public struct DeviceHardwareProfile: Sendable, Equatable {
         isAppleFoundationModelSupported: false
     )
 
-    /// Simulated iPhone 14 Pro / 15 base (6 GB RAM, ~3.0 GB process limit, ~1.5 GB 50% model budget).
+    /// Simulated iPhone 14 Pro / 15 base (6 GB RAM, conservative ~2.25 GiB process envelope).
     public static let iPhone14Pro = DeviceHardwareProfile(
         platform: .iOS,
         physicalMemoryBytes: 6 * 1024 * 1024 * 1024,
@@ -203,12 +230,12 @@ public struct DeviceHardwareProfile: Sendable, Equatable {
         isAppleFoundationModelSupported: false
     )
 
-    /// Simulated iPhone 15 Pro / 16 (8 GB RAM, ~5.2 GB process limit, Apple Foundation Models supported).
+    /// Simulated iPhone 15 Pro / 16 (8 GB RAM, conservative ~3.0 GiB process envelope).
     public static let iPhone15Pro = DeviceHardwareProfile(
         platform: .iOS,
         physicalMemoryBytes: 8 * 1024 * 1024 * 1024,
-        appProcessMemoryLimitBytes: UInt64(5.2 * 1024.0 * 1024.0 * 1024.0),
-        availableProcessMemoryBytes: UInt64(4.8 * 1024.0 * 1024.0 * 1024.0),
+        appProcessMemoryLimitBytes: UInt64(3.0 * 1024.0 * 1024.0 * 1024.0),
+        availableProcessMemoryBytes: UInt64(2.7 * 1024.0 * 1024.0 * 1024.0),
         modelMemoryBudgetFraction: 0.50,
         processorCount: 6,
         isAppleFoundationModelSupported: true
@@ -216,7 +243,7 @@ public struct DeviceHardwareProfile: Sendable, Equatable {
 
     // MARK: iPadOS Hardware Profiles
 
-    /// Simulated entry iPad (4 GB RAM, ~2.0 GB process limit, ~1.0 GB 50% model budget).
+    /// Simulated entry iPad (4 GB RAM, conservative ~1.5 GiB process envelope).
     public static let iPadEntry = DeviceHardwareProfile(
         platform: .iPadOS,
         physicalMemoryBytes: 4 * 1024 * 1024 * 1024,
@@ -227,12 +254,12 @@ public struct DeviceHardwareProfile: Sendable, Equatable {
         isAppleFoundationModelSupported: false
     )
 
-    /// Simulated iPad Air / iPad Pro M2 (8 GB RAM, ~5.5 GB process limit, Apple Foundation Models supported).
+    /// Simulated iPad Air / iPad Pro M2 (8 GB RAM, conservative ~3.0 GiB process envelope).
     public static let iPadProM2 = DeviceHardwareProfile(
         platform: .iPadOS,
         physicalMemoryBytes: 8 * 1024 * 1024 * 1024,
-        appProcessMemoryLimitBytes: UInt64(5.5 * 1024.0 * 1024.0 * 1024.0),
-        availableProcessMemoryBytes: UInt64(5.0 * 1024.0 * 1024.0 * 1024.0),
+        appProcessMemoryLimitBytes: UInt64(3.0 * 1024.0 * 1024.0 * 1024.0),
+        availableProcessMemoryBytes: UInt64(2.7 * 1024.0 * 1024.0 * 1024.0),
         modelMemoryBudgetFraction: 0.50,
         processorCount: 8,
         isAppleFoundationModelSupported: true
@@ -261,6 +288,52 @@ public struct DeviceHardwareProfile: Sendable, Equatable {
         processorCount: 10,
         isAppleFoundationModelSupported: true
     )
+
+    private var applicationGrowthFraction: Double {
+        switch platform {
+        case .iOS, .iPadOS: 0.10
+        case .visionOS: 0.12
+        case .macOS: 0.10
+        }
+    }
+
+    private var applicationGrowthMinimumGB: Double {
+        switch platform {
+        case .iOS, .iPadOS: 0.50
+        case .visionOS: 0.75
+        case .macOS: 1.0
+        }
+    }
+
+    private var runtimeReserveMB: Double {
+        switch platform {
+        case .iOS, .iPadOS: 256
+        case .visionOS: 384
+        case .macOS: 512
+        }
+    }
+
+    private var safetyReserveMB: Double {
+        switch platform {
+        case .iOS, .iPadOS: 256
+        case .visionOS: 384
+        case .macOS: 512
+        }
+    }
+
+    private var safetyFraction: Double {
+        switch platform {
+        case .iOS, .iPadOS: 0.10
+        case .visionOS: 0.12
+        case .macOS: 0.10
+        }
+    }
+
+    private func subtract(_ value: UInt64, _ amounts: UInt64...) -> UInt64 {
+        amounts.reduce(value) { remaining, amount in
+            remaining > amount ? remaining - amount : 0
+        }
+    }
 }
 
 private var deviceHardwareIdentifier: String {

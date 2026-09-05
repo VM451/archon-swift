@@ -8,6 +8,7 @@ public struct ModelLibraryView: View {
     private let library: ModelLibrary
     private let catalog: (any ModelCatalogProvider)?
     private let downloadManager: ModelDownloadManager
+    private let deviceOverride: ArchonDeviceCapabilities?
     @State private var models: [InstalledModel] = []
     @State private var updates: [String: ModelUpdateCandidate] = [:]
     @State private var updateStatus: [String: String] = [:]
@@ -20,11 +21,13 @@ public struct ModelLibraryView: View {
     public init(
         library: ModelLibrary = .makeDefault(),
         catalog: (any ModelCatalogProvider)? = nil,
-        downloadManager: ModelDownloadManager = ModelDownloadManager()
+        downloadManager: ModelDownloadManager = ModelDownloadManager(),
+        device: ArchonDeviceCapabilities? = nil
     ) {
         self.library = library
         self.catalog = catalog
         self.downloadManager = downloadManager
+        self.deviceOverride = device
     }
 
     public var body: some View {
@@ -135,6 +138,12 @@ public struct ModelLibraryView: View {
         }
     }
 
+    private var device: ArchonDeviceCapabilities {
+        // A supplied device keeps previews/tests deterministic. Production
+        // views refresh the advisory headroom each time an operation is run.
+        deviceOverride ?? .current
+    }
+
     @MainActor
     private func refresh() async {
         isRefreshing = true
@@ -202,7 +211,7 @@ public struct ModelLibraryView: View {
         Task { @MainActor in
             defer { updatingIDs.remove(modelID) }
             do {
-                let stream = try await downloadManager.update(candidate, into: library)
+                let stream = try await downloadManager.update(candidate, into: library, on: device)
                 for try await event in stream {
                     switch event.state {
                     case .queued:
@@ -264,7 +273,7 @@ public struct ModelBrowserView: View {
     private let catalog: any ModelCatalogProvider
     private let library: ModelLibrary
     private let downloadManager: ModelDownloadManager
-    private let device: ArchonDeviceCapabilities
+    private let deviceOverride: ArchonDeviceCapabilities?
     @State private var query = ""
     @State private var results: [ModelDescriptor] = []
     @State private var installedModels: [InstalledModel] = []
@@ -284,12 +293,12 @@ public struct ModelBrowserView: View {
         catalog: any ModelCatalogProvider,
         library: ModelLibrary = .makeDefault(),
         downloadManager: ModelDownloadManager = ModelDownloadManager(),
-        device: ArchonDeviceCapabilities = .current
+        device: ArchonDeviceCapabilities? = nil
     ) {
         self.catalog = catalog
         self.library = library
         self.downloadManager = downloadManager
-        self.device = device
+        self.deviceOverride = device
     }
 
     public var body: some View {
@@ -378,7 +387,7 @@ public struct ModelBrowserView: View {
                             NavigationLink("Details") {
                                 ModelDetailView(
                                     model: model,
-                                    device: device,
+                                    device: deviceOverride,
                                     library: library,
                                     downloadManager: downloadManager
                                 )
@@ -405,6 +414,10 @@ public struct ModelBrowserView: View {
         } message: {
             Text(searchError ?? "The model catalog could not be queried.")
         }
+    }
+
+    private var device: ArchonDeviceCapabilities {
+        deviceOverride ?? .current
     }
 
     private var displayedResults: [ModelDescriptor] {
@@ -502,7 +515,8 @@ public struct ModelBrowserView: View {
                         sourceRepository: descriptor.id,
                         sourceRevision: descriptor.revision
                     ),
-                    into: library
+                    into: library,
+                    on: device
                 )
             },
             variantID: variant.id
@@ -531,7 +545,7 @@ public struct ModelBrowserView: View {
     private func resume(_ variant: ModelVariant, descriptor: ModelDescriptor) {
         phase[variant.id] = .queued
         consume(
-            downloadTask: { try await downloadManager.resume(variantID: variant.id, into: library) },
+            downloadTask: { try await downloadManager.resume(variantID: variant.id, into: library, on: device) },
             variantID: variant.id
         )
     }
@@ -540,7 +554,7 @@ public struct ModelBrowserView: View {
     private func retry(_ variant: ModelVariant, descriptor: ModelDescriptor) {
         phase[variant.id] = .queued
         consume(
-            downloadTask: { try await downloadManager.retry(variantID: variant.id, into: library, backoff: 0.5) },
+            downloadTask: { try await downloadManager.retry(variantID: variant.id, into: library, backoff: 0.5, on: device) },
             variantID: variant.id
         )
     }
@@ -549,7 +563,7 @@ public struct ModelBrowserView: View {
     private func redownload(_ variant: ModelVariant, descriptor: ModelDescriptor) {
         phase[variant.id] = .queued
         consume(
-            downloadTask: { try await downloadManager.redownload(variantID: variant.id, into: library) },
+            downloadTask: { try await downloadManager.redownload(variantID: variant.id, into: library, on: device) },
             variantID: variant.id
         )
     }

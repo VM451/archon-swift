@@ -40,7 +40,9 @@ public enum OnDeviceStrategy: Sendable, Equatable {
         runtime: OnDeviceRuntimePreference = .auto
     )
 
-    /// Forces a specific curated Gemma variant running through the preferred on-device runtime.
+    /// Requests a specific curated Gemma variant through the preferred
+    /// on-device runtime. The request is rejected if the predicted peak does
+    /// not fit the current device envelope.
     case gemma(
         GemmaVariant,
         runtime: OnDeviceRuntimePreference = .auto
@@ -270,6 +272,27 @@ public final class OnDeviceProvider: LLMProvider, @unchecked Sendable {
             return Self.provider(for: candidate)
 
         case .gemma(let variant, let runtimePref):
+            guard GemmaModelCatalog.fits(variant, on: hardwareProfile) else {
+                return (
+                    UnavailableAdaptiveModelProvider(),
+                    .unavailable,
+                    (candidate: nil, gemmaVariant: nil)
+                )
+            }
+            guard runtimePref != .appleFoundationModelOnly else {
+                return (
+                    UnavailableAdaptiveModelProvider(),
+                    .unavailable,
+                    (candidate: nil, gemmaVariant: nil)
+                )
+            }
+            if runtimePref == .preferCoreAI, !hardwareProfile.isCoreAISupported {
+                return (
+                    UnavailableAdaptiveModelProvider(),
+                    .unavailable,
+                    (candidate: nil, gemmaVariant: nil)
+                )
+            }
             let candidate = AdaptiveModelCatalog.builtIn.candidates.first {
                 $0.id == "\(variant.huggingFaceID)#\(runtimePref == .preferCoreAI ? "coreAI" : "mlx")"
             } ?? AdaptiveModelCandidate(
@@ -339,7 +362,8 @@ public final class OnDeviceProvider: LLMProvider, @unchecked Sendable {
                 MLXLocalProvider(
                     source: source,
                     capabilities: candidate.capabilities,
-                    extraEOSTokens: extraEOSTokens
+                    extraEOSTokens: extraEOSTokens,
+                    predictedPeakMemoryBytes: candidate.estimatedMemoryBytes
                 ),
                 .mlx,
                 (candidate: candidate, gemmaVariant: candidate.legacyGemmaVariant)
@@ -349,7 +373,8 @@ public final class OnDeviceProvider: LLMProvider, @unchecked Sendable {
                 CoreAIProvider(
                     source: source,
                     computeUnit: computeUnit,
-                    capabilities: candidate.capabilities
+                    capabilities: candidate.capabilities,
+                    predictedPeakMemoryBytes: candidate.estimatedMemoryBytes
                 ),
                 .coreAI,
                 (candidate: candidate, gemmaVariant: candidate.legacyGemmaVariant)

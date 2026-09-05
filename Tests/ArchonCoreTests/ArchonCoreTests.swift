@@ -58,7 +58,7 @@ struct ArchonCoreTests {
         #expect(ArchonOSVersion(major: 27, minor: 1) < ArchonOSVersion(major: 28))
     }
 
-    @Test("Device model budget preserves application headroom")
+    @Test("Device model budget predicts a process envelope and preserves multiple reserves")
     func calculatesModelBudget() {
         let device = ArchonDeviceCapabilities(
             platform: .iOS,
@@ -71,7 +71,14 @@ struct ArchonCoreTests {
             supportsCoreAI: true
         )
 
-        #expect(device.recommendedModelMemoryBytes == 4_000_000_000)
+        let budget = device.modelMemoryBudget
+        #expect(budget.predictedProcessLimitBytes == 3_221_225_472)
+        #expect(budget.currentProcessHeadroomBytes == 3_221_225_472)
+        #expect(budget.applicationGrowthReserveBytes == 800_000_000)
+        #expect(budget.runtimeReserveBytes == 268_435_456)
+        #expect(budget.dynamicSafetyReserveBytes == 322_122_547)
+        #expect(budget.recommendedModelMemoryBytes == 1_830_667_469)
+        #expect(device.recommendedModelMemoryBytes == budget.recommendedModelMemoryBytes)
     }
 
     @Test("Device model budget accounts for memory held by another model")
@@ -88,7 +95,8 @@ struct ArchonCoreTests {
             loadedModelMemoryBytes: 2_000_000_000
         )
 
-        #expect(device.recommendedModelMemoryBytes == 6_000_000_000)
+        #expect(device.modelMemoryBudget.predictedProcessLimitBytes == 12_000_000_000)
+        #expect(device.recommendedModelMemoryBytes == 6_663_129_088)
     }
 
     @Test("Capability status distinguishes unsupported and degraded states")

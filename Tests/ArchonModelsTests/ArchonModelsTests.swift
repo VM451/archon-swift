@@ -235,6 +235,79 @@ struct ArchonModelsTests {
         #expect(result.canLoad)
     }
 
+    @Test("Peak model prediction includes runtime, context, and safety reserves")
+    func predictsPeakModelMemory() throws {
+        let variant = ModelVariant(
+            id: "mlx-estimate",
+            name: "estimate.mlx",
+            modelID: "example/estimate",
+            source: .localImport,
+            format: .mlx,
+            runtime: .mlx,
+            contextLength: 8_192,
+            sizeBytes: 1_000_000_000
+        )
+
+        let estimate = try #require(ModelCompatibilityAnalyzer.estimatedPeakMemory(for: variant))
+        #expect(estimate.artifactOrWeightsBytes == 1_150_000_000)
+        #expect(estimate.runtimeOverheadBytes > 0)
+        #expect(estimate.kvCacheBytes > 0)
+        #expect(estimate.safetyMarginBytes >= 64 * 1_048_576)
+        #expect(estimate.peakBytes > estimate.artifactOrWeightsBytes)
+        #expect(estimate.isHeuristic)
+    }
+
+    @Test("Runnable local artifacts without a measurable size fail closed")
+    func rejectsUnestimableLocalArtifact() {
+        let variant = ModelVariant(
+            id: "unknown-memory",
+            name: "unknown-memory.mlx",
+            modelID: "example/unknown-memory",
+            source: .localImport,
+            format: .mlx,
+            runtime: .mlx
+        )
+
+        let result = ModelCompatibilityAnalyzer.analyze(variant: variant, device: device)
+
+        #expect(result.status == .memoryEstimateUnavailable)
+        #expect(!result.canLoad)
+    }
+
+    @Test("Model downloads fail before transfer when the device budget is exceeded")
+    func rejectsDownloadBeforeTransferWhenMemoryIsInsufficient() async throws {
+        let variant = ModelVariant(
+            id: "oversized-download",
+            name: "oversized.mlx",
+            modelID: "example/oversized-download",
+            source: .directURL,
+            downloadURL: URL(string: "https://models.example.test/oversized.mlx"),
+            format: .mlx,
+            runtime: .mlx,
+            sizeBytes: Int64(device.recommendedModelMemoryBytes) + 1
+        )
+        let manager = ModelDownloadManager(
+            tokenStore: nil,
+            byteStreamProvider: { _ in
+                throw ArchonModelsError.invalidResponse
+            }
+        )
+
+        do {
+            _ = try await manager.download(
+                ModelDownloadRequest(variant: variant, modelName: "Oversized"),
+                into: ModelLibrary(rootURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("archon-memory-gated-download-\(UUID().uuidString)")),
+                on: device
+            )
+            Issue.record("Expected the model download to be rejected before transfer.")
+        } catch let error as ArchonModelsError {
+            #expect(error == .incompatible(.insufficientMemory))
+        } catch {
+            Issue.record("Unexpected model download error: \(error)")
+        }
+    }
+
     @Test("Direct artifact formats cannot claim a different runtime")
     func rejectsMismatchedDirectArtifactRuntime() {
         let variant = ModelVariant(
@@ -344,7 +417,7 @@ struct ArchonModelsTests {
             format: .aimodel,
             runtime: .coreAI,
             precision: "FP16",
-            estimatedMemoryBytes: 3_000_000_000
+            estimatedMemoryBytes: 1_000_000_000
         )
         let model = ModelDescriptor(
             id: "example/model",
@@ -1424,7 +1497,8 @@ struct ArchonModelsTests {
             downloadURL: URL(string: "https://models.example.test/too-large.aimodel"),
             format: .aimodel,
             runtime: .coreAI,
-            sizeBytes: Int64.max
+            sizeBytes: Int64.max,
+            estimatedMemoryBytes: 1
         )
         let manager = ModelDownloadManager(tokenStore: nil)
         let events = try await manager.download(
@@ -1452,6 +1526,7 @@ struct ArchonModelsTests {
             downloadURL: URL(string: "https://huggingface.co/gated/example/resolve/main/model.aimodel"),
             format: .aimodel,
             runtime: .coreAI,
+            sizeBytes: 1,
             requiresAuthentication: true
         )
         let manager = ModelDownloadManager(tokenStore: nil)

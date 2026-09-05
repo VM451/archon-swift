@@ -283,6 +283,63 @@ public enum ArchonThermalState: String, Codable, CaseIterable, Sendable {
     case unknown
 }
 
+/// Confidence of the process-memory envelope used for local model selection.
+public enum ArchonMemoryBudgetConfidence: String, Codable, CaseIterable, Sendable {
+    /// The host supplied current process headroom through a public OS API and
+    /// the package also applied its conservative platform envelope.
+    case observedHeadroom
+
+    /// The host did not expose a process-headroom API, so the package used its
+    /// physical-memory/platform prediction and a conservative fallback.
+    case platformHeuristic
+}
+
+/// A conservative memory envelope for one local model's predicted peak.
+///
+/// `currentProcessHeadroomBytes` is already after the current app footprint on
+/// platforms that expose `os_proc_available_memory()`. The additional reserves
+/// account for app growth, runtime/framework allocations, loaded models, and
+/// changing system pressure. This is a safety policy and prediction, not an
+/// Apple-guaranteed process limit.
+public struct ArchonModelMemoryBudget: Codable, Equatable, Sendable {
+    public let predictedProcessLimitBytes: UInt64
+    public let currentProcessHeadroomBytes: UInt64
+    public let applicationGrowthReserveBytes: UInt64
+    public let runtimeReserveBytes: UInt64
+    public let dynamicSafetyReserveBytes: UInt64
+    public let loadedModelMemoryBytes: UInt64
+    public let recommendedModelMemoryBytes: UInt64
+    public let confidence: ArchonMemoryBudgetConfidence
+
+    public init(
+        predictedProcessLimitBytes: UInt64,
+        currentProcessHeadroomBytes: UInt64,
+        applicationGrowthReserveBytes: UInt64,
+        runtimeReserveBytes: UInt64,
+        dynamicSafetyReserveBytes: UInt64,
+        loadedModelMemoryBytes: UInt64,
+        recommendedModelMemoryBytes: UInt64,
+        confidence: ArchonMemoryBudgetConfidence
+    ) {
+        self.predictedProcessLimitBytes = predictedProcessLimitBytes
+        self.currentProcessHeadroomBytes = currentProcessHeadroomBytes
+        self.applicationGrowthReserveBytes = applicationGrowthReserveBytes
+        self.runtimeReserveBytes = runtimeReserveBytes
+        self.dynamicSafetyReserveBytes = dynamicSafetyReserveBytes
+        self.loadedModelMemoryBytes = loadedModelMemoryBytes
+        self.recommendedModelMemoryBytes = recommendedModelMemoryBytes
+        self.confidence = confidence
+    }
+
+    public var predictedProcessLimitGB: Double {
+        Double(predictedProcessLimitBytes) / 1_073_741_824.0
+    }
+
+    public var recommendedModelMemoryGB: Double {
+        Double(recommendedModelMemoryBytes) / 1_073_741_824.0
+    }
+}
+
 public struct ArchonModelCapabilities: Codable, Equatable, Sendable {
     public let tasks: Set<ArchonModelTask>
     public let supportsStreaming: Bool
@@ -306,6 +363,9 @@ public struct ArchonDeviceCapabilities: Codable, Equatable, Sendable {
     public let platform: ArchonPlatform
     public let osVersion: ArchonOSVersion
     public let physicalMemoryBytes: UInt64
+    /// Current process memory headroom when the platform exposes it. This is
+    /// advisory and can change while the app is running; it is not a published
+    /// universal Apple per-process limit.
     public let availableMemoryBytes: UInt64
     public let processorCount: Int
     public let deviceArchitecture: String
@@ -361,9 +421,51 @@ public struct ArchonDeviceCapabilities: Codable, Equatable, Sendable {
         case supportsCoreAI, thermalState, loadedModelMemoryBytes
     }
 
+    /// Conservative app-owned model budget, not an Apple-guaranteed limit.
+    /// Callers should refresh device capabilities before a new load/download.
+    public var modelMemoryBudget: ArchonModelMemoryBudget {
+        let predictedLimit = archonPredictedProcessMemoryLimit(
+            platform: platform,
+            physicalMemoryBytes: physicalMemoryBytes
+        )
+        let currentHeadroom = min(availableMemoryBytes, predictedLimit)
+        let applicationReserve = archonApplicationGrowthReserve(
+            platform: platform,
+            physicalMemoryBytes: physicalMemoryBytes
+        )
+        let runtimeReserve = archonRuntimeReserve(for: platform)
+        let safetyReserve = max(
+            archonMinimumSafetyReserve(for: platform),
+            UInt64(Double(predictedLimit) * archonSafetyFraction(for: platform))
+        )
+        let availableAfterReserves = archonSubtract(
+            currentHeadroom,
+            applicationReserve,
+            runtimeReserve,
+            safetyReserve,
+            loadedModelMemoryBytes
+        )
+        let confidence: ArchonMemoryBudgetConfidence
+        #if canImport(Darwin) && (os(iOS) || os(visionOS))
+        confidence = availableMemoryBytes > 0 ? .observedHeadroom : .platformHeuristic
+        #else
+        confidence = .platformHeuristic
+        #endif
+
+        return ArchonModelMemoryBudget(
+            predictedProcessLimitBytes: predictedLimit,
+            currentProcessHeadroomBytes: currentHeadroom,
+            applicationGrowthReserveBytes: applicationReserve,
+            runtimeReserveBytes: runtimeReserve,
+            dynamicSafetyReserveBytes: safetyReserve,
+            loadedModelMemoryBytes: loadedModelMemoryBytes,
+            recommendedModelMemoryBytes: availableAfterReserves,
+            confidence: confidence
+        )
+    }
+
     public var recommendedModelMemoryBytes: UInt64 {
-        let budget = min(availableMemoryBytes, UInt64(Double(physicalMemoryBytes) * 0.5))
-        return budget > loadedModelMemoryBytes ? budget - loadedModelMemoryBytes : 0
+        modelMemoryBudget.recommendedModelMemoryBytes
     }
 
     public static var current: ArchonDeviceCapabilities {
@@ -445,6 +547,108 @@ private func archonCurrentAvailableMemoryBytes(physicalMemory: UInt64) -> UInt64
     }
     #endif
     return physicalMemory / 2
+}
+
+private func archonPredictedProcessMemoryLimit(
+    platform: ArchonPlatform,
+    physicalMemoryBytes: UInt64
+) -> UInt64 {
+    let gibibyte = 1_073_741_824.0
+    let physicalGB = Double(physicalMemoryBytes) / gibibyte
+
+    switch platform {
+    case .iOS, .iPadOS:
+        // Conservative foreground-app envelope based on the device RAM tier.
+        // It intentionally stays below the maximums seen in field reports so
+        // model selection does not optimize right up to a Jetsam boundary.
+        let tierLimitGB: Double
+        if physicalGB <= 4.0 {
+            tierLimitGB = 1.5
+        } else if physicalGB <= 6.0 {
+            tierLimitGB = 2.25
+        } else if physicalGB <= 8.0 {
+            tierLimitGB = 3.0
+        } else if physicalGB <= 12.0 {
+            tierLimitGB = 4.0
+        } else {
+            tierLimitGB = 5.0
+        }
+        return UInt64(min(Double(physicalMemoryBytes) * 0.45, tierLimitGB * gibibyte))
+    case .visionOS:
+        // visionOS shares the mobile-style pressure/jettison model, with a
+        // slightly tighter envelope for compositor and scene resources.
+        return UInt64(min(Double(physicalMemoryBytes) * 0.40, 6.0 * gibibyte))
+    case .macOS:
+        // macOS has no single Jetsam-style app ceiling. Keep a large but
+        // bounded envelope and retain at least 2 GiB for the rest of the host.
+        let fractionLimit = UInt64(Double(physicalMemoryBytes) * 0.75)
+        let hostRoomLimit = physicalMemoryBytes > UInt64(2.0 * gibibyte)
+            ? physicalMemoryBytes - UInt64(2.0 * gibibyte)
+            : UInt64(Double(physicalMemoryBytes) * 0.50)
+        return min(fractionLimit, hostRoomLimit)
+    }
+}
+
+private func archonApplicationGrowthReserve(
+    platform: ArchonPlatform,
+    physicalMemoryBytes: UInt64
+) -> UInt64 {
+    let gibibyte = 1_073_741_824.0
+    let minimum: Double
+    let fraction: Double
+    switch platform {
+    case .iOS, .iPadOS:
+        minimum = 0.50 * gibibyte
+        fraction = 0.10
+    case .visionOS:
+        minimum = 0.75 * gibibyte
+        fraction = 0.12
+    case .macOS:
+        minimum = 1.0 * gibibyte
+        fraction = 0.10
+    }
+    return max(UInt64(minimum), UInt64(Double(physicalMemoryBytes) * fraction))
+}
+
+private func archonRuntimeReserve(for platform: ArchonPlatform) -> UInt64 {
+    let megabyte = 1_048_576.0
+    switch platform {
+    case .iOS, .iPadOS:
+        return UInt64(256.0 * megabyte)
+    case .visionOS:
+        return UInt64(384.0 * megabyte)
+    case .macOS:
+        return UInt64(512.0 * megabyte)
+    }
+}
+
+private func archonMinimumSafetyReserve(for platform: ArchonPlatform) -> UInt64 {
+    let megabyte = 1_048_576.0
+    switch platform {
+    case .iOS, .iPadOS:
+        return UInt64(256.0 * megabyte)
+    case .visionOS:
+        return UInt64(384.0 * megabyte)
+    case .macOS:
+        return UInt64(512.0 * megabyte)
+    }
+}
+
+private func archonSafetyFraction(for platform: ArchonPlatform) -> Double {
+    switch platform {
+    case .iOS, .iPadOS:
+        return 0.10
+    case .visionOS:
+        return 0.12
+    case .macOS:
+        return 0.10
+    }
+}
+
+private func archonSubtract(_ value: UInt64, _ amounts: UInt64...) -> UInt64 {
+    amounts.reduce(value) { remaining, amount in
+        remaining > amount ? remaining - amount : 0
+    }
 }
 
 private var archonCurrentDeviceIsIPad: Bool {

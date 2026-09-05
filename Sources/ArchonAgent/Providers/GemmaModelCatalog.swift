@@ -35,7 +35,9 @@ public struct GemmaVariant: Sendable, Equatable, Codable {
     /// Quantization format (e.g. "4-bit", "8-bit", "4-bit QAT").
     public let quantization: String
 
-    /// Estimated runtime memory usage during inference in megabytes.
+    /// Estimated predicted peak resident memory during inference in megabytes.
+    /// This value must include the model's runtime workspace and expected cache
+    /// usage because it is used as a hard safety gate before loading.
     public let estimatedMemoryMB: Int
 
     /// Minimum recommended physical system RAM in gigabytes.
@@ -170,7 +172,11 @@ public enum GemmaModelCatalog: Sendable {
 
     // MARK: - Sizing Engine & Model Resolution
 
-    /// Resolves the optimal Gemma 4 model variant strictly respecting the 50% process memory headroom rule.
+    /// Returns the preference-selected Gemma 4 sizing hint for a profile.
+    ///
+    /// This compatibility API preserves the historical non-optional return
+    /// type and may return a variant that does not fit. Runtime/provider code
+    /// must use `safeResolve(for:preference:)` or `fits(_:on:)` before loading.
     ///
     /// - Parameters:
     ///   - profile: The hardware profile containing process limits and safe model budget.
@@ -182,7 +188,8 @@ public enum GemmaModelCatalog: Sendable {
     ) -> GemmaVariant {
         let budgetMB = profile.safeModelMemoryBudgetMB
 
-        // If the 50% model budget is constrained (< 2000 MB), choose lightweight E2B to guarantee host app headroom
+        // If the predicted model budget is constrained (< 2000 MB), choose
+        // lightweight E2B to preserve host-app and pressure headroom.
         if budgetMB < 2000 {
             switch preference {
             case .speedFirst, .adaptive, .balanced:
@@ -216,7 +223,44 @@ public enum GemmaModelCatalog: Sendable {
         }
     }
 
-    /// Resolves the optimal Gemma 4 model variant by hardware memory tier.
+    /// Resolves a Gemma variant only when its declared inference footprint fits
+    /// the profile's predicted safe model budget. A `nil` result is an explicit
+    /// "do not offer a local model" decision, not permission to fall back to a
+    /// larger variant at runtime.
+    public static func safeResolve(
+        for profile: DeviceHardwareProfile,
+        preference: OnDeviceOptimizationPreference = .adaptive
+    ) -> GemmaVariant? {
+        let preferred = resolve(for: profile, preference: preference)
+        if fits(preferred, on: profile) {
+            return preferred
+        }
+
+        // If the preference-selected entry is too large, choose the smallest
+        // catalogued entry that actually fits. This keeps an intelligence-first
+        // request safe without turning it into an unsafe override.
+        return allVariants
+            .filter { fits($0, on: profile) }
+            .sorted {
+                if $0.estimatedMemoryMB != $1.estimatedMemoryMB {
+                    return $0.estimatedMemoryMB < $1.estimatedMemoryMB
+                }
+                return $0.huggingFaceID < $1.huggingFaceID
+            }
+            .first
+    }
+
+    /// Returns whether a curated Gemma variant fits the profile's current
+    /// predicted budget. Callers that are about to construct a provider should
+    /// use this gate instead of relying on physical RAM alone.
+    public static func fits(_ variant: GemmaVariant, on profile: DeviceHardwareProfile) -> Bool {
+        guard variant.estimatedMemoryMB > 0 else { return false }
+        let memoryBytes = UInt64(variant.estimatedMemoryMB) * 1_048_576
+        return memoryBytes <= profile.safeModelMemoryBudgetBytes
+    }
+
+    /// Returns the historical preference-selected Gemma variant by hardware
+    /// tier. This is a sizing hint, not a load authorization.
     ///
     /// - Parameters:
     ///   - memoryTier: The physical RAM tier of the target device.

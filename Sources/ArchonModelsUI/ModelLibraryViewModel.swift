@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import ArchonCore
 import ArchonModels
 
 public enum ModelLibraryPresentationState: Equatable, Sendable {
@@ -26,15 +27,24 @@ public final class ModelLibraryViewModel: ObservableObject {
     public let library: ModelLibrary
     public let catalog: (any ModelCatalogProvider)?
     public let downloadManager: ModelDownloadManager
+    private let deviceOverride: ArchonDeviceCapabilities?
+
+    /// Uses a supplied snapshot for deterministic previews/tests, or refreshes
+    /// the public process-headroom estimate for each production operation.
+    public var device: ArchonDeviceCapabilities {
+        deviceOverride ?? .current
+    }
 
     public init(
         library: ModelLibrary,
         catalog: (any ModelCatalogProvider)? = nil,
-        downloadManager: ModelDownloadManager = ModelDownloadManager()
+        downloadManager: ModelDownloadManager = ModelDownloadManager(),
+        device: ArchonDeviceCapabilities? = nil
     ) {
         self.library = library
         self.catalog = catalog
         self.downloadManager = downloadManager
+        self.deviceOverride = device
     }
 
     public func refresh() async {
@@ -64,7 +74,7 @@ public final class ModelLibraryViewModel: ObservableObject {
 
     public func download(_ request: ModelDownloadRequest) async {
         do {
-            let events = try await downloadManager.download(request, into: library)
+            let events = try await downloadManager.download(request, into: library, on: device)
             for try await event in events {
                 switch event.state {
                 case .downloading(let value, _, _):

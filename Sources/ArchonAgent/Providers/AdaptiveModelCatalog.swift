@@ -59,6 +59,8 @@ public struct AdaptiveModelCandidate: Sendable, Equatable, Identifiable {
     public let family: String?
     public let source: AdaptiveModelSource
     public let capabilities: ModelCapabilities
+    /// Predicted peak resident memory, including runtime and cache overhead.
+    /// Generic candidates without this value are never selected for local use.
     public let estimatedMemoryBytes: UInt64?
     public let modelSizeBytes: Int64?
     public let maxContextTokens: Int
@@ -192,8 +194,11 @@ public struct AdaptiveModelCandidate: Sendable, Equatable, Identifiable {
             maxContextTokens: variant.contextLength ?? 8_192,
             isOnDevice: true
         )
-        let memoryBytes = variant.estimatedMemoryBytes.map { UInt64(max(0, $0)) }
-            ?? variant.sizeBytes.map { UInt64(max(0, Int64(Double($0) * 1.15))) }
+        // Keep the adaptive selector on the exact same peak estimate used by
+        // model download and load preflight. A base artifact-size estimate is
+        // not sufficient because MLX/Core AI also allocate workspaces and KV
+        // cache memory while running.
+        let memoryBytes = ModelCompatibilityAnalyzer.estimatedPeakMemoryBytes(for: variant)
         let platforms = Set(variant.supportedPlatforms.compactMap { platform in
             ApplePlatformKind(rawValue: platform.rawValue)
         })
@@ -351,21 +356,14 @@ public struct AdaptiveModelCatalog: Sendable, Equatable {
                profile.physicalMemoryGB < minimumSystemRAMGB {
                 return false
             }
-            // Adaptive selection is fail-closed for generic entries: a
-            // candidate must publish a peak-memory estimate that fits the
-            // current process budget. The legacy Gemma seed retains its
-            // established tier policy for source compatibility.
-            if candidate.legacyGemmaVariant == nil {
-                guard let estimatedMemoryBytes = candidate.estimatedMemoryBytes,
-                      estimatedMemoryBytes <= budgetBytes else { return false }
-            }
+            // Every custom local runtime must publish a peak-memory estimate
+            // that fits the current process budget. This includes the bundled
+            // Gemma seed; no compatibility shortcut may bypass the rejection
+            // boundary and cause a first-use OOM after download.
+            guard let estimatedMemoryBytes = candidate.estimatedMemoryBytes,
+                  estimatedMemoryBytes <= budgetBytes else { return false }
             if case .coreAI = candidate.source, !profile.isCoreAISupported {
-                // Keep the historical explicit Gemma preference behavior:
-                // callers may construct the Core AI provider and let its
-                // runtime/asset boundary report availability. New generic
-                // candidates still require a positive Core AI capability
-                // declaration before adaptive selection.
-                if candidate.legacyGemmaVariant == nil { return false }
+                return false
             }
             switch runtime {
             case .preferCoreAI:
@@ -396,12 +394,12 @@ public struct AdaptiveModelCatalog: Sendable, Equatable {
             runtimeEligible = eligibleCandidates
         }
 
-        // Preserve the bundled Gemma seed's already-tested hardware policy.
-        // This compatibility branch only applies when every eligible entry is
-        // a legacy Gemma seed; any supplied monthly catalog entry goes through
-        // the generic score below.
+        // Preserve the bundled Gemma seed's preference ordering when the
+        // preferred entry fits. If it does not fit, the generic score below
+        // chooses the best remaining *safe* entry; if none fit, selection has
+        // already failed closed above.
         if runtimeEligible.allSatisfy({ $0.legacyGemmaVariant != nil }) {
-            let legacyVariant = GemmaModelCatalog.resolve(for: profile, preference: preference)
+            let legacyVariant = GemmaModelCatalog.safeResolve(for: profile, preference: preference)
             if let legacyCandidate = runtimeEligible.first(where: {
                 $0.legacyGemmaVariant == legacyVariant
             }) {

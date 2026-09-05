@@ -38,6 +38,23 @@ struct OnDeviceModelSelectorTests {
         #expect(mac.isAppleFoundationModelSupported)
     }
 
+    @Test("Treats visionOS as a first-class Apple model-routing platform")
+    func classifiesVisionOS() {
+        let profile = DeviceHardwareProfile(
+            platform: .visionOS,
+            physicalMemoryBytes: 16 * 1024 * 1024 * 1024,
+            appProcessMemoryLimitBytes: 8 * 1024 * 1024 * 1024,
+            availableProcessMemoryBytes: 6 * 1024 * 1024 * 1024,
+            processorCount: 8,
+            isAppleFoundationModelSupported: true,
+            isCoreAISupported: true
+        )
+
+        #expect(profile.platform == .visionOS)
+        #expect(profile.memoryTier == .performance)
+        #expect(ApplePlatformKind.allCases.contains(.visionOS))
+    }
+
     // MARK: - Gemma Model Catalog & Sizing Resolution Tests
 
     @Test("UltraLight tier selects Gemma 4 E2B in adaptive and speedFirst modes")
@@ -90,17 +107,16 @@ struct OnDeviceModelSelectorTests {
         #expect(provider.capabilities.isOnDevice)
     }
 
-    @Test("iPhone 12 base routes to MLX with Gemma 4 E2B 4-bit")
-    func routesToMLXGemma4E2BOnIPhone12() {
+    @Test("iPhone 12 base rejects Gemma when the predicted peak exceeds the safe budget")
+    func rejectsGemmaWhenIPhone12BudgetIsTooSmall() {
         let provider = OnDeviceProvider(
             strategy: .adaptive(preference: .adaptive),
             hardwareProfile: .iPhone12Base
         )
 
-        #expect(provider.backend == .mlx)
-        #expect(provider.selectedGemmaVariant?.huggingFaceID == "mlx-community/gemma-4-e2b-it-4bit")
-        #expect(provider.id == "mlx.mlx-community/gemma-4-e2b-it-4bit@main")
-        #expect(provider.capabilities.isOnDevice)
+        #expect(provider.backend == .unavailable)
+        #expect(provider.selectedGemmaVariant == nil)
+        #expect(provider.id == "ondevice.unavailable")
     }
 
     @Test("Explicit Core AI preference selects Core AI for a supported device")
@@ -144,7 +160,7 @@ struct OnDeviceModelSelectorTests {
         #expect(provider.selectedGemmaVariant != nil)
     }
 
-    @Test("iPhone 14 Pro routes to MLX with Gemma 4 E2B in adaptive and E4B in intelligenceFirst mode")
+    @Test("iPhone 14 Pro routes only to a Gemma variant that fits the predicted budget")
     func routesToMLXGemma4OnIPhone14Pro() {
         let adaptiveProvider = OnDeviceProvider(
             strategy: .adaptive(preference: .adaptive),
@@ -159,17 +175,17 @@ struct OnDeviceModelSelectorTests {
             strategy: .adaptive(preference: .intelligenceFirst),
             hardwareProfile: .iPhone14Pro
         )
-        #expect(intelligentProvider.selectedGemmaVariant?.huggingFaceID == "mlx-community/gemma-4-e4b-it-4bit")
+        #expect(intelligentProvider.selectedGemmaVariant?.huggingFaceID == "mlx-community/gemma-4-e2b-it-4bit")
     }
 
-    @Test("Explicit strategy overrides allow forcing Gemma variants or local sources")
+    @Test("Explicit strategy overrides still reject an oversized Gemma variant")
     func explicitStrategyOverrides() {
         let customGemma = OnDeviceProvider(
             strategy: .gemma(GemmaModelCatalog.gemma4_4b_4bit),
             hardwareProfile: .iPhone12Base
         )
-        #expect(customGemma.backend == OnDeviceBackend.mlx)
-        #expect(customGemma.selectedGemmaVariant?.huggingFaceID == "mlx-community/gemma-4-4b-it-4bit")
+        #expect(customGemma.backend == OnDeviceBackend.unavailable)
+        #expect(customGemma.selectedGemmaVariant == nil)
 
         let localURL = URL(filePath: "/tmp/offline-gemma")
         let localDirProvider = OnDeviceProvider(
@@ -182,15 +198,15 @@ struct OnDeviceModelSelectorTests {
 
     // MARK: - Cross-Platform (iPadOS & macOS) Routing Tests
 
-    @Test("iPadOS: Entry iPad routes to MLX Gemma 4 E2B; iPad Pro M2 routes to Apple Foundation Model")
+    @Test("iPadOS: Entry iPad rejects an oversized local model; iPad Pro uses Apple Foundation Model")
     func iPadOSPlatformRouting() {
         let entryIPadProvider = OnDeviceProvider(
             strategy: .adaptive(),
             hardwareProfile: .iPadEntry
         )
         #expect(entryIPadProvider.hardwareProfile.platform == .iPadOS)
-        #expect(entryIPadProvider.backend == OnDeviceBackend.mlx)
-        #expect(entryIPadProvider.selectedGemmaVariant?.huggingFaceID == "mlx-community/gemma-4-e2b-it-4bit")
+        #expect(entryIPadProvider.backend == OnDeviceBackend.unavailable)
+        #expect(entryIPadProvider.selectedGemmaVariant == nil)
 
         let proIPadProvider = OnDeviceProvider(
             strategy: .adaptive(),
@@ -235,24 +251,25 @@ struct OnDeviceModelSelectorTests {
 
     // MARK: - Process Memory (Jetsam) & 50% Headroom Tests
 
-    @Test("Enforces 50% model memory budget reserving remaining 50% for host app")
+    @Test("Predicts model memory budget after host and pressure reserves")
     func processMemoryHeadroomBudget() {
         let iPhone12 = DeviceHardwareProfile.iPhone12Base
         #expect(iPhone12.appProcessMemoryLimitGB == 2.0)
         #expect(iPhone12.modelMemoryBudgetFraction == 0.50)
-        #expect(iPhone12.safeModelMemoryBudgetMB == 1024)
+        #expect(iPhone12.safeModelMemoryBudgetMB == 819)
 
-        // Resolving with constrained 1GB model budget forces lightweight E2B variant
-        let resolved = GemmaModelCatalog.resolve(for: iPhone12, preference: .adaptive)
-        #expect(resolved.huggingFaceID == "mlx-community/gemma-4-e2b-it-4bit")
-        #expect(resolved.estimatedMemoryMB <= 1500)
+        // The preference resolver remains a sizing hint; the safe resolver is
+        // the runtime/download gate and correctly offers no model here.
+        #expect(GemmaModelCatalog.safeResolve(for: iPhone12, preference: .adaptive) == nil)
 
-        // iPhone 14 Pro with 3.0 GB process limit has 1.5 GB model budget
+        // iPhone 14 Pro with 3.0 GiB process envelope retains app/runtime/
+        // pressure reserves before exposing the model budget.
         let iPhone14 = DeviceHardwareProfile.iPhone14Pro
         #expect(iPhone14.appProcessMemoryLimitGB == 3.0)
         #expect(iPhone14.safeModelMemoryBudgetMB == 1536)
 
-        // Custom tight budget (e.g. 30% model budget) guarantees lightweight E2B
+        // Custom tight budget (e.g. 30% model budget) rejects even E2B when its
+        // declared peak is larger than the remaining envelope.
         let tightBudgetProfile = DeviceHardwareProfile(
             platform: .iOS,
             physicalMemoryBytes: 6 * 1024 * 1024 * 1024,
@@ -262,7 +279,6 @@ struct OnDeviceModelSelectorTests {
             isAppleFoundationModelSupported: false
         )
         #expect(tightBudgetProfile.safeModelMemoryBudgetMB == 921)
-        let tightResolved = GemmaModelCatalog.resolve(for: tightBudgetProfile, preference: .intelligenceFirst)
-        #expect(tightResolved.huggingFaceID == "mlx-community/gemma-4-e2b-it-4bit")
+        #expect(GemmaModelCatalog.safeResolve(for: tightBudgetProfile, preference: .intelligenceFirst) == nil)
     }
 }

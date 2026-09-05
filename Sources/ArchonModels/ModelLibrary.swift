@@ -177,15 +177,19 @@ public actor ModelLoadManager {
         return models[id]
     }
 
-    /// Returns the sum of declared memory estimates for resident models.
+    /// Returns the sum of predicted peak memory estimates for resident models.
+    /// Unknown estimates count as unbounded so another model cannot be loaded
+    /// beside a resident artifact whose peak cannot be proven safe.
     public func loadedModelMemoryBytes() -> UInt64 {
         models.reduce(into: UInt64(0)) { total, entry in
             guard states[entry.key] == .ready || states[entry.key] == .idle else { return }
-            total += UInt64(max(entry.value.manifest.estimatedMemoryBytes ?? 0, 0))
+            let estimate = residentMemoryEstimate(for: entry.value)
+            let (sum, overflow) = total.addingReportingOverflow(estimate)
+            total = overflow ? UInt64.max : sum
         }
     }
 
-    public func load(_ model: InstalledModel, on device: ArchonDeviceCapabilities) async throws {
+    public func load(_ model: InstalledModel, on device: ArchonDeviceCapabilities = .current) async throws {
         if states[model.id] == .ready {
             lastUsedAt[model.id] = Date()
             return
@@ -196,36 +200,13 @@ public actor ModelLoadManager {
             return
         }
         if states[model.id] == .warming { throw ArchonModelsError.modelLoadInProgress(model.id) }
-        let variant = ModelVariant(
-            id: model.id,
-            name: model.manifest.modelName,
-            modelID: model.manifest.modelID,
-            source: .localImport,
-            format: model.manifest.format,
-            runtime: model.manifest.runtime,
-            architecture: model.manifest.architecture,
-            supportedDeviceArchitectures: model.manifest.supportedDeviceArchitectures,
-            supportedPlatforms: model.manifest.platforms,
-            minimumOS: model.manifest.minimumOS,
-            parameterCount: model.manifest.parameterCount,
-            contextLength: model.manifest.contextLength,
-            precision: model.manifest.precision,
-            quantization: model.manifest.quantization,
-            kvCacheBytesPerToken: model.manifest.kvCacheBytesPerToken,
-            sizeBytes: model.manifest.modelSizeBytes,
-            estimatedMemoryBytes: model.manifest.estimatedMemoryBytes,
-            estimatedQualityScore: model.manifest.estimatedQualityScore,
-            estimatedTokensPerSecond: model.manifest.estimatedTokensPerSecond,
-            sha256: model.manifest.checksum,
-            resources: model.manifest.modelResources,
-            tokenizerResources: model.manifest.tokenizerResources,
-            capabilities: model.manifest.capabilities,
-            isExperimental: model.manifest.isExperimental
-        )
+        let variant = makeVariant(for: model)
         let residentMemory = models.reduce(into: UInt64(0)) { total, entry in
             guard entry.key != model.id,
                   states[entry.key] == .ready || states[entry.key] == .idle else { return }
-            total += UInt64(max(entry.value.manifest.estimatedMemoryBytes ?? 0, 0))
+            let estimate = residentMemoryEstimate(for: entry.value)
+            let (sum, overflow) = total.addingReportingOverflow(estimate)
+            total = overflow ? UInt64.max : sum
         }
         let deviceForLoad = ArchonDeviceCapabilities(
             platform: device.platform,
@@ -237,7 +218,7 @@ public actor ModelLoadManager {
             supportsAppleFoundationModels: device.supportsAppleFoundationModels,
             supportsCoreAI: device.supportsCoreAI,
             thermalState: device.thermalState,
-            loadedModelMemoryBytes: device.loadedModelMemoryBytes + residentMemory
+            loadedModelMemoryBytes: saturatingAdd(device.loadedModelMemoryBytes, residentMemory)
         )
         let compatibility = ModelCompatibilityAnalyzer.analyze(variant: variant, device: deviceForLoad, isInstalled: true)
         guard compatibility.canLoad else { throw ArchonModelsError.incompatible(compatibility.status) }
@@ -290,14 +271,54 @@ public actor ModelLoadManager {
         loadingTasks[modelID]?.cancel()
     }
 
-    public func prewarm(_ model: InstalledModel, on device: ArchonDeviceCapabilities) async throws {
+    private func makeVariant(for model: InstalledModel) -> ModelVariant {
+        ModelVariant(
+            id: model.id,
+            name: model.manifest.modelName,
+            modelID: model.manifest.modelID,
+            source: .localImport,
+            format: model.manifest.format,
+            runtime: model.manifest.runtime,
+            architecture: model.manifest.architecture,
+            supportedDeviceArchitectures: model.manifest.supportedDeviceArchitectures,
+            supportedPlatforms: model.manifest.platforms,
+            minimumOS: model.manifest.minimumOS,
+            parameterCount: model.manifest.parameterCount,
+            contextLength: model.manifest.contextLength,
+            precision: model.manifest.precision,
+            quantization: model.manifest.quantization,
+            kvCacheBytesPerToken: model.manifest.kvCacheBytesPerToken,
+            sizeBytes: model.manifest.modelSizeBytes,
+            estimatedMemoryBytes: model.manifest.estimatedMemoryBytes,
+            estimatedQualityScore: model.manifest.estimatedQualityScore,
+            estimatedTokensPerSecond: model.manifest.estimatedTokensPerSecond,
+            sha256: model.manifest.checksum,
+            resources: model.manifest.modelResources,
+            tokenizerResources: model.manifest.tokenizerResources,
+            capabilities: model.manifest.capabilities,
+            isExperimental: model.manifest.isExperimental
+        )
+    }
+
+    private func residentMemoryEstimate(for model: InstalledModel) -> UInt64 {
+        // A resident local artifact without enough metadata to predict its
+        // peak is treated as unbounded for subsequent load decisions.
+        ModelCompatibilityAnalyzer.estimatedPeakMemoryBytes(for: makeVariant(for: model)) ?? UInt64.max
+    }
+
+    private func saturatingAdd(_ lhs: UInt64, _ rhs: UInt64) -> UInt64 {
+        let (sum, overflow) = lhs.addingReportingOverflow(rhs)
+        return overflow ? UInt64.max : sum
+    }
+
+    public func prewarm(_ model: InstalledModel, on device: ArchonDeviceCapabilities = .current) async throws {
         try await load(model, on: device)
     }
 
     /// Makes one installed model the active resident model. Existing resident
     /// models are unloaded before the new model is loaded so the compatibility
     /// check accounts for the memory they would otherwise consume.
-    public func switchTo(_ model: InstalledModel, on device: ArchonDeviceCapabilities) async throws {
+    public func switchTo(_ model: InstalledModel, on device: ArchonDeviceCapabilities = .current) async throws {
         let residentModels = models.values.filter { $0.id != model.id && (states[$0.id] == .ready || states[$0.id] == .idle) }
         for residentModel in residentModels {
             await unload(residentModel)
@@ -723,7 +744,8 @@ public actor ModelDownloadManager {
 
     public func download(
         _ request: ModelDownloadRequest,
-        into library: ModelLibrary
+        into library: ModelLibrary,
+        on device: ArchonDeviceCapabilities = .current
     ) throws -> AsyncThrowingStream<ModelDownloadEvent, Error> {
         let id = request.variant.id
         guard activeTasks[id] == nil else { throw ArchonModelsError.downloadInProgress(id) }
@@ -732,6 +754,7 @@ public actor ModelDownloadManager {
             !request.variant.tokenizerResources.isEmpty else {
             throw ArchonModelsError.noDownloadURL
         }
+        try validateDownloadCompatibility(request.variant, on: device)
 
         pausedIDs.remove(id)
         cancelledIDs.remove(id)
@@ -740,7 +763,7 @@ public actor ModelDownloadManager {
         continuation.yield(ModelDownloadEvent(variantID: id, state: .queued))
         let task = Task { [weak self] in
             guard let self else { continuation.finish(); return }
-            await self.run(request: request, library: library, continuation: continuation)
+            await self.run(request: request, library: library, device: device, continuation: continuation)
         }
         activeTasks[id] = task
         continuation.onTermination = { [weak self] termination in
@@ -759,7 +782,8 @@ public actor ModelDownloadManager {
     public func downloadInBackground(
         _ request: ModelDownloadRequest,
         into library: ModelLibrary,
-        using coordinator: ModelBackgroundTransferCoordinator
+        using coordinator: ModelBackgroundTransferCoordinator,
+        on device: ArchonDeviceCapabilities = .current
     ) throws -> AsyncThrowingStream<ModelDownloadEvent, Error> {
         let id = request.variant.id
         guard activeTasks[id] == nil else { throw ArchonModelsError.downloadInProgress(id) }
@@ -768,6 +792,7 @@ public actor ModelDownloadManager {
             !request.variant.tokenizerResources.isEmpty else {
             throw ArchonModelsError.noDownloadURL
         }
+        try validateDownloadCompatibility(request.variant, on: device)
 
         pausedIDs.remove(id)
         cancelledIDs.remove(id)
@@ -777,7 +802,7 @@ public actor ModelDownloadManager {
         continuation.yield(ModelDownloadEvent(variantID: id, state: .queued))
         let task = Task { [weak self] in
             guard let self else { continuation.finish(); return }
-            await self.runInBackground(request: request, library: library, continuation: continuation, coordinator: coordinator)
+            await self.runInBackground(request: request, library: library, device: device, continuation: continuation, coordinator: coordinator)
         }
         activeTasks[id] = task
         continuation.onTermination = { [weak self] termination in
@@ -805,9 +830,13 @@ public actor ModelDownloadManager {
         activeTasks[variantID]?.cancel()
     }
 
-    public func resume(variantID: String, into library: ModelLibrary) throws -> AsyncThrowingStream<ModelDownloadEvent, Error> {
+    public func resume(
+        variantID: String,
+        into library: ModelLibrary,
+        on device: ArchonDeviceCapabilities = .current
+    ) throws -> AsyncThrowingStream<ModelDownloadEvent, Error> {
         guard let request = requests[variantID] else { throw ArchonModelsError.invalidModelIdentifier(variantID) }
-        return try download(request, into: library)
+        return try download(request, into: library, on: device)
     }
 
     /// Resumes a background-library transfer after a host recreated its
@@ -816,13 +845,15 @@ public actor ModelDownloadManager {
     public func resumeInBackground(
         variantID: String,
         into library: ModelLibrary,
-        using coordinator: ModelBackgroundTransferCoordinator
+        using coordinator: ModelBackgroundTransferCoordinator,
+        on device: ArchonDeviceCapabilities = .current
     ) async throws -> AsyncThrowingStream<ModelDownloadEvent, Error> {
         try await resumeInBackground(
             variantID: variantID,
             request: nil,
             into: library,
-            using: coordinator
+            using: coordinator,
+            on: device
         )
     }
 
@@ -835,7 +866,8 @@ public actor ModelDownloadManager {
         variantID: String,
         request reconstructedRequest: ModelDownloadRequest,
         into library: ModelLibrary,
-        using coordinator: ModelBackgroundTransferCoordinator
+        using coordinator: ModelBackgroundTransferCoordinator,
+        on device: ArchonDeviceCapabilities = .current
     ) async throws -> AsyncThrowingStream<ModelDownloadEvent, Error> {
         guard reconstructedRequest.variant.id == variantID else {
             throw ArchonModelsError.invalidModelIdentifier(variantID)
@@ -845,7 +877,8 @@ public actor ModelDownloadManager {
             variantID: variantID,
             request: reconstructedRequest,
             into: library,
-            using: coordinator
+            using: coordinator,
+            on: device
         )
     }
 
@@ -853,7 +886,8 @@ public actor ModelDownloadManager {
         variantID: String,
         request reconstructedRequest: ModelDownloadRequest?,
         into library: ModelLibrary,
-        using coordinator: ModelBackgroundTransferCoordinator
+        using coordinator: ModelBackgroundTransferCoordinator,
+        on device: ArchonDeviceCapabilities
     ) async throws -> AsyncThrowingStream<ModelDownloadEvent, Error> {
         if let reconstructedRequest {
             guard reconstructedRequest.variant.id == variantID else {
@@ -865,38 +899,41 @@ public actor ModelDownloadManager {
             throw ArchonModelsError.invalidModelIdentifier(variantID)
         }
         _ = try await coordinator.reconnect()
-        return try downloadInBackground(request, into: library, using: coordinator)
+        return try downloadInBackground(request, into: library, using: coordinator, on: device)
     }
 
     /// Retries the last request, preserving any valid partial file for range resume.
     public func retry(
         variantID: String,
         into library: ModelLibrary,
-        backoff: TimeInterval = 0
+        backoff: TimeInterval = 0,
+        on device: ArchonDeviceCapabilities = .current
     ) async throws -> AsyncThrowingStream<ModelDownloadEvent, Error> {
         guard let request = requests[variantID] else { throw ArchonModelsError.invalidModelIdentifier(variantID) }
         if backoff > 0 {
             let bounded = min(backoff, 60)
             try await Task.sleep(for: .seconds(bounded))
         }
-        return try download(request, into: library)
+        return try download(request, into: library, on: device)
     }
 
     /// Retries from an empty staging location, leaving the installed model untouched.
     public func redownload(
         variantID: String,
-        into library: ModelLibrary
+        into library: ModelLibrary,
+        on device: ArchonDeviceCapabilities = .current
     ) async throws -> AsyncThrowingStream<ModelDownloadEvent, Error> {
         guard let request = requests[variantID] else { throw ArchonModelsError.invalidModelIdentifier(variantID) }
         let stagingURL = try await library.stagingURL(for: request.variant)
         try? FileManager.default.removeItem(at: stagingURL)
-        return try download(request, into: library)
+        return try download(request, into: library, on: device)
     }
 
     /// Downloads the available catalog variant for an installed model's explicit update candidate.
     public func update(
         _ candidate: ModelUpdateCandidate,
-        into library: ModelLibrary
+        into library: ModelLibrary,
+        on device: ArchonDeviceCapabilities = .current
     ) async throws -> AsyncThrowingStream<ModelDownloadEvent, Error> {
         guard let variant = candidate.variant else {
             throw ArchonModelsError.updateUnavailable(candidate.sourceRepository)
@@ -912,7 +949,7 @@ public actor ModelDownloadManager {
             sourceRevision: candidate.availableRevision,
             replacementInstallationID: installed.id
         )
-        return try download(request, into: library)
+        return try download(request, into: library, on: device)
     }
 
     public func cancel(variantID: String) {
@@ -938,6 +975,7 @@ public actor ModelDownloadManager {
     private func run(
         request: ModelDownloadRequest,
         library: ModelLibrary,
+        device: ArchonDeviceCapabilities,
         continuation: AsyncThrowingStream<ModelDownloadEvent, Error>.Continuation
     ) async {
         let id = request.variant.id
@@ -962,6 +1000,7 @@ public actor ModelDownloadManager {
                await tokenStore?.token(for: "huggingface.co") == nil {
                 throw ArchonModelsError.authenticationRequired("huggingface.co")
             }
+            try validateDownloadCompatibility(request.variant, on: device)
 
             let pending = try pendingDownloads(for: request.variant)
             let existingBytes = pending.reduce(into: Int64(0)) { total, item in
@@ -1038,6 +1077,7 @@ public actor ModelDownloadManager {
     private func runInBackground(
         request: ModelDownloadRequest,
         library: ModelLibrary,
+        device: ArchonDeviceCapabilities,
         continuation: AsyncThrowingStream<ModelDownloadEvent, Error>.Continuation,
         coordinator: ModelBackgroundTransferCoordinator
     ) async {
@@ -1065,6 +1105,7 @@ public actor ModelDownloadManager {
                await tokenStore?.token(for: "huggingface.co") == nil {
                 throw ArchonModelsError.authenticationRequired("huggingface.co")
             }
+            try validateDownloadCompatibility(request.variant, on: device)
 
             let stagingURL = try await library.stagingURL(for: request.variant)
             let pending = try pendingDownloads(for: request.variant)
@@ -1207,6 +1248,20 @@ public actor ModelDownloadManager {
         if !job.transferIdentifiers.contains(transferIdentifier) {
             job.transferIdentifiers.append(transferIdentifier)
             backgroundJobs[variantID] = job
+        }
+    }
+
+    /// Applies the same device/runtime contract used by model search and load
+    /// before a transfer is allowed to start. Downloading a model does not
+    /// allocate its inference buffers, but refusing an artifact that cannot
+    /// load avoids spending bandwidth and disk space on an unusable install.
+    private func validateDownloadCompatibility(
+        _ variant: ModelVariant,
+        on device: ArchonDeviceCapabilities
+    ) throws {
+        let compatibility = ModelCompatibilityAnalyzer.analyze(variant: variant, device: device)
+        guard compatibility.canLoad else {
+            throw ArchonModelsError.incompatible(compatibility.status)
         }
     }
 

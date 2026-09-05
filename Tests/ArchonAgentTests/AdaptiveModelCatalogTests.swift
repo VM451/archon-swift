@@ -18,7 +18,8 @@ struct AdaptiveModelCatalogTests {
                 extraEOSTokens: []
             ),
             capabilities: .mlxLocal,
-            estimatedMemoryBytes: 900 * 1024 * 1024,
+            // This is a predicted peak, not just the on-disk weight size.
+            estimatedMemoryBytes: 700 * 1024 * 1024,
             modelSizeBytes: 600 * 1024 * 1024,
             maxContextTokens: 8_192,
             minimumSystemRAMGB: 3.5,
@@ -56,7 +57,7 @@ struct AdaptiveModelCatalogTests {
             supportedPlatforms: [.iOS],
             contextLength: 8_192,
             sizeBytes: 600 * 1024 * 1024,
-            estimatedMemoryBytes: 900 * 1024 * 1024,
+            estimatedMemoryBytes: 400 * 1024 * 1024,
             estimatedQualityScore: 0.7,
             estimatedTokensPerSecond: 30
         )

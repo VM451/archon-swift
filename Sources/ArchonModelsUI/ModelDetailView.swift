@@ -7,7 +7,7 @@ import ArchonModels
 @available(iOS 27.0, macOS 27.0, visionOS 27.0, *)
 public struct ModelDetailView: View {
     public let model: ModelDescriptor
-    private let device: ArchonDeviceCapabilities
+    private let deviceOverride: ArchonDeviceCapabilities?
     private let onSelectVariant: ((ModelVariant) -> Void)?
     private let library: ModelLibrary
     private let downloadManager: ModelDownloadManager
@@ -19,13 +19,13 @@ public struct ModelDetailView: View {
 
     public init(
         model: ModelDescriptor,
-        device: ArchonDeviceCapabilities = .current,
+        device: ArchonDeviceCapabilities? = nil,
         onSelectVariant: ((ModelVariant) -> Void)? = nil,
         library: ModelLibrary = .makeDefault(),
         downloadManager: ModelDownloadManager = ModelDownloadManager()
     ) {
         self.model = model
-        self.device = device
+        self.deviceOverride = device
         self.onSelectVariant = onSelectVariant
         self.library = library
         self.downloadManager = downloadManager
@@ -152,6 +152,10 @@ public struct ModelDetailView: View {
         }
     }
 
+    private var device: ArchonDeviceCapabilities {
+        deviceOverride ?? .current
+    }
+
     @ViewBuilder
     private func variantActions(_ variant: ModelVariant, compatibility: ModelCompatibility) -> some View {
         let installed = installedModel(for: variant)
@@ -230,7 +234,8 @@ public struct ModelDetailView: View {
                         sourceRepository: model.id,
                         sourceRevision: model.revision
                     ),
-                    into: library
+                    into: library,
+                    on: device
                 )
             }
         )
@@ -257,21 +262,21 @@ public struct ModelDetailView: View {
     @MainActor
     private func resume(_ variant: ModelVariant) {
         start(variant: variant) {
-            try await downloadManager.resume(variantID: variant.id, into: library)
+            try await downloadManager.resume(variantID: variant.id, into: library, on: device)
         }
     }
 
     @MainActor
     private func retry(_ variant: ModelVariant) {
         start(variant: variant) {
-            try await downloadManager.retry(variantID: variant.id, into: library)
+            try await downloadManager.retry(variantID: variant.id, into: library, on: device)
         }
     }
 
     @MainActor
     private func redownload(_ variant: ModelVariant) {
         start(variant: variant) {
-            try await downloadManager.redownload(variantID: variant.id, into: library)
+            try await downloadManager.redownload(variantID: variant.id, into: library, on: device)
         }
     }
 
@@ -349,8 +354,13 @@ public struct ModelDetailView: View {
         if let size = variant.sizeBytes {
             values.append(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
         }
-        if let memory = variant.estimatedMemoryBytes {
-            values.append("RAM " + ByteCountFormatter.string(fromByteCount: memory, countStyle: .memory))
+        if let memory = ModelCompatibilityAnalyzer.estimatedPeakMemoryBytes(for: variant) {
+            values.append("Predicted peak RAM " + ByteCountFormatter.string(
+                fromByteCount: Int64(min(memory, UInt64(Int64.max))),
+                countStyle: .memory
+            ))
+        } else if variant.runtime == .mlx || variant.runtime == .coreAI {
+            values.append("Peak RAM estimate unavailable")
         }
         if let contextLength = variant.contextLength {
             values.append("Context \(contextLength.formatted())")

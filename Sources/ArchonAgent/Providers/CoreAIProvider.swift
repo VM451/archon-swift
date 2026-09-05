@@ -51,6 +51,8 @@ public enum CoreAIProviderError: Error, LocalizedError, Sendable, Equatable {
     case emptyPrompt
     case sourceUnsupported(String)
     case runtimeUnavailable(String)
+    case memoryEstimateUnavailable
+    case insufficientMemory(predictedPeakBytes: UInt64, availableBudgetBytes: UInt64)
     case textGenerationAdapterRequired
     case toolCallingUnsupported
 
@@ -72,6 +74,10 @@ public enum CoreAIProviderError: Error, LocalizedError, Sendable, Equatable {
             return "Core AI model source is unsupported: \(reason)"
         case .runtimeUnavailable(let reason):
             return "Core AI runtime is unavailable: \(reason)"
+        case .memoryEstimateUnavailable:
+            return "Core AI model preparation is blocked because no peak-memory estimate was supplied. Register the model in an Archon catalog or ModelLibrary first."
+        case .insufficientMemory(let predictedPeakBytes, let availableBudgetBytes):
+            return "Core AI model preparation is blocked: predicted peak memory \(predictedPeakBytes) bytes exceeds the current safe model budget of \(availableBudgetBytes) bytes."
         case .textGenerationAdapterRequired:
             return "Core AI exposes tensor functions, not a universal text-generation contract; inject a model-specific tokenizer and text-generation adapter."
         case .toolCallingUnsupported:
@@ -121,6 +127,10 @@ public final class CoreAIProvider: LLMProvider, @unchecked Sendable {
     public let modelSource: CoreAIModelSource
     public let computeUnit: CoreAIComputeUnit
     public let modelRuntime: CoreAIModelRuntime
+    /// Predicted peak resident memory used before specializing a local asset.
+    /// A missing estimate means preparation is refused until the asset is
+    /// catalogued.
+    public let predictedPeakMemoryBytes: UInt64?
 
     private let simulatedDelay: TimeInterval
     private let mockResponses: MockResponseStore
@@ -152,11 +162,14 @@ public final class CoreAIProvider: LLMProvider, @unchecked Sendable {
         simulatedDelay: TimeInterval = 0.01,
         mockResponses: [String: String] = [:],
         textGenerationAdapter: (any CoreAITextGenerationAdapter)? = nil,
-        modelRuntime: CoreAIModelRuntime = CoreAIModelRuntime()
+        modelRuntime: CoreAIModelRuntime = CoreAIModelRuntime(),
+        predictedPeakMemoryBytes: UInt64? = nil
     ) {
         self.id = "coreai.\(model)"
         self.modelSource = .modelIdentifier(model)
         self.computeUnit = computeUnit
+        self.predictedPeakMemoryBytes = predictedPeakMemoryBytes
+            ?? (model == "gemma-4-e2b.coreai" ? 1_450 * 1_048_576 : nil)
         self.capabilities = capabilities
         self.simulatedDelay = simulatedDelay
         self.mockResponses = MockResponseStore(mockResponses)
@@ -172,11 +185,13 @@ public final class CoreAIProvider: LLMProvider, @unchecked Sendable {
         simulatedDelay: TimeInterval = 0.01,
         mockResponses: [String: String] = [:],
         textGenerationAdapter: (any CoreAITextGenerationAdapter)? = nil,
-        modelRuntime: CoreAIModelRuntime = CoreAIModelRuntime()
+        modelRuntime: CoreAIModelRuntime = CoreAIModelRuntime(),
+        predictedPeakMemoryBytes: UInt64? = nil
     ) {
         self.id = "coreai.\(source.identifier)"
         self.modelSource = source
         self.computeUnit = computeUnit
+        self.predictedPeakMemoryBytes = predictedPeakMemoryBytes
         self.capabilities = capabilities
         self.simulatedDelay = simulatedDelay
         self.mockResponses = MockResponseStore(mockResponses)
@@ -202,7 +217,8 @@ public final class CoreAIProvider: LLMProvider, @unchecked Sendable {
             model: "\(variant.huggingFaceID.replacingOccurrences(of: "/", with: ".")).coreai",
             computeUnit: computeUnit,
             capabilities: caps,
-            simulatedDelay: simulatedDelay
+            simulatedDelay: simulatedDelay,
+            predictedPeakMemoryBytes: UInt64(max(0, variant.estimatedMemoryMB)) * 1_048_576
         )
     }
 
@@ -218,12 +234,26 @@ public final class CoreAIProvider: LLMProvider, @unchecked Sendable {
 
     /// Specializes and caches the configured asset using the selected compute unit.
     public func prepare() async throws -> CoreAIModelInspection {
-        try await modelRuntime.prepare(source: modelSource, computeUnit: computeUnit)
+        try validateMemoryBudget()
+        return try await modelRuntime.prepare(source: modelSource, computeUnit: computeUnit)
     }
 
     /// Releases the specialized asset from the shared Core AI runtime cache.
     public func unload() async {
         await modelRuntime.unload(source: modelSource)
+    }
+
+    private func validateMemoryBudget() throws {
+        guard let predictedPeakMemoryBytes, predictedPeakMemoryBytes > 0 else {
+            throw CoreAIProviderError.memoryEstimateUnavailable
+        }
+        let availableBudgetBytes = ArchonDeviceCapabilities.current.recommendedModelMemoryBytes
+        guard predictedPeakMemoryBytes <= availableBudgetBytes else {
+            throw CoreAIProviderError.insufficientMemory(
+                predictedPeakBytes: predictedPeakMemoryBytes,
+                availableBudgetBytes: availableBudgetBytes
+            )
+        }
     }
 
     public func generate(

@@ -92,7 +92,15 @@ struct CoreAIProviderTests {
     func onDeviceRoutesToCoreAI() {
         let provider = OnDeviceProvider(
             strategy: .adaptive(preference: .balanced, runtime: .preferCoreAI),
-            hardwareProfile: .iPhone14Pro
+            hardwareProfile: DeviceHardwareProfile(
+                platform: .iOS,
+                physicalMemoryBytes: 6 * 1024 * 1024 * 1024,
+                appProcessMemoryLimitBytes: UInt64(3.0 * 1024.0 * 1024.0 * 1024.0),
+                availableProcessMemoryBytes: UInt64(2.7 * 1024.0 * 1024.0 * 1024.0),
+                processorCount: 6,
+                isAppleFoundationModelSupported: false,
+                isCoreAISupported: true
+            )
         )
 
         #expect(provider.backend == OnDeviceBackend.coreAI)
@@ -168,6 +176,15 @@ struct CoreAIProviderTests {
             }
         } catch {
             Issue.record("Unexpected error type: \(error)")
+        }
+    }
+
+    @Test("Uncatalogued Core AI assets are rejected before specialization")
+    func rejectsUncataloguedCoreAIAssetBeforePreparation() async {
+        let provider = CoreAIProvider(source: .localDirectory(.temporaryDirectory))
+
+        await #expect(throws: CoreAIProviderError.memoryEstimateUnavailable) {
+            _ = try await provider.prepare()
         }
     }
 }

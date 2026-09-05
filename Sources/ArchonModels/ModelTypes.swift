@@ -199,6 +199,9 @@ public struct ModelVariant: Codable, Equatable, Sendable, Identifiable {
     /// Additional KV-cache memory required per context token, when known.
     public let kvCacheBytesPerToken: Int64?
     public let sizeBytes: Int64?
+    /// Base resident artifact/weights estimate in bytes. The compatibility
+    /// analyzer derives a higher predicted peak by adding runtime workspace,
+    /// KV cache, and a safety margin.
     public let estimatedMemoryBytes: Int64?
     /// Optional normalized quality estimate supplied by a catalog or host.
     /// Archon never invents this value from a model name.
@@ -711,6 +714,7 @@ public enum ModelCompatibilityStatus: String, Codable, CaseIterable, Sendable {
     case unsupportedArchitecture
     case unsupportedOnDevice
     case insufficientMemory
+    case memoryEstimateUnavailable
     case macOSOnly
     case iOSCompatible
     case requiresNewerOS
@@ -727,6 +731,7 @@ public enum ModelCompatibilityStatus: String, Codable, CaseIterable, Sendable {
         case .unsupportedArchitecture: "Unsupported architecture"
         case .unsupportedOnDevice: "Unsupported on this device"
         case .insufficientMemory: "Insufficient memory"
+        case .memoryEstimateUnavailable: "Memory estimate unavailable"
         case .macOSOnly: "macOS only"
         case .iOSCompatible: "iOS compatible"
         case .requiresNewerOS: "Requires newer OS"
@@ -770,6 +775,35 @@ public struct ModelCompatibility: Codable, Equatable, Sendable {
 
     public var canLoad: Bool {
         status == .ready || status == .compatible
+    }
+}
+
+/// A conservative peak-memory prediction for a directly runnable local model.
+/// The estimate includes the artifact/weights base, runtime workspace, KV cache,
+/// and a model-level safety margin. It is intentionally a rejection boundary,
+/// not a promise that a model may safely consume the entire process limit.
+public struct ModelPeakMemoryEstimate: Codable, Equatable, Sendable {
+    public let artifactOrWeightsBytes: UInt64
+    public let runtimeOverheadBytes: UInt64
+    public let kvCacheBytes: UInt64
+    public let safetyMarginBytes: UInt64
+    public let peakBytes: UInt64
+    public let isHeuristic: Bool
+
+    public init(
+        artifactOrWeightsBytes: UInt64,
+        runtimeOverheadBytes: UInt64,
+        kvCacheBytes: UInt64,
+        safetyMarginBytes: UInt64,
+        peakBytes: UInt64,
+        isHeuristic: Bool
+    ) {
+        self.artifactOrWeightsBytes = artifactOrWeightsBytes
+        self.runtimeOverheadBytes = runtimeOverheadBytes
+        self.kvCacheBytes = kvCacheBytes
+        self.safetyMarginBytes = safetyMarginBytes
+        self.peakBytes = peakBytes
+        self.isHeuristic = isHeuristic
     }
 }
 
@@ -850,12 +884,22 @@ public enum ModelCompatibilityAnalyzer {
             )
         }
 
-        let estimatedMemory = effectiveEstimatedMemoryBytes(for: variant)
-        if let estimatedMemory, estimatedMemory > Int64(device.recommendedModelMemoryBytes) {
+        let estimatedMemory = estimatedPeakMemoryBytes(for: variant)
+        if isLocalRunnableRuntime(variant.runtime), estimatedMemory == nil {
+            return ModelCompatibility(
+                status: .memoryEstimateUnavailable,
+                fit: .cannotRun,
+                reasons: ["A peak-memory estimate is required before this local model can be offered on the device."]
+            )
+        }
+        if let estimatedMemory, estimatedMemory > device.recommendedModelMemoryBytes {
             return ModelCompatibility(
                 status: .insufficientMemory,
                 fit: .cannotRun,
-                reasons: ["Estimated model memory, parameters, precision, and KV cache exceed the safe device budget."]
+                reasons: [
+                    "Predicted peak RAM \(byteCount(estimatedMemory)) exceeds the conservative model budget \(byteCount(device.recommendedModelMemoryBytes)).",
+                    "The budget reserves space for the host app, runtime/framework allocations, loaded models, and dynamic memory pressure."
+                ]
             )
         }
 
@@ -870,7 +914,7 @@ public enum ModelCompatibilityAnalyzer {
         return ModelCompatibility(status: .compatible, fit: fit, reasons: [reason])
     }
 
-    private static func fit(estimatedMemoryBytes: Int64?, device: ArchonDeviceCapabilities) -> ModelFitRating {
+    private static func fit(estimatedMemoryBytes: UInt64?, device: ArchonDeviceCapabilities) -> ModelFitRating {
         guard let estimatedMemory = estimatedMemoryBytes else { return .goodFit }
         let budget = Double(device.recommendedModelMemoryBytes)
         let ratio = Double(estimatedMemory) / max(budget, 1)
@@ -880,19 +924,109 @@ public enum ModelCompatibilityAnalyzer {
         return .memoryConstrained
     }
 
-    private static func effectiveEstimatedMemoryBytes(for variant: ModelVariant) -> Int64? {
-        var total = variant.estimatedMemoryBytes.map { max($0, 0) } ?? 0
-        if variant.estimatedMemoryBytes == nil,
-           let parameterCount = variant.parameterCount,
-           let bytesPerParameter = bytesPerParameter(for: variant) {
-            total = Int64(min(Double(Int64.max), Double(parameterCount) * bytesPerParameter * 1.20))
+    /// Returns the predicted runtime peak for a local model. This is public so
+    /// catalogs and consuming apps can show the same number used by filtering,
+    /// download preflight, and model loading.
+    public static func estimatedPeakMemoryBytes(for variant: ModelVariant) -> UInt64? {
+        estimatedPeakMemory(for: variant)?.peakBytes
+    }
+
+    /// Returns the full peak-memory breakdown used by compatibility checks.
+    public static func estimatedPeakMemory(for variant: ModelVariant) -> ModelPeakMemoryEstimate? {
+        guard isLocalRunnableRuntime(variant.runtime) else { return nil }
+
+        let baseEstimate: (bytes: UInt64, heuristic: Bool)?
+        if let declared = variant.estimatedMemoryBytes, declared > 0 {
+            baseEstimate = (UInt64(declared), true)
+        } else if let parameterCount = variant.parameterCount,
+                  parameterCount > 0,
+                  let bytesPerParameter = bytesPerParameter(for: variant) {
+            baseEstimate = (saturatingDoubleToUInt64(Double(parameterCount) * bytesPerParameter * 1.20), true)
+        } else if let artifactBytes = artifactBytes(for: variant), artifactBytes > 0 {
+            // The packaged size is a lower bound for weights plus metadata;
+            // catalog producers should prefer a measured peak estimate.
+            baseEstimate = (saturatingDoubleToUInt64(Double(artifactBytes) * 1.15), true)
+        } else {
+            return nil
         }
+
+        guard let baseEstimate else { return nil }
+        let runtimeMultiplier: Double
+        switch variant.runtime {
+        case .mlx: runtimeMultiplier = 0.35
+        case .coreAI: runtimeMultiplier = 0.25
+        case .foundationModels: runtimeMultiplier = 0.10
+        case .remote, .unknown: runtimeMultiplier = 0
+        }
+        let runtimeOverhead = saturatingDoubleToUInt64(Double(baseEstimate.bytes) * runtimeMultiplier)
+
+        let kvCache: UInt64
         if let kvBytesPerToken = variant.kvCacheBytesPerToken,
-           let contextLength = variant.contextLength {
-            let kvBytes = Double(max(kvBytesPerToken, 0)) * Double(max(contextLength, 0))
-            total = Int64(min(Double(Int64.max), Double(total) + kvBytes))
+           kvBytesPerToken > 0,
+           let contextLength = variant.contextLength,
+           contextLength > 0 {
+            kvCache = saturatingDoubleToUInt64(Double(kvBytesPerToken) * Double(contextLength))
+        } else {
+            // When architecture-level KV metadata is unavailable, reserve a
+            // context-dependent fraction of the base allocation. This is less
+            // precise than a measured KV formula but prevents unknown context
+            // windows from bypassing the load gate.
+            let contextMultiplier = min(
+                max(Double(variant.contextLength ?? 4_096) / 4_096.0, 1.0),
+                8.0
+            )
+            kvCache = saturatingDoubleToUInt64(Double(baseEstimate.bytes) * 0.10 * contextMultiplier)
         }
-        return total > 0 ? total : nil
+
+        let subtotal = saturatingAdd(baseEstimate.bytes, runtimeOverhead, kvCache)
+        let safetyMargin = max(
+            64 * 1_048_576,
+            saturatingDoubleToUInt64(Double(subtotal) * 0.10)
+        )
+        return ModelPeakMemoryEstimate(
+            artifactOrWeightsBytes: baseEstimate.bytes,
+            runtimeOverheadBytes: runtimeOverhead,
+            kvCacheBytes: kvCache,
+            safetyMarginBytes: safetyMargin,
+            peakBytes: saturatingAdd(subtotal, safetyMargin),
+            isHeuristic: baseEstimate.heuristic || variant.kvCacheBytesPerToken == nil
+        )
+    }
+
+    private static func isLocalRunnableRuntime(_ runtime: ArchonModelRuntime) -> Bool {
+        // Foundation Models weights are managed by Apple's system runtime and
+        // are not downloaded into this model library. Only custom local
+        // artifacts need this package-owned peak-memory rejection gate.
+        runtime == .mlx || runtime == .coreAI
+    }
+
+    private static func artifactBytes(for variant: ModelVariant) -> UInt64? {
+        if let sizeBytes = variant.sizeBytes, sizeBytes > 0 {
+            return UInt64(sizeBytes)
+        }
+        let resourceBytes = (variant.resources + variant.tokenizerResources)
+            .compactMap(\.sizeBytes)
+            .filter { $0 > 0 }
+            .reduce(into: UInt64(0)) { total, value in
+                total = saturatingAdd(total, UInt64(value))
+            }
+        return resourceBytes > 0 ? resourceBytes : nil
+    }
+
+    private static func byteCount(_ bytes: UInt64) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(min(bytes, UInt64(Int64.max))), countStyle: .memory)
+    }
+
+    private static func saturatingAdd(_ values: UInt64...) -> UInt64 {
+        values.reduce(into: UInt64(0)) { total, value in
+            let (sum, overflow) = total.addingReportingOverflow(value)
+            total = overflow ? UInt64.max : sum
+        }
+    }
+
+    private static func saturatingDoubleToUInt64(_ value: Double) -> UInt64 {
+        guard value.isFinite, value > 0 else { return 0 }
+        return value >= Double(UInt64.max) ? UInt64.max : UInt64(value.rounded(.up))
     }
 
     private static func bytesPerParameter(for variant: ModelVariant) -> Double? {
@@ -1033,6 +1167,8 @@ public struct ArchonModelManifest: Codable, Equatable, Sendable {
     public let precision: String?
     public let quantization: String?
     public let kvCacheBytesPerToken: Int64?
+    /// Base resident artifact/weights estimate in bytes. The compatibility
+    /// analyzer derives a higher predicted peak before allowing local loading.
     public let estimatedMemoryBytes: Int64?
     public let estimatedQualityScore: Double?
     public let estimatedTokensPerSecond: Double?
@@ -1643,7 +1779,7 @@ public enum ArchonModelsError: Error, LocalizedError, Equatable, Sendable {
         case .updateUnavailable(let id): "No downloadable model update is available for \(id)."
         case .noDownloadURL: "This model variant does not provide a download URL."
         case .cancelled: "The model download was cancelled."
-        case .incompatible(let status): "The installed model is not loadable: \(status.rawValue)."
+        case .incompatible(let status): "The model variant is not compatible with this device: \(status.rawValue)."
         }
     }
 }
