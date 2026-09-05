@@ -34,6 +34,9 @@ public struct ModelDetailView: View {
     public var body: some View {
         List {
             Section("Overview") {
+                ModelLogoView(model: model, size: 64)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
                 LabeledContent("Publisher", value: model.publisher)
                 if let family = model.family {
                     LabeledContent("Family", value: family)
@@ -236,6 +239,7 @@ public struct ModelDetailView: View {
                         variant: variant,
                         modelName: model.name,
                         license: model.license,
+                        logoURL: model.logoURL,
                         sourceRepository: model.id,
                         sourceRevision: model.revision
                     ),
@@ -441,11 +445,18 @@ public struct ModelStorageView: View {
                     ContentUnavailableView("No Installed MLX Models", systemImage: "shippingbox")
                 } else {
                     ForEach(models) { model in
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(model.manifest.modelName)
-                            Text("\(model.manifest.runtime.rawValue) · \(model.manifest.format.rawValue)\(model.manifest.isExperimental ? " · Experimental" : "")")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                        HStack(alignment: .center, spacing: 12) {
+                            ModelLogoView(
+                                logoURL: model.manifest.logoURL,
+                                name: model.manifest.modelName,
+                                size: 44
+                            )
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(model.manifest.modelName)
+                                Text("\(model.manifest.runtime.rawValue) · \(model.manifest.format.rawValue)\(model.manifest.isExperimental ? " · Experimental" : "")")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
                     .onDelete { offsets in

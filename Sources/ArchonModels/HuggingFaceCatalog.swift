@@ -281,6 +281,7 @@ public struct HuggingFaceCatalog: PaginatedModelCatalogProvider, Sendable {
             tasks: tasks,
             architecture: payload.architectures?.first,
             description: payload.cardData?["model_summary"]?.stringValue,
+            logoURL: logoURL(for: payload, publisher: publisher),
             source: .huggingFace,
             sourceURL: baseURL.appendingPathComponent(repositoryID),
             revision: payload.sha,
@@ -418,6 +419,7 @@ public struct HuggingFaceCatalog: PaginatedModelCatalogProvider, Sendable {
             tasks: model.tasks,
             architecture: model.architecture,
             description: model.description,
+            logoURL: model.logoURL,
             source: model.source,
             sourceURL: model.sourceURL,
             revision: model.revision,
@@ -434,6 +436,35 @@ public struct HuggingFaceCatalog: PaginatedModelCatalogProvider, Sendable {
             .appendingPathComponent("resolve")
             .appendingPathComponent(revision)
             .appendingPathComponent(filename)
+    }
+
+    /// Model cards commonly expose a `thumbnail` value, while older or
+    /// provider-authored cards may use one of the other image keys. When no
+    /// model-specific artwork is declared, use the Hub publisher avatar so
+    /// every discovered model still has real artwork before the native
+    /// fallback is needed.
+    private func logoURL(for payload: HuggingFaceModelPayload, publisher: String) -> URL? {
+        let imageKeys = ["logo", "logo_url", "thumbnail", "thumbnail_url", "image", "image_url"]
+        for key in imageKeys {
+            guard let value = payload.cardData?[key]?.stringValue,
+                  let url = URL(string: value, relativeTo: baseURL)?.absoluteURL,
+                  isAllowedLogoURL(url) else { continue }
+            return url
+        }
+
+        let avatarPath = baseURL
+            .appendingPathComponent("avatars")
+            .appendingPathComponent(publisher)
+        var components = URLComponents(url: avatarPath, resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "s", value: "96")]
+        guard let url = components?.url, isAllowedLogoURL(url) else { return nil }
+        return url
+    }
+
+    private func isAllowedLogoURL(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(), scheme == "https",
+              let host = url.host, !host.isEmpty else { return false }
+        return true
     }
 
     private func isMLXResource(_ filename: String) -> Bool {

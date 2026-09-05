@@ -193,6 +193,7 @@ private struct Download: AsyncParsableCommand {
             variant: variant,
             modelName: descriptor.name,
             license: descriptor.license,
+            logoURL: descriptor.logoURL,
             sourceRepository: descriptor.id,
             sourceRevision: descriptor.revision
         )

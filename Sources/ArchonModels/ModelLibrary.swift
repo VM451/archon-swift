@@ -31,6 +31,7 @@ public struct ModelDownloadRequest: Sendable {
     public let variant: ModelVariant
     public let modelName: String
     public let license: ModelLicenseMetadata?
+    public let logoURL: URL?
     public let sourceRepository: String?
     public let sourceRevision: String?
     /// Existing managed-library installation to replace at the atomic commit
@@ -42,6 +43,7 @@ public struct ModelDownloadRequest: Sendable {
         variant: ModelVariant,
         modelName: String,
         license: ModelLicenseMetadata? = nil,
+        logoURL: URL? = nil,
         sourceRepository: String? = nil,
         sourceRevision: String? = nil,
         replacementInstallationID: String? = nil
@@ -49,6 +51,7 @@ public struct ModelDownloadRequest: Sendable {
         self.variant = variant
         self.modelName = modelName
         self.license = license
+        self.logoURL = logoURL
         self.sourceRepository = sourceRepository
         self.sourceRevision = sourceRevision
         self.replacementInstallationID = replacementInstallationID
@@ -556,7 +559,8 @@ public actor ModelLibrary {
                 sourceRepository: repository,
                 currentRevision: currentRevision,
                 availableRevision: availableRevision,
-                variant: matchingVariant
+                variant: matchingVariant,
+                logoURL: descriptor.logoURL
             ))
         }
 
@@ -580,6 +584,7 @@ public actor ModelLibrary {
             variant: request.variant,
             modelName: request.modelName,
             license: request.license,
+            logoURL: request.logoURL,
             sourceRepository: request.sourceRepository,
             sourceRevision: request.sourceRevision
         )
@@ -1061,6 +1066,7 @@ public actor ModelDownloadManager {
             variant: variant,
             modelName: installed.manifest.modelName,
             license: installed.manifest.license,
+            logoURL: candidate.logoURL ?? installed.manifest.logoURL,
             sourceRepository: candidate.sourceRepository,
             sourceRevision: candidate.availableRevision,
             replacementInstallationID: installed.id

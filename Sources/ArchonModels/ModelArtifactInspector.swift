@@ -54,6 +54,7 @@ public struct ModelArtifactInspection: Codable, Equatable, Sendable {
         sourceRepository: String? = nil,
         sourceRevision: String? = nil,
         license: ModelLicenseMetadata? = nil,
+        logoURL: URL? = nil,
         isExperimental: Bool = false
     ) -> ArchonModelManifest {
         if let manifest { return manifest }
@@ -64,6 +65,7 @@ public struct ModelArtifactInspection: Codable, Equatable, Sendable {
             sourceRepository: sourceRepository,
             sourceRevision: sourceRevision,
             license: license,
+            logoURL: logoURL,
             runtime: runtime,
             format: format,
             architecture: modelArchitecture,

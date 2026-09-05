@@ -46,7 +46,7 @@ struct ModelBrowserRowView: View {
             .opacity(0)
 
             HStack(alignment: .center, spacing: 12) {
-                modelIcon
+                ModelLogoView(model: model)
 
                 VStack(alignment: .leading, spacing: 3) {
                     metadataHeader
@@ -114,44 +114,12 @@ struct ModelBrowserRowView: View {
     }
 
     @ViewBuilder
-    private var modelIcon: some View {
-        let (iconName, tintColor) = iconAndTint(for: model)
-        ZStack {
-            RoundedRectangle(cornerRadius: 10)
-                .fill(tintColor.opacity(0.12))
-                .frame(width: 44, height: 44)
-
-            Image(systemName: iconName)
-                .font(.system(size: 20))
-                .foregroundStyle(tintColor)
-        }
-        .accessibilityHidden(true)
-    }
-
-    private func iconAndTint(for model: ModelDescriptor) -> (String, Color) {
-        let nameLower = (model.publisher + " " + model.name).lowercased()
-        if nameLower.contains("apple") {
-            return ("apple.logo", .primary)
-        } else if nameLower.contains("google") || nameLower.contains("gemma") {
-            return ("sparkles", .blue)
-        } else if nameLower.contains("meta") || nameLower.contains("llama") {
-            return ("brain.head.profile", .indigo)
-        } else if nameLower.contains("qwen") {
-            return ("cpu", .purple)
-        } else if nameLower.contains("mistral") {
-            return ("wind", .orange)
-        } else {
-            return ("cpu", .secondary)
-        }
-    }
-
-    @ViewBuilder
     private var fitBadge: some View {
-        let (icon, color) = fitVisuals(compatibility.fit)
+        let (icon, color) = fitVisuals(for: compatibility)
         HStack(spacing: 3) {
             Image(systemName: icon)
                 .font(.caption2)
-            Text(compatibility.fit.displayName)
+            Text(fitBadgeText)
                 .font(.caption2.weight(.medium))
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
@@ -160,6 +128,88 @@ struct ModelBrowserRowView: View {
         .padding(.horizontal, 6)
         .padding(.vertical, 2.5)
         .background(color.opacity(0.12), in: Capsule())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(fitAccessibilityLabel)
+    }
+
+    private var fitBadgeText: String {
+        switch compatibility.status {
+        case .insufficientMemory:
+            if let peakBytes = ModelCompatibilityAnalyzer.estimatedPeakMemoryBytes(for: variant) {
+                return "Needs \(ByteCountFormatter.string(fromByteCount: Int64(peakBytes), countStyle: .memory)) RAM"
+            } else if let declaredBytes = variant.estimatedMemoryBytes, declaredBytes > 0 {
+                return "Needs \(ByteCountFormatter.string(fromByteCount: declaredBytes, countStyle: .memory)) RAM"
+            }
+            return "Needs more RAM"
+        case .macOSOnly:
+            return "Mac only"
+        case .requiresNewerOS:
+            if let minOS = variant.minimumOS {
+                return "Requires OS \(minOS.major)+"
+            }
+            return "Requires newer OS"
+        case .unsupportedArchitecture:
+            return "Unsupported chip"
+        case .unsupportedOnDevice:
+            return "Device unsupported"
+        case .conversionRequired:
+            return "Needs conversion"
+        case .requiresAuthentication:
+            return "Auth required"
+        case .thermalConstrained:
+            return "Device too hot"
+        case .experimental:
+            return "Experimental"
+        case .memoryEstimateUnavailable:
+            return "Needs memory spec"
+        case .unsupportedFormat:
+            return "Unsupported format"
+        default:
+            return compatibility.fit.displayName
+        }
+    }
+
+    private var fitAccessibilityLabel: String {
+        switch compatibility.status {
+        case .insufficientMemory:
+            let needed: String
+            if let peakBytes = ModelCompatibilityAnalyzer.estimatedPeakMemoryBytes(for: variant) {
+                needed = ByteCountFormatter.string(fromByteCount: Int64(peakBytes), countStyle: .memory)
+            } else if let declaredBytes = variant.estimatedMemoryBytes, declaredBytes > 0 {
+                needed = ByteCountFormatter.string(fromByteCount: declaredBytes, countStyle: .memory)
+            } else {
+                needed = "additional"
+            }
+            let budget = ByteCountFormatter.string(fromByteCount: Int64(device.recommendedModelMemoryBytes), countStyle: .memory)
+            return "Cannot run: needs \(needed) RAM, device budget is \(budget)"
+        default:
+            return fitBadgeText
+        }
+    }
+
+    private func fitVisuals(for compatibility: ModelCompatibility) -> (String, Color) {
+        switch compatibility.status {
+        case .insufficientMemory:
+            return ("memorychip", .secondary)
+        case .macOSOnly:
+            return ("laptopcomputer", .secondary)
+        case .requiresNewerOS:
+            return ("arrow.up.circle.fill", .secondary)
+        case .thermalConstrained:
+            return ("thermometer.sun.fill", .orange)
+        case .requiresAuthentication:
+            return ("lock.fill", .secondary)
+        case .conversionRequired:
+            return ("arrow.triangle.2.circlepath", .secondary)
+        case .experimental:
+            return ("flask.fill", .secondary)
+        case .unsupportedArchitecture:
+            return ("cpu", .secondary)
+        case .unsupportedFormat:
+            return ("doc.badge.gearshape", .secondary)
+        default:
+            return fitVisuals(compatibility.fit)
+        }
     }
 
     private func fitVisuals(_ fit: ModelFitRating) -> (String, Color) {

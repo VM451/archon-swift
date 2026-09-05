@@ -37,33 +37,41 @@ public struct ModelLibraryView: View {
             } else {
                 List {
                     ForEach(models) { model in
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack(alignment: .firstTextBaseline) {
-                                VStack(alignment: .leading) {
-                                    Text(model.manifest.modelName)
-                                        .font(.headline)
-                                    Text(model.manifest.runtime.rawValue + " · " + model.manifest.format.rawValue + (model.manifest.isExperimental ? " · Experimental" : ""))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                if let candidate = updates[model.id] {
-                                    Button(
-                                        updatingIDs.contains(model.id) ? "Updating…" : "Update",
-                                        systemImage: "arrow.down.circle"
-                                    ) {
-                                        update(candidate)
+                        HStack(alignment: .center, spacing: 12) {
+                            ModelLogoView(
+                                logoURL: model.manifest.logoURL,
+                                name: model.manifest.modelName,
+                                size: 44
+                            )
+
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack(alignment: .firstTextBaseline) {
+                                    VStack(alignment: .leading) {
+                                        Text(model.manifest.modelName)
+                                            .font(.headline)
+                                        Text(model.manifest.runtime.rawValue + " · " + model.manifest.format.rawValue + (model.manifest.isExperimental ? " · Experimental" : ""))
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
                                     }
-                                    .disabled(updatingIDs.contains(model.id) || candidate.variant == nil)
+                                    Spacer()
+                                    if let candidate = updates[model.id] {
+                                        Button(
+                                            updatingIDs.contains(model.id) ? "Updating…" : "Update",
+                                            systemImage: "arrow.down.circle"
+                                        ) {
+                                            update(candidate)
+                                        }
+                                        .disabled(updatingIDs.contains(model.id) || candidate.variant == nil)
+                                    }
                                 }
-                            }
-                            if updates[model.id] != nil {
-                                Label(
-                                    updateStatus[model.id] ?? "Update available",
-                                    systemImage: "arrow.triangle.2.circlepath"
-                                )
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                                if updates[model.id] != nil {
+                                    Label(
+                                        updateStatus[model.id] ?? "Update available",
+                                        systemImage: "arrow.triangle.2.circlepath"
+                                    )
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                }
                             }
                         }
                     }
@@ -461,7 +469,7 @@ public struct ModelBrowserView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
         }
@@ -556,6 +564,7 @@ public struct ModelBrowserView: View {
                 tasks: model.tasks,
                 architecture: model.architecture,
                 description: model.description,
+                logoURL: model.logoURL,
                 source: model.source,
                 sourceURL: model.sourceURL,
                 revision: model.revision,
@@ -672,6 +681,7 @@ public struct ModelBrowserView: View {
                         variant: variant,
                         modelName: descriptor.name,
                         license: descriptor.license,
+                        logoURL: descriptor.logoURL,
                         sourceRepository: descriptor.id,
                         sourceRevision: descriptor.revision
                     ),

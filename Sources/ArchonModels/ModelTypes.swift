@@ -327,6 +327,10 @@ public struct ModelDescriptor: Codable, Equatable, Sendable, Identifiable {
     public let tasks: Set<ArchonModelTask>
     public let architecture: String?
     public let description: String?
+    /// Optional provider-supplied artwork for model-management surfaces.
+    /// A missing or unavailable image is expected; consumers must keep a
+    /// native fallback visible.
+    public let logoURL: URL?
     public let source: ArchonModelSource
     public let sourceURL: URL?
     public let revision: String?
@@ -348,6 +352,7 @@ public struct ModelDescriptor: Codable, Equatable, Sendable, Identifiable {
         tasks: Set<ArchonModelTask> = [.textGeneration],
         architecture: String? = nil,
         description: String? = nil,
+        logoURL: URL? = nil,
         source: ArchonModelSource,
         sourceURL: URL? = nil,
         revision: String? = nil,
@@ -364,6 +369,7 @@ public struct ModelDescriptor: Codable, Equatable, Sendable, Identifiable {
         self.tasks = tasks
         self.architecture = architecture
         self.description = description
+        self.logoURL = logoURL
         self.source = source
         self.sourceURL = sourceURL
         self.revision = revision
@@ -554,6 +560,7 @@ public struct MLXModelCatalog: PaginatedModelCatalogProvider, Sendable {
             tasks: model.tasks,
             architecture: model.architecture,
             description: model.description,
+            logoURL: model.logoURL,
             source: model.source,
             sourceURL: model.sourceURL,
             revision: model.revision,
@@ -620,6 +627,7 @@ public struct StaticModelCatalog: PaginatedModelCatalogProvider, Sendable {
                     tasks: model.tasks,
                     architecture: model.architecture,
                     description: model.description,
+                    logoURL: model.logoURL,
                     source: model.source,
                     sourceURL: model.sourceURL,
                     revision: model.revision,
@@ -663,7 +671,8 @@ public struct DirectURLModelCatalog: PaginatedModelCatalogProvider, Sendable {
         estimatedQualityScore: Double? = nil,
         estimatedTokensPerSecond: Double? = nil,
         license: ModelLicenseMetadata? = nil,
-        requiresAuthentication: Bool = false
+        requiresAuthentication: Bool = false,
+        logoURL: URL? = nil
     ) {
         let variant = ModelVariant(
             id: "direct://\(modelID)",
@@ -693,6 +702,7 @@ public struct DirectURLModelCatalog: PaginatedModelCatalogProvider, Sendable {
             publisher: publisher,
             parameterCount: parameterCount,
             architecture: architecture,
+            logoURL: logoURL,
             source: .directURL,
             sourceURL: url,
             license: license,
@@ -798,6 +808,7 @@ public struct LocalModelCatalog: PaginatedModelCatalogProvider, Sendable {
             publisher: "Local",
             parameterCount: manifest.parameterCount,
             architecture: manifest.architecture,
+            logoURL: manifest.logoURL,
             source: .localImport,
             sourceURL: directory,
             revision: manifest.sourceRevision,
@@ -1436,6 +1447,10 @@ public struct ArchonModelManifest: Codable, Equatable, Sendable {
     public let sourceRepository: String?
     public let sourceRevision: String?
     public let license: ModelLicenseMetadata?
+    /// Optional catalog artwork retained with the managed installation so
+    /// installed-model surfaces can keep their branding offline-capable with
+    /// a native fallback when the URL is unavailable.
+    public let logoURL: URL?
     public let runtime: ArchonModelRuntime
     public let format: ArchonModelFormat
     public let architecture: String?
@@ -1468,13 +1483,14 @@ public struct ArchonModelManifest: Codable, Equatable, Sendable {
     /// are not eligible for local model loading.
     public let isExperimental: Bool
 
-    public init(variant: ModelVariant, modelName: String, license: ModelLicenseMetadata? = nil, sourceRepository: String? = nil, sourceRevision: String? = nil) {
+    public init(variant: ModelVariant, modelName: String, license: ModelLicenseMetadata? = nil, logoURL: URL? = nil, sourceRepository: String? = nil, sourceRevision: String? = nil) {
         self.init(
             modelID: variant.modelID,
             modelName: modelName,
             sourceRepository: sourceRepository,
             sourceRevision: sourceRevision,
             license: license,
+            logoURL: logoURL,
             runtime: variant.runtime,
             format: variant.format,
             architecture: variant.architecture,
@@ -1506,6 +1522,7 @@ public struct ArchonModelManifest: Codable, Equatable, Sendable {
         sourceRepository: String? = nil,
         sourceRevision: String? = nil,
         license: ModelLicenseMetadata? = nil,
+        logoURL: URL? = nil,
         runtime: ArchonModelRuntime,
         format: ArchonModelFormat,
         architecture: String? = nil,
@@ -1534,6 +1551,7 @@ public struct ArchonModelManifest: Codable, Equatable, Sendable {
         self.sourceRepository = sourceRepository
         self.sourceRevision = sourceRevision
         self.license = license
+        self.logoURL = logoURL
         self.runtime = runtime
         self.format = format
         self.architecture = architecture
@@ -1559,7 +1577,7 @@ public struct ArchonModelManifest: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, modelID, modelName, sourceRepository, sourceRevision
-        case license, runtime, format, architecture, supportedDeviceArchitectures
+        case license, logoURL, runtime, format, architecture, supportedDeviceArchitectures
         case artifactPath, modelResources, tokenizerResources, checksum
         case modelSizeBytes, parameterCount, platforms, minimumOS, contextLength
         case precision, quantization, kvCacheBytesPerToken, estimatedMemoryBytes
@@ -1579,6 +1597,7 @@ public struct ArchonModelManifest: Codable, Equatable, Sendable {
             sourceRepository: try container.decodeIfPresent(String.self, forKey: .sourceRepository),
             sourceRevision: try container.decodeIfPresent(String.self, forKey: .sourceRevision),
             license: try container.decodeIfPresent(ModelLicenseMetadata.self, forKey: .license),
+            logoURL: try container.decodeIfPresent(URL.self, forKey: .logoURL),
             runtime: try container.decode(ArchonModelRuntime.self, forKey: .runtime),
             format: try container.decode(ArchonModelFormat.self, forKey: .format),
             architecture: try container.decodeIfPresent(String.self, forKey: .architecture),
@@ -1612,6 +1631,7 @@ public struct ArchonModelManifest: Codable, Equatable, Sendable {
             sourceRepository: sourceRepository,
             sourceRevision: sourceRevision,
             license: license,
+            logoURL: logoURL,
             runtime: runtime,
             format: format,
             architecture: architecture,
@@ -1646,6 +1666,7 @@ public struct ArchonModelManifest: Codable, Equatable, Sendable {
             sourceRepository: sourceRepository,
             sourceRevision: sourceRevision,
             license: license,
+            logoURL: logoURL,
             runtime: runtime,
             format: format,
             architecture: architecture,
@@ -1679,6 +1700,7 @@ public struct ArchonModelManifest: Codable, Equatable, Sendable {
             sourceRepository: sourceRepository,
             sourceRevision: sourceRevision,
             license: license,
+            logoURL: logoURL,
             runtime: runtime,
             format: format,
             architecture: architecture,
@@ -1748,6 +1770,7 @@ public struct ModelUpdateCandidate: Codable, Equatable, Sendable, Identifiable {
     public let currentRevision: String
     public let availableRevision: String
     public let variant: ModelVariant?
+    public let logoURL: URL?
 
     public init(
         id: String,
@@ -1755,7 +1778,8 @@ public struct ModelUpdateCandidate: Codable, Equatable, Sendable, Identifiable {
         sourceRepository: String,
         currentRevision: String,
         availableRevision: String,
-        variant: ModelVariant? = nil
+        variant: ModelVariant? = nil,
+        logoURL: URL? = nil
     ) {
         self.id = id
         self.installedModelID = installedModelID
@@ -1763,6 +1787,7 @@ public struct ModelUpdateCandidate: Codable, Equatable, Sendable, Identifiable {
         self.currentRevision = currentRevision
         self.availableRevision = availableRevision
         self.variant = variant
+        self.logoURL = logoURL
     }
 }
 

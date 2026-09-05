@@ -625,7 +625,7 @@ struct ArchonModelsTests {
           "gated": false,
           "private": false,
           "sha": "immutable-revision",
-          "cardData": {"license": "apache-2.0", "license_link": "https://example.com/license", "language": ["en", "zh"]},
+          "cardData": {"license": "apache-2.0", "license_link": "https://example.com/license", "language": ["en", "zh"], "thumbnail": "https://cdn.example.test/qwen.png"},
           "siblings": [
             {"rfilename": "qwen.safetensors", "size": 100},
             {"rfilename": "pytorch_model.bin", "size": 110},
@@ -644,6 +644,7 @@ struct ArchonModelsTests {
 
         #expect(model.license?.identifier == "apache-2.0")
         #expect(model.licenseURL == URL(string: "https://example.com/license"))
+        #expect(model.logoURL == URL(string: "https://cdn.example.test/qwen.png"))
         #expect(model.supportedLanguages == ["en", "zh"])
         #expect(model.variants.map(\.format) == [.safetensors, .transformers, .aimodel])
         #expect(model.variants.last?.runtime == .coreAI)
@@ -892,6 +893,7 @@ struct ArchonModelsTests {
         #expect(models.count == 1)
         #expect(models.first?.id == "mlx-community/Qwen3-8B-4bit")
         #expect(models.first?.variants.first?.format == .mlx)
+        #expect(models.first?.logoURL == URL(string: "https://example.com/avatars/mlx-community?s=96"))
     }
 
     @Test("Hugging Face inspection rejects unsafe repository paths before requesting them")
@@ -1834,7 +1836,11 @@ struct ArchonModelsTests {
         )
         let library = ModelLibrary(rootURL: root.appendingPathComponent("library"))
         let manager = ModelDownloadManager(session: session, tokenStore: nil)
-        let events = try await manager.download(ModelDownloadRequest(variant: variant, modelName: "Example"), into: library)
+        let logoURL = URL(string: "https://cdn.example.test/example.png")!
+        let events = try await manager.download(
+            ModelDownloadRequest(variant: variant, modelName: "Example", logoURL: logoURL),
+            into: library
+        )
 
         var states: [ModelDownloadState] = []
         for try await event in events { states.append(event.state) }
@@ -1846,6 +1852,7 @@ struct ArchonModelsTests {
         #expect(FileManager.default.fileExists(atPath: installed.artifactURL.appendingPathComponent("model.safetensors").path))
         #expect(FileManager.default.fileExists(atPath: installed.artifactURL.appendingPathComponent("config.json").path))
         #expect(installed.manifest.modelResources.count == 2)
+        #expect(installed.manifest.logoURL == logoURL)
     }
 
     @Test("Model library writes manifest and artifact into a managed directory")
