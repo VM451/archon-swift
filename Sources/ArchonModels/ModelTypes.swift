@@ -820,7 +820,7 @@ public struct OfficialModelCatalog: PaginatedModelCatalogProvider, Sendable {
                 organizations = policy.orderedQueryOrganizations
             }
 
-            return CompositeModelCatalog(
+            return ParallelOfficialHuggingFaceCatalog(
                 id: "official.\(huggingFace.id)",
                 providers: organizations.map { organization in
                     HuggingFaceCatalog(
@@ -851,6 +851,188 @@ public struct OfficialModelCatalog: PaginatedModelCatalogProvider, Sendable {
             guard let value else { return ContinuationState(offset: 0, token: nil) }
             guard let data = Data(base64Encoded: value),
                   let state = try? JSONDecoder().decode(ContinuationState.self, from: data) else {
+                throw ArchonModelsError.invalidResponse
+            }
+            return state
+        }
+
+        func encoded() throws -> String {
+            try JSONEncoder().encode(self).base64EncodedString()
+        }
+    }
+}
+
+/// Searches the allow-listed Hugging Face namespaces concurrently while
+/// retaining deterministic namespace order and provider-owned cursors.
+///
+/// The official catalog commonly wraps many first-party namespaces. A serial
+/// composite makes an empty first page wait on every namespace before it can
+/// reach the first usable MLX package. Probing one bounded item from each
+/// namespace in parallel keeps the first page responsive without changing the
+/// trust policy or exposing community conversion repositories.
+private struct ParallelOfficialHuggingFaceCatalog: PaginatedModelCatalogProvider, Sendable {
+    let id: String
+    let providers: [HuggingFaceCatalog]
+
+    func search(_ request: ModelSearchRequest) async throws -> [ModelDescriptor] {
+        try await searchPage(request).models
+    }
+
+    func searchPage(_ request: ModelSearchRequest) async throws -> ModelCatalogPage {
+        var state = try ContinuationState.decode(request.continuationToken, providerCount: providers.count)
+        if request.continuationToken == nil, !state.offsets.isEmpty {
+            state.offsets[0] = request.offset
+        }
+
+        var results: [ModelDescriptor] = []
+        var seen = Set<String>()
+
+        while state.providerIndex < providers.count && results.count < request.limit {
+            let probeResults = await probe(
+                request: request,
+                state: state
+            )
+            let candidates = probeResults
+                .filter { $0.page?.models.isEmpty == false || $0.page?.hasMore == true }
+                .sorted { $0.index < $1.index }
+
+            if candidates.isEmpty {
+                if !results.isEmpty {
+                    break
+                }
+                if probeResults.contains(where: { $0.didFail }) {
+                    throw ArchonModelsError.invalidResponse
+                }
+                break
+            }
+
+            var lastError: Error?
+            var advanced = false
+            for candidate in candidates {
+                let remaining = max(1, request.limit - results.count)
+                let providerRequest = ModelSearchRequest(
+                    query: request.query,
+                    task: request.task,
+                    runtime: request.runtime,
+                    format: request.format,
+                    compatibleOnly: request.compatibleOnly,
+                    device: request.device,
+                    offset: state.offsets[candidate.index],
+                    continuationToken: state.continuationTokens[candidate.index],
+                    limit: remaining,
+                    includeVariants: request.includeVariants
+                )
+
+                do {
+                    let page = try await providers[candidate.index].searchPage(providerRequest)
+                    state.offsets[candidate.index] += page.models.count
+                    state.continuationTokens[candidate.index] = page.nextContinuationToken
+                    for model in page.models where seen.insert(model.id).inserted {
+                        results.append(model)
+                    }
+
+                    if page.hasMore {
+                        state.providerIndex = candidate.index
+                        return ModelCatalogPage(
+                            models: Array(results.prefix(request.limit)),
+                            hasMore: true,
+                            nextContinuationToken: try state.encoded()
+                        )
+                    }
+
+                    state.providerIndex = candidate.index + 1
+                    advanced = true
+                    break
+                } catch {
+                    lastError = error
+                }
+            }
+
+            if !advanced, results.isEmpty, let lastError {
+                throw lastError
+            }
+        }
+
+        let hasMore = state.providerIndex < providers.count
+        return ModelCatalogPage(
+            models: Array(results.prefix(request.limit)),
+            hasMore: hasMore,
+            nextContinuationToken: hasMore ? try state.encoded() : nil
+        )
+    }
+
+    private func probe(
+        request: ModelSearchRequest,
+        state: ContinuationState
+    ) async -> [ProbeResult] {
+        await withTaskGroup(of: ProbeResult.self, returning: [ProbeResult].self) { group in
+            for index in state.providerIndex..<providers.count {
+                let provider = providers[index]
+                let providerRequest = ModelSearchRequest(
+                    query: request.query,
+                    task: request.task,
+                    runtime: request.runtime,
+                    format: request.format,
+                    compatibleOnly: request.compatibleOnly,
+                    device: request.device,
+                    offset: state.offsets[index],
+                    continuationToken: state.continuationTokens[index],
+                    limit: 1,
+                    includeVariants: request.includeVariants
+                )
+                group.addTask {
+                    do {
+                        return ProbeResult(
+                            index: index,
+                            page: try await provider.searchPage(providerRequest),
+                            didFail: false
+                        )
+                    } catch {
+                        return ProbeResult(
+                            index: index,
+                            page: nil,
+                            didFail: true
+                        )
+                    }
+                }
+            }
+
+            var results: [ProbeResult] = []
+            for await result in group {
+                results.append(result)
+            }
+            return results
+        }
+    }
+
+    private struct ProbeResult: Sendable {
+        let index: Int
+        let page: ModelCatalogPage?
+        let didFail: Bool
+    }
+
+    private struct ContinuationState: Codable, Sendable {
+        var providerIndex: Int
+        var offsets: [Int]
+        var continuationTokens: [String?]
+
+        static func decode(
+            _ value: String?,
+            providerCount: Int
+        ) throws -> ContinuationState {
+            guard let value else {
+                return ContinuationState(
+                    providerIndex: 0,
+                    offsets: Array(repeating: 0, count: providerCount),
+                    continuationTokens: Array(repeating: nil, count: providerCount)
+                )
+            }
+            guard let data = Data(base64Encoded: value),
+                  let state = try? JSONDecoder().decode(ContinuationState.self, from: data),
+                  state.providerIndex >= 0,
+                  state.providerIndex <= providerCount,
+                  state.offsets.count == providerCount,
+                  state.continuationTokens.count == providerCount else {
                 throw ArchonModelsError.invalidResponse
             }
             return state

@@ -114,6 +114,34 @@ private actor OfficialHuggingFaceHTTPClient: ModelHTTPClient {
     }
 }
 
+private actor ConcurrentProbeHTTPClient: ModelHTTPClient {
+    let officialPayload: Data
+    private var activeRequests = 0
+    private var peakActiveRequests = 0
+
+    init(officialPayload: Data) {
+        self.officialPayload = officialPayload
+    }
+
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        guard let url = request.url,
+              let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil) else {
+            throw ArchonModelsError.invalidResponse
+        }
+        activeRequests += 1
+        peakActiveRequests = max(peakActiveRequests, activeRequests)
+        defer { activeRequests -= 1 }
+        try await Task.sleep(for: .milliseconds(20))
+        let author = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+            .first(where: { $0.name == "author" })?.value
+        return (author?.lowercased() == "qwen" ? officialPayload : Data("[]".utf8), response)
+    }
+
+    func peakRequestCount() -> Int {
+        peakActiveRequests
+    }
+}
+
 private actor PagingModelHTTPClient: ModelHTTPClient {
     let responses: [Data]
     let nextPageURL: URL
@@ -895,6 +923,34 @@ struct ArchonModelsTests {
         #expect(authors.allSatisfy {
             OfficialModelCatalogPolicy.defaultHuggingFaceOrganizations.contains($0.lowercased())
         })
+    }
+
+    @Test("Official Hugging Face discovery probes namespaces concurrently")
+    func officialCatalogProbesNamespacesConcurrently() async throws {
+        let payload = Data(#"""
+        [{
+          "id": "Qwen/Qwen3-0.6B-MLX-4bit",
+          "author": "Qwen",
+          "pipeline_tag": "text-generation",
+          "tags": ["mlx", "0.6b"],
+          "siblings": [
+            {"rfilename": "model.safetensors", "size": 100},
+            {"rfilename": "config.json", "size": 20},
+            {"rfilename": "tokenizer.json", "size": 30}
+          ]
+        }]
+        """#.utf8)
+        let session = ConcurrentProbeHTTPClient(officialPayload: payload)
+        let catalog = OfficialModelCatalog(provider: HuggingFaceCatalog(
+            baseURL: URL(string: "https://example.com")!,
+            session: session,
+            tokenStore: nil
+        ))
+
+        let models = try await catalog.search(ModelSearchRequest(query: "Qwen", limit: 1))
+
+        #expect(models.map(\.id) == ["Qwen/Qwen3-0.6B-MLX-4bit"])
+        #expect(await session.peakRequestCount() > 1)
     }
 
     @Test("Wrapping an official catalog twice does not duplicate its provider boundary")
