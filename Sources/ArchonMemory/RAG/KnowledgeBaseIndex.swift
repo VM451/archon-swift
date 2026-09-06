@@ -85,7 +85,7 @@ public actor KnowledgeBaseIndex {
         for (_, entry) in storedChunks {
             // Apply filtering
             if let filter = filter {
-                if let u = filter.userId, entry.userId != nil, entry.userId != u {
+                if let u = filter.userId, entry.userId != u {
                     continue
                 }
                 if !filter.tags.isEmpty {

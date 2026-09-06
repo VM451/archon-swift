@@ -38,6 +38,31 @@ struct OnDeviceModelSelectorTests {
         #expect(mac.isAppleFoundationModelSupported)
     }
 
+    @Test("iPhone 17 Pro test profile keeps the conservative mobile model envelope")
+    func keepsIPhone17ProConservativeUntilDeviceEvidenceExists() {
+        let profile = DeviceHardwareProfile.iPhone17Pro
+
+        #expect(profile.memoryTier == .performance)
+        #expect(profile.physicalMemoryGB >= 12.0)
+        #expect(profile.safeModelMemoryBudgetMB == 1280)
+        #expect(GemmaModelCatalog.safeResolve(for: profile, preference: .intelligenceFirst) == nil)
+        #expect(GemmaModelCatalog.fits(GemmaModelCatalog.gemma4_9b_4bit, on: profile) == false)
+    }
+
+    @Test("Preserves the iPhone 16 process budget when dynamic headroom is transiently low")
+    func keepsIPhone16LoadGateConsistentWithCatalogPreflight() {
+        let profile = DeviceHardwareProfile.iPhone15Pro
+        let transientDynamicRecommendation: UInt64 = 443_488_831
+
+        let effectiveBudget = DeviceHardwareProfile.effectiveModelMemoryBudgetBytes(
+            dynamicRecommendationBytes: transientDynamicRecommendation,
+            profile: profile
+        )
+
+        #expect(effectiveBudget == profile.safeModelMemoryBudgetBytes)
+        #expect(effectiveBudget >= 600_000_000)
+    }
+
     @Test("Treats visionOS as a first-class Apple model-routing platform")
     func classifiesVisionOS() {
         let profile = DeviceHardwareProfile(
@@ -256,7 +281,7 @@ struct OnDeviceModelSelectorTests {
         let iPhone12 = DeviceHardwareProfile.iPhone12Base
         #expect(iPhone12.appProcessMemoryLimitGB == 2.0)
         #expect(iPhone12.modelMemoryBudgetFraction == 0.50)
-        #expect(iPhone12.safeModelMemoryBudgetMB == 819)
+        #expect(iPhone12.safeModelMemoryBudgetMB == 1024)
 
         // The preference resolver remains a sizing hint; the safe resolver is
         // the runtime/download gate and correctly offers no model here.

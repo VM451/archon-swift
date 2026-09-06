@@ -2,6 +2,7 @@ import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
+import ArchonCore
 
 /// Defines the source engine/directory to run discovery queries against.
 public enum DiscoverySource: Sendable, Codable, Hashable {
@@ -18,9 +19,13 @@ public enum DiscoverySource: Sendable, Codable, Hashable {
 
 public struct DiscoveryEngine: Sendable {
     private let session: URLSession
+    private let allowedLocalWorkspaceRoots: [URL]
     
-    public init(session: URLSession? = nil) {
+    public init(session: URLSession? = nil, localWorkspaceRoots: [URL] = []) {
         self.session = session ?? SearchURLPolicy.makeSession()
+        self.allowedLocalWorkspaceRoots = localWorkspaceRoots
+            .filter(\.isFileURL)
+            .map { $0.standardizedFileURL.resolvingSymlinksInPath() }
     }
     
     /// Queries the selected search source for target URLs.
@@ -43,6 +48,7 @@ public struct DiscoveryEngine: Sendable {
     
     /// Queries DuckDuckGo HTML interface for organic search results.
     private func searchDuckDuckGo(query: String) async throws -> [URL] {
+        try ArchonNetworkSecurity.ensureRemoteNetworkAllowed(provider: "DuckDuckGo search")
         guard let url = Self.duckDuckGoURL(for: query) else {
             throw URLError(.badURL)
         }
@@ -140,6 +146,7 @@ public struct DiscoveryEngine: Sendable {
     
     /// Queries Wikipedia open search API for matching page URLs.
     private func searchWikipedia(query: String) async throws -> [URL] {
+        try ArchonNetworkSecurity.ensureRemoteNetworkAllowed(provider: "Wikipedia search")
         guard let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
               let url = URL(string: "https://en.wikipedia.org/w/api.php?action=opensearch&search=\(encodedQuery)&limit=10&namespace=0&format=json") else {
             throw URLError(.badURL)
@@ -170,16 +177,20 @@ public struct DiscoveryEngine: Sendable {
     private func searchLocalWorkspace(query: String, directoryPath: String) async throws -> [URL] {
         try Task.checkCancellation()
         let fileManager = FileManager.default
+        let requestedRoot = URL(fileURLWithPath: directoryPath).standardizedFileURL.resolvingSymlinksInPath()
+        guard isAllowedLocalWorkspaceRoot(requestedRoot) else {
+            throw SearchError.extractionFailed(reason: "The local workspace path is not within a host-authorized workspace root.")
+        }
         var isDir: ObjCBool = false
-        guard fileManager.fileExists(atPath: directoryPath, isDirectory: &isDir), isDir.boolValue else {
+        guard fileManager.fileExists(atPath: requestedRoot.path, isDirectory: &isDir), isDir.boolValue else {
             return []
         }
         
-        guard let enumerator = fileManager.enumerator(atPath: directoryPath) else {
+        guard let enumerator = fileManager.enumerator(atPath: requestedRoot.path) else {
             return []
         }
         
-        let rootURL = URL(fileURLWithPath: directoryPath).standardizedFileURL.resolvingSymlinksInPath()
+        let rootURL = requestedRoot
         var urls = [URL]()
         let maxScannedEntries = 25_000
         var scannedEntries = 0
@@ -191,7 +202,7 @@ public struct DiscoveryEngine: Sendable {
               let fileRelativePath = enumerator.nextObject() as? String {
             try Task.checkCancellation()
             scannedEntries += 1
-            let fileURL = URL(fileURLWithPath: directoryPath).appendingPathComponent(fileRelativePath)
+            let fileURL = requestedRoot.appendingPathComponent(fileRelativePath)
             let pathExtension = fileURL.pathExtension.lowercased()
             if pathExtension == "txt" || pathExtension == "md" {
                 do {
@@ -209,7 +220,7 @@ public struct DiscoveryEngine: Sendable {
                     let lowerContent = content.lowercased()
                     let matches = queryTerms.isEmpty ? true : queryTerms.contains { lowerContent.contains($0) }
                     if matches {
-                        urls.append(fileURL)
+                        urls.append(resolvedURL)
                     }
                 } catch {
                     // Ignore unreadable files
@@ -218,6 +229,13 @@ public struct DiscoveryEngine: Sendable {
         }
         
         return urls
+    }
+
+    private func isAllowedLocalWorkspaceRoot(_ requestedRoot: URL) -> Bool {
+        guard requestedRoot.isFileURL else { return false }
+        return allowedLocalWorkspaceRoots.contains { allowedRoot in
+            requestedRoot == allowedRoot || requestedRoot.path.hasPrefix(allowedRoot.path + "/")
+        }
     }
     
     /// Parses raw HTML from DuckDuckGo SERP and extracts external organic links.

@@ -61,21 +61,58 @@ public protocol DocumentLoader: Sendable {
     func load(data: Data, filename: String, metadata: [String: String]) async throws -> [LoadedDocument]
 }
 
+/// Shared input limits for public document-loading entry points.
+public enum DocumentInputLimits: Sendable {
+    public static let maxBytes = 8 * 1024 * 1024
+    /// Bounds decoded PDF work even when a small compressed PDF expands greatly.
+    public static let maximumPDFPages = 1_024
+    public static let maximumExtractedTextBytes = 8 * 1024 * 1024
+
+    public static func validate(fileURL url: URL) throws {
+        guard url.isFileURL,
+              let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let type = attributes[.type] as? FileAttributeType,
+              type == .typeRegular,
+              let size = attributes[.size] as? NSNumber,
+              size.int64Value <= Int64(maxBytes) else {
+            throw ArchonMemoryError.documentLoadFailed("Document input must be a regular file no larger than \(maxBytes) bytes.")
+        }
+    }
+
+    public static func validate(data: Data) throws {
+        guard data.count <= maxBytes else {
+            throw ArchonMemoryError.inputTooLarge(maxBytes: maxBytes)
+        }
+    }
+}
+
+private enum DocumentInputGuard {
+    static func data(from url: URL) throws -> Data {
+        try DocumentInputLimits.validate(fileURL: url)
+
+        let data = try Data(contentsOf: url)
+        try validate(data)
+        return data
+    }
+
+    static func validate(_ data: Data) throws {
+        try DocumentInputLimits.validate(data: data)
+    }
+}
+
 // MARK: - Plain Text & RTF Loader
 
 public struct PlainTextDocumentLoader: DocumentLoader {
-    public static let maxInputBytes = 8 * 1024 * 1024
+    public static let maxInputBytes = DocumentInputLimits.maxBytes
     public let supportedExtensions: [String] = ["txt", "text", "rtf", "log", "org"]
 
     public init() {}
 
     public func load(from url: URL) async throws -> [LoadedDocument] {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-              let size = attributes[.size] as? NSNumber,
-              size.int64Value <= Int64(Self.maxInputBytes) else {
-            throw ArchonMemoryError.inputTooLarge(maxBytes: Self.maxInputBytes)
+        let data = try DocumentInputGuard.data(from: url)
+        guard let content = String(data: data, encoding: .utf8) else {
+            throw ArchonMemoryError.documentLoadFailed("The text file is not valid UTF-8.")
         }
-        let content = try String(contentsOf: url, encoding: .utf8)
         let filename = url.lastPathComponent
         return [
             LoadedDocument(
@@ -91,9 +128,7 @@ public struct PlainTextDocumentLoader: DocumentLoader {
     }
 
     public func load(data: Data, filename: String, metadata: [String: String]) async throws -> [LoadedDocument] {
-        guard data.count <= Self.maxInputBytes else {
-            throw ArchonMemoryError.inputTooLarge(maxBytes: Self.maxInputBytes)
-        }
+        try DocumentInputGuard.validate(data)
         let content = String(decoding: data, as: UTF8.self)
         let ext = (filename as NSString).pathExtension.lowercased()
         return [
@@ -118,11 +153,12 @@ public struct MarkdownDocumentLoader: DocumentLoader {
     public init() {}
 
     public func load(from url: URL) async throws -> [LoadedDocument] {
-        let text = try String(contentsOf: url, encoding: .utf8)
-        return try await load(data: Data(text.utf8), filename: url.lastPathComponent, metadata: ["sourceURL": url.absoluteString])
+        let data = try DocumentInputGuard.data(from: url)
+        return try await load(data: data, filename: url.lastPathComponent, metadata: ["sourceURL": url.absoluteString])
     }
 
     public func load(data: Data, filename: String, metadata: [String: String]) async throws -> [LoadedDocument] {
+        try DocumentInputGuard.validate(data)
         let text = String(decoding: data, as: UTF8.self)
         let lines = text.components(separatedBy: .newlines)
 
@@ -178,11 +214,12 @@ public struct CodeDocumentLoader: DocumentLoader {
     public init() {}
 
     public func load(from url: URL) async throws -> [LoadedDocument] {
-        let text = try String(contentsOf: url, encoding: .utf8)
-        return try await load(data: Data(text.utf8), filename: url.lastPathComponent, metadata: ["sourceURL": url.absoluteString])
+        let data = try DocumentInputGuard.data(from: url)
+        return try await load(data: data, filename: url.lastPathComponent, metadata: ["sourceURL": url.absoluteString])
     }
 
     public func load(data: Data, filename: String, metadata: [String: String]) async throws -> [LoadedDocument] {
+        try DocumentInputGuard.validate(data)
         let text = String(decoding: data, as: UTF8.self)
         let lines = text.components(separatedBy: .newlines)
         let ext = (filename as NSString).pathExtension.lowercased()
@@ -219,11 +256,12 @@ public struct StructuredDataDocumentLoader: DocumentLoader {
     public init() {}
 
     public func load(from url: URL) async throws -> [LoadedDocument] {
-        let data = try Data(contentsOf: url)
+        let data = try DocumentInputGuard.data(from: url)
         return try await load(data: data, filename: url.lastPathComponent, metadata: ["sourceURL": url.absoluteString])
     }
 
     public func load(data: Data, filename: String, metadata: [String: String]) async throws -> [LoadedDocument] {
+        try DocumentInputGuard.validate(data)
         let ext = (filename as NSString).pathExtension.lowercased()
         let rawText = String(decoding: data, as: UTF8.self)
 
@@ -290,11 +328,12 @@ public struct AppleNotesExportLoader: DocumentLoader {
     public init() {}
 
     public func load(from url: URL) async throws -> [LoadedDocument] {
-        let text = try String(contentsOf: url, encoding: .utf8)
-        return try await load(data: Data(text.utf8), filename: url.lastPathComponent, metadata: ["sourceURL": url.absoluteString])
+        let data = try DocumentInputGuard.data(from: url)
+        return try await load(data: data, filename: url.lastPathComponent, metadata: ["sourceURL": url.absoluteString])
     }
 
     public func load(data: Data, filename: String, metadata: [String: String]) async throws -> [LoadedDocument] {
+        try DocumentInputGuard.validate(data)
         let raw = String(decoding: data, as: UTF8.self)
         // Clean basic HTML markup if from Apple Notes export
         let cleaned = raw
@@ -326,10 +365,11 @@ public struct PDFDocumentLoader: DocumentLoader {
 
     public func load(from url: URL) async throws -> [LoadedDocument] {
         #if canImport(PDFKit)
-        guard let pdfDoc = PDFDocument(url: url) else {
+        let data = try DocumentInputGuard.data(from: url)
+        guard let pdfDoc = PDFDocument(data: data) else {
             throw ArchonMemoryError.documentLoadFailed("Failed to open PDF at \(url.path).")
         }
-        return parse(pdf: pdfDoc, title: url.deletingPathExtension().lastPathComponent, sourceURL: url.absoluteString)
+        return try parse(pdf: pdfDoc, title: url.deletingPathExtension().lastPathComponent, sourceURL: url.absoluteString)
         #else
         throw ArchonMemoryError.unsupportedDocumentFormat("PDFKit is unavailable on this platform.")
         #endif
@@ -337,33 +377,49 @@ public struct PDFDocumentLoader: DocumentLoader {
 
     public func load(data: Data, filename: String, metadata: [String: String]) async throws -> [LoadedDocument] {
         #if canImport(PDFKit)
+        try DocumentInputGuard.validate(data)
         guard let pdfDoc = PDFDocument(data: data) else {
             throw ArchonMemoryError.documentLoadFailed("Failed to decode PDF data for \(filename).")
         }
         let title = (filename as NSString).deletingPathExtension
-        return parse(pdf: pdfDoc, title: title, sourceURL: metadata["sourceURL"])
+        return try parse(pdf: pdfDoc, title: title, sourceURL: metadata["sourceURL"])
         #else
         throw ArchonMemoryError.unsupportedDocumentFormat("PDFKit is unavailable on this platform.")
         #endif
     }
 
     #if canImport(PDFKit)
-    private func parse(pdf: PDFDocument, title: String, sourceURL: String?) -> [LoadedDocument] {
+    private func parse(pdf: PDFDocument, title: String, sourceURL: String?) throws -> [LoadedDocument] {
+        guard pdf.pageCount <= DocumentInputLimits.maximumPDFPages else {
+            throw ArchonMemoryError.documentLoadFailed(
+                "PDF contains too many pages; the maximum is \(DocumentInputLimits.maximumPDFPages)."
+            )
+        }
+
         var pages: [DocumentPage] = []
-        var fullText = ""
+        var fullText = Data()
 
         for i in 0..<pdf.pageCount {
             if let page = pdf.page(at: i), let str = page.string {
                 let clean = str.trimmingCharacters(in: .whitespacesAndNewlines)
+                let pageText = "--- Page \(i + 1) ---\n\(clean)\n\n"
+                let pageData = Data(pageText.utf8)
+                guard pageData.count <= DocumentInputLimits.maximumExtractedTextBytes,
+                      fullText.count <= DocumentInputLimits.maximumExtractedTextBytes - pageData.count else {
+                    throw ArchonMemoryError.documentLoadFailed(
+                        "PDF text exceeds the \(DocumentInputLimits.maximumExtractedTextBytes)-byte extraction limit."
+                    )
+                }
                 pages.append(DocumentPage(pageNumber: i + 1, content: clean))
-                fullText += "--- Page \(i + 1) ---\n" + clean + "\n\n"
+                fullText.append(pageData)
             }
         }
 
         return [
             LoadedDocument(
                 title: title,
-                content: fullText.trimmingCharacters(in: .whitespacesAndNewlines),
+                content: String(decoding: fullText, as: UTF8.self)
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
                 sourceURL: sourceURL,
                 mimeType: "application/pdf",
                 fileExtension: "pdf",
@@ -396,11 +452,7 @@ public struct AutoDocumentLoader: DocumentLoader {
     }
 
     public func load(from url: URL) async throws -> [LoadedDocument] {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-              let size = attributes[.size] as? NSNumber,
-              size.int64Value <= Int64(PlainTextDocumentLoader.maxInputBytes) else {
-            throw ArchonMemoryError.inputTooLarge(maxBytes: PlainTextDocumentLoader.maxInputBytes)
-        }
+        _ = try DocumentInputGuard.data(from: url)
         let ext = url.pathExtension.lowercased()
         for loader in loaders {
             if loader.supportedExtensions.contains(ext) {
@@ -411,9 +463,7 @@ public struct AutoDocumentLoader: DocumentLoader {
     }
 
     public func load(data: Data, filename: String, metadata: [String: String]) async throws -> [LoadedDocument] {
-        guard data.count <= PlainTextDocumentLoader.maxInputBytes else {
-            throw ArchonMemoryError.inputTooLarge(maxBytes: PlainTextDocumentLoader.maxInputBytes)
-        }
+        try DocumentInputGuard.validate(data)
         let ext = (filename as NSString).pathExtension.lowercased()
         for loader in loaders {
             if loader.supportedExtensions.contains(ext) {

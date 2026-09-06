@@ -1,4 +1,5 @@
 import Foundation
+import ArchonCore
 
 /// An on-device monitor that polls a query at a cadence and reports new results.
 /// Supports an optional user-supplied webhook URL for local or remote callbacks.
@@ -104,6 +105,7 @@ public actor ArchonSearchMonitor {
     }
     
     private nonisolated func post(_ event: Event, to url: URL) async throws {
+        try ArchonNetworkSecurity.ensureRemoteNetworkAllowed(provider: "Search monitor webhook")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")

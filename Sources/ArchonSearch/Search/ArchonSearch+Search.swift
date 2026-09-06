@@ -107,7 +107,7 @@ extension ArchonSearch {
                 }
             }
         case .full(let scrapeConfig):
-            let scraper = await StealthScraper()
+            let scraper = await StealthScraper(localWorkspaceRoots: localWorkspaceRoots)
             for (index, url) in targetURLs.enumerated() {
                 if let latency = latency, Date().timeIntervalSince(startTime) >= latency { break }
                 do {

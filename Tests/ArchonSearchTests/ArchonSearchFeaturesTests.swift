@@ -5,10 +5,10 @@ import Foundation
 @Suite("Search, Contents & Feature API Tests")
 struct ArchonSearchFeaturesTests {
 
-    private func makeEngine() -> ArchonSearch {
-        ArchonSearch { _, _, _ in
+    private func makeEngine(localWorkspaceRoots: [URL] = []) -> ArchonSearch {
+        ArchonSearch(structuredExtractionHandler: { _, _, _ in
             Data(#"{"coreProduct":"Headless CMS Platform","pricing":"$49/mo","mission":"Injected test result"}"#.utf8)
-        }
+        }, localWorkspaceRoots: localWorkspaceRoots)
     }
     
     private func makeTempHTMLDirectory(fileName: String, content: String) throws -> URL {
@@ -34,7 +34,7 @@ struct ArchonSearchFeaturesTests {
         let tempDir = try makeTempHTMLDirectory(fileName: "apple.md", content: content)
         defer { try? FileManager.default.removeItem(at: tempDir) }
         
-        let engine = makeEngine()
+        let engine = makeEngine(localWorkspaceRoots: [tempDir])
         let results = try await engine.search(
             query: "Apple Intelligence",
             source: .localWorkspace(directoryPath: tempDir.path),
@@ -55,7 +55,7 @@ struct ArchonSearchFeaturesTests {
         let tempDir = try makeTempHTMLDirectory(fileName: "local.md", content: content)
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        let provider = ArchonSearchProvider(engine: makeEngine())
+        let provider = ArchonSearchProvider(engine: makeEngine(localWorkspaceRoots: [tempDir]))
         let response = try await provider.search(SearchRequest(
             query: "offline search",
             source: .localWorkspace(directoryPath: tempDir.path)
@@ -116,7 +116,7 @@ struct ArchonSearchFeaturesTests {
         defer { try? fileManager.removeItem(at: tempDir) }
 
         let task = Task {
-            try await DiscoveryEngine().search(
+            try await DiscoveryEngine(localWorkspaceRoots: [tempDir]).search(
                 query: "cancel",
                 source: .localWorkspace(directoryPath: tempDir.path)
             )
@@ -147,7 +147,7 @@ struct ArchonSearchFeaturesTests {
         let tempDir = try makeTempHTMLDirectory(fileName: "swiftdata.md", content: content)
         defer { try? FileManager.default.removeItem(at: tempDir) }
         
-        let engine = makeEngine()
+        let engine = makeEngine(localWorkspaceRoots: [tempDir])
         let results = try await engine.contents(
             query: "SwiftData storage",
             source: .localWorkspace(directoryPath: tempDir.path),
@@ -171,7 +171,7 @@ struct ArchonSearchFeaturesTests {
         )
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        let engine = makeEngine()
+        let engine = makeEngine(localWorkspaceRoots: [tempDir])
         let searchResults = try await engine.search(
             query: "budget",
             source: .localWorkspace(directoryPath: tempDir.path),
@@ -196,13 +196,13 @@ struct ArchonSearchFeaturesTests {
         let tempDir = try makeTempHTMLDirectory(fileName: "bounded.md", content: "bounded search content")
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        let emptyResults = try await makeEngine().search(
+        let emptyResults = try await makeEngine(localWorkspaceRoots: [tempDir]).search(
             query: "bounded",
             source: .localWorkspace(directoryPath: tempDir.path),
             maxResults: -1,
             livecrawl: .fast
         )
-        let boundedResults = try await makeEngine().search(
+        let boundedResults = try await makeEngine(localWorkspaceRoots: [tempDir]).search(
             query: "bounded",
             source: .localWorkspace(directoryPath: tempDir.path),
             maxResults: 1,
@@ -229,7 +229,7 @@ struct ArchonSearchFeaturesTests {
         let tempDir = try makeTempHTMLDirectory(fileName: "cms.md", content: content1)
         defer { try? FileManager.default.removeItem(at: tempDir) }
         
-        let engine = makeEngine()
+        let engine = makeEngine(localWorkspaceRoots: [tempDir])
         let output = try await engine.deepSearch(
             query: "Top headless CMS startups 2026",
             subQueries: ["cms"],
@@ -264,7 +264,7 @@ struct ArchonSearchFeaturesTests {
         try page2.write(to: tempDir.appendingPathComponent("two.md"), atomically: true, encoding: .utf8)
         defer { try? fileManager.removeItem(at: tempDir) }
         
-        let engine = makeEngine()
+        let engine = makeEngine(localWorkspaceRoots: [tempDir])
         let list = try await engine.buildList(
             query: "product",
             itemType: TestResearch.self,
@@ -289,7 +289,7 @@ struct ArchonSearchFeaturesTests {
         let tempDir = try makeTempHTMLDirectory(fileName: "monitor.md", content: content)
         defer { try? FileManager.default.removeItem(at: tempDir) }
         
-        let engine = ArchonSearch()
+        let engine = ArchonSearch(localWorkspaceRoots: [tempDir])
         let monitor = engine.startMonitor(
             query: "ArchonSearch",
             cadence: 0.2,

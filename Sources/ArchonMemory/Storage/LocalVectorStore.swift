@@ -517,7 +517,7 @@ public actor LocalVectorStore: VectorStore {
             var sql = "SELECT * FROM documents WHERE isDeleted = 0"
             var args: [DatabaseValueConvertible] = []
             if let userId = userId {
-                sql += " AND (userId = ? OR userId IS NULL)"
+                sql += " AND userId = ?"
                 args.append(userId)
             }
             

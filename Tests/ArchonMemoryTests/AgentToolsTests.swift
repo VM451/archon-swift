@@ -37,7 +37,8 @@ struct AgentToolsTests {
         let setRes = try await ArchonMemoryAgentTools.handleToolCall(
             client: client,
             toolName: "memory_set_core",
-            argumentsJSON: setArgs
+            argumentsJSON: setArgs,
+            authenticatedUserID: userId
         )
         #expect(setRes.contains("Successfully updated"))
 
@@ -45,7 +46,8 @@ struct AgentToolsTests {
         let getRes = try await ArchonMemoryAgentTools.handleToolCall(
             client: client,
             toolName: "memory_get_core",
-            argumentsJSON: getArgs
+            argumentsJSON: getArgs,
+            authenticatedUserID: userId
         )
         #expect(getRes.contains("persona") || getRes.contains("Assistant Persona"))
     }
@@ -69,7 +71,8 @@ struct AgentToolsTests {
         let addRes = try await ArchonMemoryAgentTools.handleToolCall(
             client: client,
             toolName: "memory_add",
-            argumentsJSON: addArgs
+            argumentsJSON: addArgs,
+            authenticatedUserID: userId
         )
         #expect(addRes.contains("Successfully extracted"))
 
@@ -77,9 +80,33 @@ struct AgentToolsTests {
         let recallRes = try await ArchonMemoryAgentTools.handleToolCall(
             client: client,
             toolName: "memory_recall",
-            argumentsJSON: recallArgs
+            argumentsJSON: recallArgs,
+            authenticatedUserID: userId
         )
         #expect(recallRes.contains("Cupertino") || recallRes.contains("USER"))
+    }
+
+    @Test("Memory agent tools require the authenticated user scope")
+    func memoryToolsRequireAuthenticatedScope() async throws {
+        let vectorStore = try LocalVectorStore(inMemory: true)
+        let graphStore = try LocalGraphStore(inMemory: true)
+        let config = ArchonConfig(
+            llmProvider: MockLLMProvider(),
+            embeddingProvider: MockEmbeddingProvider(vectorDimension: 64),
+            customVectorStore: vectorStore,
+            customGraphStore: graphStore,
+            enableAutoSync: false,
+            enableSpotlightIndexing: false
+        )
+        let client = try await ArchonClient(config: config)
+
+        let result = try await ArchonMemoryAgentTools.handleToolCall(
+            client: client,
+            toolName: "memory_recall",
+            argumentsJSON: #"{"userId":"other-user"}"#,
+            authenticatedUserID: "authenticated-user"
+        )
+        #expect(result.contains("must match the authenticated user identity"))
     }
 
 }

@@ -102,6 +102,7 @@ public struct SandboxPatchTool: Tool {
 
 /// Built-in tool for extracting token-optimized semantic DOM structures (Markdown/JSON) from the sandbox.
 public struct SandboxInspectDOMTool: Tool {
+    private static let maximumTokenBudget = 64_000
     public var definition: ToolDefinition {
         ToolDefinition(
             name: "sandboxInspectDOM",
@@ -115,7 +116,7 @@ public struct SandboxInspectDOMTool: Tool {
                     ]),
                     "maxTokens": AnySendable([
                         "type": AnySendable("integer"),
-                        "description": AnySendable("Token budget for pruning the DOM hierarchy (default: 4096)")
+                        "description": AnySendable("Token budget for pruning the DOM hierarchy (default: 4096, maximum: 64000)")
                     ])
                 ]),
                 "required": AnySendable([String: AnySendable]())
@@ -158,6 +159,9 @@ public struct SandboxInspectDOMTool: Tool {
             if let m = json["maxTokens"] as? Int { maxTokens = m }
         }
 
+        guard (0...Self.maximumTokenBudget).contains(maxTokens) else {
+            return "Error: maxTokens must be between 0 and \(Self.maximumTokenBudget)."
+        }
         return try await inspectHandler(format, maxTokens)
     }
 }

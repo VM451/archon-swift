@@ -1,4 +1,5 @@
 import Foundation
+import ArchonCore
 
 #if canImport(FoundationModels)
 import FoundationModels
@@ -213,6 +214,8 @@ public final class PrivateCloudComputeProvider: LLMProvider, @unchecked Sendable
             throw PrivateCloudComputeError.emptyPrompt
         }
 
+        try ArchonNetworkSecurity.ensureRemoteNetworkAllowed(provider: "Private Cloud Compute")
+
         if let mock = mockResponse(for: transcript.userPrompt) {
             if simulatedDelay > 0 {
                 try await Task.sleep(for: .seconds(simulatedDelay))
@@ -257,6 +260,8 @@ public final class PrivateCloudComputeProvider: LLMProvider, @unchecked Sendable
                     guard !transcript.userPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                         throw PrivateCloudComputeError.emptyPrompt
                     }
+
+                    try ArchonNetworkSecurity.ensureRemoteNetworkAllowed(provider: "Private Cloud Compute")
 
                     if let mock = self.mockResponse(for: transcript.userPrompt) {
                         for word in mock.split(whereSeparator: \.isWhitespace) {

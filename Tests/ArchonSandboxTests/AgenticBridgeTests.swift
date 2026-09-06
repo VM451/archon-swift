@@ -32,6 +32,8 @@ struct AgenticBridgeTests {
         
         let pruned = SemanticDOMExtractor.pruneToTokenBudget(markdown, maxTokens: 10)
         #expect(pruned.contains("Truncated for token budget"))
+        #expect(SemanticDOMExtractor.pruneToTokenBudget("safe", maxTokens: Int.max) == "safe")
+        #expect(SemanticDOMExtractor.pruneToTokenBudget("safe", maxTokens: -1).contains("non-negative"))
     }
     
     @Test("ToolRegistryActor schema reflection and execution")

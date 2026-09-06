@@ -21,9 +21,14 @@ extension ArchonSearch {
         let startTime = Date()
         let seedURLs = try await discoveryEngine.search(query: query, source: source)
         guard !seedURLs.isEmpty else { throw SearchError.noResultsFound }
-        try await queueActor.enqueue(urls: seedURLs, priority: 10, parentURLString: nil)
+        try await queueActor.enqueue(
+            urls: seedURLs,
+            priority: 10,
+            parentURLString: nil,
+            localWorkspaceRoots: localWorkspaceRoots
+        )
         
-        let scraper = await StealthScraper()
+        let scraper = await StealthScraper(localWorkspaceRoots: localWorkspaceRoots)
         var items = [T]()
         var citations = [Citation]()
         var pagesScraped = 0
@@ -33,7 +38,7 @@ extension ArchonSearch {
                 throw SearchError.timeoutBudgetExceeded
             }
             
-            guard let nextURL = try await queueActor.dequeueNext() else { break }
+            guard let nextURL = try await queueActor.dequeueNext(localWorkspaceRoots: localWorkspaceRoots) else { break }
             let urlString = nextURL.absoluteString
             
             do {

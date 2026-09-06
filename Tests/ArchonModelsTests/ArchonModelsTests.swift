@@ -1441,7 +1441,8 @@ struct ArchonModelsTests {
         ))
         let coordinator = ModelBackgroundTransferCoordinator(
             sessionIdentifier: "com.archon.tests.background-event-cancel.\(UUID().uuidString)",
-            store: store
+            store: store,
+            destinationRootURL: root
         )
 
         let events = try await coordinator.events(for: identifier)
@@ -1479,7 +1480,8 @@ struct ArchonModelsTests {
         try await store.save(ModelBackgroundDownloadRecord(request: request, status: .downloading))
         let coordinator = ModelBackgroundTransferCoordinator(
             sessionIdentifier: "com.archon.tests.background-orphan-cancel.\(UUID().uuidString)",
-            store: store
+            store: store,
+            destinationRootURL: root
         )
         let events = try await coordinator.events(for: identifier)
         let consumer = Task {
@@ -1514,7 +1516,8 @@ struct ArchonModelsTests {
             destinationURL: destination
         )
         let coordinator = ModelBackgroundTransferCoordinator(
-            sessionIdentifier: "com.archon.tests.background-late-completion.\(UUID().uuidString)"
+            sessionIdentifier: "com.archon.tests.background-late-completion.\(UUID().uuidString)",
+            destinationRootURL: root
         )
         _ = try await coordinator.start(request)
         let taskIdentifier = try #require(try await coordinator.record(for: identifier)?.taskIdentifier)
@@ -1550,7 +1553,8 @@ struct ArchonModelsTests {
         ))
         let coordinator = ModelBackgroundTransferCoordinator(
             sessionIdentifier: "com.archon.tests.background-reconnect-missing.\(UUID().uuidString)",
-            store: store
+            store: store,
+            destinationRootURL: root
         )
 
         _ = try await coordinator.reconnect()

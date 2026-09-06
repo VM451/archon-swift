@@ -25,7 +25,10 @@ extension ArchonSearch {
         for (index, subQuery) in allQueries.enumerated() {
             if let timeout = timeout, Date().timeIntervalSince(startTime) >= timeout { break }
             let remaining = timeout.map { max(0, startTime.addingTimeInterval($0).timeIntervalSinceNow) }
-            let stepEngine = ArchonSearch(structuredExtractionHandler: structuredExtractionHandler)
+            let stepEngine = ArchonSearch(
+                structuredExtractionHandler: structuredExtractionHandler,
+                localWorkspaceRoots: localWorkspaceRoots
+            )
             let output = try await stepEngine.research(
                 query: subQuery,
                 extracting: type,

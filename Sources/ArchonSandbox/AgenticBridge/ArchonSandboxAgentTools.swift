@@ -38,7 +38,7 @@ public struct ArchonSandboxAgentTools: Sendable {
               "type": "object",
               "properties": {
                 "format": { "type": "string", "description": "Format to return: 'markdown' or 'json' (default: 'markdown')" },
-                "maxTokens": { "type": "integer", "description": "Token budget for pruning the DOM hierarchy (default: 4096)" }
+                "maxTokens": { "type": "integer", "description": "Token budget for pruning the DOM hierarchy (default: 4096, maximum: 64000)" }
               }
             }
           },
@@ -108,6 +108,9 @@ public struct ArchonSandboxAgentTools: Sendable {
 
         case "sandbox_inspect_dom":
             let maxTokens = (json["maxTokens"] as? Int) ?? 4096
+            guard (0...SemanticDOMExtractor.maximumTokenBudget).contains(maxTokens) else {
+                return "Error: maxTokens must be between 0 and \(SemanticDOMExtractor.maximumTokenBudget)."
+            }
             if let indexFile = workspace.file(at: "index.html"), let text = indexFile.content.utf8Text {
                 let markdown = SemanticDOMExtractor.jsonToSemanticMarkdown(text)
                 return SemanticDOMExtractor.pruneToTokenBudget(markdown, maxTokens: maxTokens)

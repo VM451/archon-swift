@@ -306,6 +306,7 @@ public enum MCPTransportError: Error, LocalizedError, Equatable, Sendable {
     case timeout(TimeInterval)
     case invalidArguments(String)
     case responseTooLarge(maximumBytes: Int)
+    case collectionTooLarge(maximumItems: Int)
     case sdkFailure(String)
 
     public var errorDescription: String? {
@@ -318,6 +319,7 @@ public enum MCPTransportError: Error, LocalizedError, Equatable, Sendable {
         case .timeout(let seconds): "MCP request timed out after \(seconds) seconds."
         case .invalidArguments(let reason): "MCP tool arguments are invalid: \(reason)"
         case .responseTooLarge(let maximumBytes): "MCP response exceeds the \(maximumBytes)-byte safety limit."
+        case .collectionTooLarge(let maximumItems): "MCP collection exceeds the \(maximumItems)-item safety limit."
         case .sdkFailure(let reason): "The official MCP Swift SDK failed: \(reason)"
         }
     }
@@ -326,6 +328,11 @@ public enum MCPTransportError: Error, LocalizedError, Equatable, Sendable {
         if case .serverError(let code, _) = self { return code == -32601 }
         return false
     }
+}
+
+enum MCPTransportLimits {
+    static let maximumCollectionItems = 1_000
+    static let maximumPaginationPages = 100
 }
 
 /// JSON-RPC MCP transport for HTTP or streamable-HTTP servers.
@@ -398,6 +405,9 @@ public actor MCPHTTPTransport: MCPTransport {
               case .array(let values) = object["tools"] else {
             throw MCPTransportError.invalidResponse
         }
+        guard values.count <= MCPTransportLimits.maximumCollectionItems else {
+            throw MCPTransportError.collectionTooLarge(maximumItems: MCPTransportLimits.maximumCollectionItems)
+        }
         return try values.map { value in
             let data = try JSONEncoder().encode(value)
             return try JSONDecoder().decode(MCPTool.self, from: data)
@@ -417,6 +427,9 @@ public actor MCPHTTPTransport: MCPTransport {
         guard case .object(let object) = result,
               case .array(let content) = object["content"] else {
             throw MCPTransportError.invalidResponse
+        }
+        guard content.count <= MCPTransportLimits.maximumCollectionItems else {
+            throw MCPTransportError.collectionTooLarge(maximumItems: MCPTransportLimits.maximumCollectionItems)
         }
         let isError: Bool
         if case .bool(let value) = object["isError"] {
@@ -471,6 +484,7 @@ public actor MCPHTTPTransport: MCPTransport {
                 do {
                     try await withThrowingTaskGroup(of: Void.self) { group in
                         group.addTask {
+                            try ArchonNetworkSecurity.ensureRemoteNetworkAllowed(provider: "MCP HTTP stream")
                             let (bytes, response) = try await session.bytes(for: request)
                             guard let httpResponse = response as? HTTPURLResponse else {
                                 throw MCPTransportError.invalidResponse
@@ -532,6 +546,9 @@ public actor MCPHTTPTransport: MCPTransport {
               case .array(let values) = object["resources"] else {
             throw MCPTransportError.invalidResponse
         }
+        guard values.count <= MCPTransportLimits.maximumCollectionItems else {
+            throw MCPTransportError.collectionTooLarge(maximumItems: MCPTransportLimits.maximumCollectionItems)
+        }
         return try values.map { value in
             let data = try JSONEncoder().encode(value)
             return try JSONDecoder().decode(MCPResource.self, from: data)
@@ -547,6 +564,9 @@ public actor MCPHTTPTransport: MCPTransport {
         guard case .object(let object) = result,
               case .array(let values) = object["contents"] else {
             throw MCPTransportError.invalidResponse
+        }
+        guard values.count <= MCPTransportLimits.maximumCollectionItems else {
+            throw MCPTransportError.collectionTooLarge(maximumItems: MCPTransportLimits.maximumCollectionItems)
         }
         return try values.map { value in
             let data = try JSONEncoder().encode(value)
@@ -633,7 +653,7 @@ public actor MCPHTTPTransport: MCPTransport {
         streamTasks[streamID] = nil
     }
 
-    public func setAuthorizedToolNames(_ names: Set<String>) {
+    public func setAuthorizedToolNames(_ names: Set<String>) async {
         authorizedToolNames = names
     }
 
@@ -700,6 +720,7 @@ public actor MCPHTTPTransport: MCPTransport {
         for request: URLRequest,
         session: URLSession
     ) async throws -> (Data, URLResponse) {
+        try ArchonNetworkSecurity.ensureRemoteNetworkAllowed(provider: "MCP HTTP transport")
         let (bytes, response) = try await session.bytes(for: request)
         if let httpResponse = response as? HTTPURLResponse,
            httpResponse.expectedContentLength > Int64(maximumResponseBytes) {
@@ -707,6 +728,10 @@ public actor MCPHTTPTransport: MCPTransport {
         }
 
         var data = Data()
+        if response.expectedContentLength > 0,
+           response.expectedContentLength <= Int64(maximumResponseBytes) {
+            data.reserveCapacity(Int(response.expectedContentLength))
+        }
         for try await byte in bytes {
             try Task.checkCancellation()
             guard data.count < maximumResponseBytes else {
@@ -728,6 +753,9 @@ public actor MCPHTTPTransport: MCPTransport {
             guard case .object(let object) = result,
                   case .array(let content) = object["content"] else {
                 throw MCPTransportError.invalidResponse
+            }
+            guard content.count <= MCPTransportLimits.maximumCollectionItems else {
+                throw MCPTransportError.collectionTooLarge(maximumItems: MCPTransportLimits.maximumCollectionItems)
             }
             let isError: Bool
             if case .bool(let value) = object["isError"] {

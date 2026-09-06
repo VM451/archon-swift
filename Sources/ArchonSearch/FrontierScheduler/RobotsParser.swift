@@ -2,6 +2,7 @@ import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
+import ArchonCore
 
 public struct RobotsRules: Sendable {
     public let disallowPaths: [String]
@@ -15,6 +16,7 @@ public struct RobotsRules: Sendable {
 
 public actor RobotsParser {
     private var cache = [String: RobotsRules]()
+    private var unavailable = Set<String>()
     private let session: URLSession
     
     public init(session: URLSession? = nil) {
@@ -24,15 +26,16 @@ public actor RobotsParser {
     /// Fetches robots.txt for the given host and parses it.
     /// Results are cached in the actor.
     public func rules(for url: URL) async -> RobotsRules {
-        guard let host = url.host?.lowercased() else {
+        guard let robotsURL = Self.robotsURL(for: url) else {
             return RobotsRules()
         }
-        
-        if let cached = cache[host] {
+        let cacheKey = robotsURL.absoluteString.lowercased()
+        guard !unavailable.contains(cacheKey) else { return RobotsRules() }
+        if let cached = cache[cacheKey] {
             return cached
         }
-        
-        guard let robotsURL = URL(string: "https://\(host)/robots.txt") else {
+        if ArchonNetworkSecurity.isZeroCloudEnabled {
+            unavailable.insert(cacheKey)
             return RobotsRules()
         }
         
@@ -43,30 +46,44 @@ public actor RobotsParser {
         
         do {
             let (data, response) = try await session.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            guard data.count <= SearchURLPolicy.maxResponseBytes else {
+                unavailable.insert(cacheKey)
+                return RobotsRules()
+            }
+            guard let httpResponse = response as? HTTPURLResponse else {
+                unavailable.insert(cacheKey)
+                return RobotsRules()
+            }
+            if httpResponse.statusCode == 404 || httpResponse.statusCode == 410 {
                 let emptyRules = RobotsRules()
-                cache[host] = emptyRules
+                cache[cacheKey] = emptyRules
                 return emptyRules
+            }
+            guard httpResponse.statusCode == 200 else {
+                unavailable.insert(cacheKey)
+                return RobotsRules()
             }
             
             if let content = String(data: data, encoding: .utf8) {
                 let parsedRules = parse(content, forUserAgent: "*")
-                cache[host] = parsedRules
+                cache[cacheKey] = parsedRules
                 return parsedRules
             }
         } catch {
-            // In case of error, assume no restrictions (or default to empty)
+            unavailable.insert(cacheKey)
+            return RobotsRules()
         }
         
-        let emptyRules = RobotsRules()
-        cache[host] = emptyRules
-        return emptyRules
+        unavailable.insert(cacheKey)
+        return RobotsRules()
     }
     
     /// Checks if a URL can be crawled according to its host's robots.txt rules.
     public func canCrawl(_ url: URL) async -> Bool {
+        guard let robotsURL = Self.robotsURL(for: url) else { return false }
         let path = url.path.isEmpty ? "/" : url.path
         let rules = await rules(for: url)
+        guard !unavailable.contains(robotsURL.absoluteString.lowercased()) else { return false }
         
         for disallow in rules.disallowPaths {
             if disallow == "/" {
@@ -78,6 +95,21 @@ public actor RobotsParser {
         }
         
         return true
+    }
+
+    private static func robotsURL(for url: URL) -> URL? {
+        guard SearchURLPolicy.validate(url), let host = url.host?.lowercased() else {
+            return nil
+        }
+        var components = URLComponents()
+        components.scheme = url.scheme?.lowercased()
+        components.host = host
+        components.port = url.port
+        components.path = "/robots.txt"
+        guard let robotsURL = components.url, SearchURLPolicy.validate(robotsURL) else {
+            return nil
+        }
+        return robotsURL
     }
     
     /// Returns the crawl delay specified in the robots.txt.

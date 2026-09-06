@@ -10,11 +10,16 @@ public final class ArchonSearch: Sendable {
     internal let modelContainer: ModelContainer?
     internal let queueActor: FrontierQueueActor?
     internal let initializationFailure: String?
+    internal let localWorkspaceRoots: [URL]
     
     /// Initializes a new ArchonSearch instance.
     /// By default, initializes an in-memory SwiftData database for crawling.
-    public init(structuredExtractionHandler: StructuredExtractionHandler? = nil) {
-        self.discoveryEngine = DiscoveryEngine()
+    public init(
+        structuredExtractionHandler: StructuredExtractionHandler? = nil,
+        localWorkspaceRoots: [URL] = []
+    ) {
+        self.localWorkspaceRoots = localWorkspaceRoots
+        self.discoveryEngine = DiscoveryEngine(localWorkspaceRoots: localWorkspaceRoots)
         self.semanticCore = ArchonSemanticCore(structuredExtractionHandler: structuredExtractionHandler)
         self.structuredExtractionHandler = structuredExtractionHandler
         
@@ -61,7 +66,12 @@ public final class ArchonSearch: Sendable {
         let seedURLs = try await discoveryEngine.search(query: query, source: source)
         
         // 2. Enqueue discovered URLs into background SwiftData crawl queue
-        try await queueActor.enqueue(urls: seedURLs, priority: 10, parentURLString: nil)
+        try await queueActor.enqueue(
+            urls: seedURLs,
+            priority: 10,
+            parentURLString: nil,
+            localWorkspaceRoots: localWorkspaceRoots
+        )
         var depthByURL = [String: Int]()
         for seedURL in seedURLs {
             depthByURL[seedURL.absoluteString] = 0
@@ -72,7 +82,7 @@ public final class ArchonSearch: Sendable {
         var scrapedPagesData = [ScrapedPageData]()
         
         // Instantiate the scraper on the MainActor
-        let scraper = await StealthScraper()
+        let scraper = await StealthScraper(localWorkspaceRoots: localWorkspaceRoots)
         
         // 3. Crawl loop
         let pageBudget = min(max(maxPages, 0), 100)
@@ -84,7 +94,7 @@ public final class ArchonSearch: Sendable {
                 }
             }
             
-            guard let nextURL = try await queueActor.dequeueNext() else {
+            guard let nextURL = try await queueActor.dequeueNext(localWorkspaceRoots: localWorkspaceRoots) else {
                 break // Queue empty or no crawlable URLs remaining
             }
             
@@ -128,7 +138,12 @@ public final class ArchonSearch: Sendable {
                             }
                         }
                         // Enqueue sub-links with lower priority and set parent node
-                        try await queueActor.enqueue(urls: harvestedURLs, priority: 5, parentURLString: urlString)
+                        try await queueActor.enqueue(
+                            urls: harvestedURLs,
+                            priority: 5,
+                            parentURLString: urlString,
+                            localWorkspaceRoots: localWorkspaceRoots
+                        )
                     }
                 }
                 
@@ -204,10 +219,7 @@ public final class ArchonSearch: Sendable {
             guard let urlRange = Range(match.range(at: 1), in: text) else { continue }
             let urlStr = String(text[urlRange])
             
-            if let url = URL(string: urlStr),
-               let scheme = url.scheme?.lowercased(),
-               (scheme == "http" || scheme == "https"),
-               url.host != nil {
+            if let url = URL(string: urlStr), SearchURLPolicy.validate(url) {
                 let absolute = url.absoluteString
                 if !uniqueStrings.contains(absolute) {
                     uniqueStrings.insert(absolute)
