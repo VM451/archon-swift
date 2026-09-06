@@ -25,7 +25,10 @@ public struct ModelLibraryView: View {
         device: ArchonDeviceCapabilities? = nil
     ) {
         self.library = library
-        self.catalog = catalog.map { MLXModelCatalog(provider: $0) }
+        self.catalog = catalog.map {
+            if let mlxCatalog = $0 as? MLXModelCatalog { return mlxCatalog }
+            return MLXModelCatalog(provider: $0)
+        }
         self.downloadManager = downloadManager
         self.deviceOverride = device
     }
@@ -326,7 +329,11 @@ public struct ModelBrowserView: View {
         device: ArchonDeviceCapabilities? = nil
     ) {
         self.title = title
-        self.catalog = MLXModelCatalog(provider: catalog)
+        if let mlxCatalog = catalog as? MLXModelCatalog {
+            self.catalog = mlxCatalog
+        } else {
+            self.catalog = MLXModelCatalog(provider: catalog)
+        }
         self.library = library
         self.downloadManager = downloadManager
         self.deviceOverride = device

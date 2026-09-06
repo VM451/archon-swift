@@ -45,7 +45,10 @@ public final class ModelLibraryViewModel: ObservableObject {
         // Keep every user-facing catalog operation on the directly-runnable
         // MLX contract, while allowing community publishers that provide the
         // actual converted MLX artifacts.
-        self.catalog = catalog.map { MLXModelCatalog(provider: $0) }
+        self.catalog = catalog.map {
+            if let mlxCatalog = $0 as? MLXModelCatalog { return mlxCatalog }
+            return MLXModelCatalog(provider: $0)
+        }
         self.downloadManager = downloadManager
         self.deviceOverride = device
     }
