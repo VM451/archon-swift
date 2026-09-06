@@ -30,6 +30,7 @@ struct ModelBrowserRowView: View {
     let onCancel: () -> Void
     let onRetry: () -> Void
     let onRedownload: () -> Void
+    let onDelete: () -> Void
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -294,6 +295,9 @@ struct ModelBrowserRowView: View {
         if variant.downloadURL != nil {
             Menu {
                 Button("Redownload", action: onRedownload)
+                if isInstalled {
+                    Button("Delete", role: .destructive, action: onDelete)
+                }
             } label: {
                 installedBadgeLabel(title: "Installed")
             }

@@ -375,7 +375,8 @@ public struct ModelBrowserView: View {
                             onResume: { resume(variant, descriptor: model) },
                             onCancel: { cancel(variantID: variant.id) },
                             onRetry: { retry(variant, descriptor: model) },
-                            onRedownload: { redownload(variant, descriptor: model) }
+                            onRedownload: { redownload(variant, descriptor: model) },
+                            onDelete: { deleteInstalled(variant) }
                         )
                     }
                 }
@@ -593,6 +594,28 @@ public struct ModelBrowserView: View {
     @MainActor
     private func refreshInstalledModels() async {
         installedModels = (try? await library.installedMLXModels()) ?? []
+    }
+
+    /// Deletes an installed variant from the list row's Installed menu,
+    /// then refreshes so the badge flips back to Download immediately.
+    /// Failures surface in the library alert instead of failing silently.
+    private func deleteInstalled(_ variant: ModelVariant) {
+        Task { @MainActor in
+            do {
+                let installed = try await library.installedMLXModels().first {
+                    $0.manifest.modelID == variant.modelID &&
+                    $0.manifest.runtime == variant.runtime &&
+                    $0.manifest.format == variant.format
+                }
+                guard let installed else { return }
+                try await library.delete(modelID: installed.id)
+                await refreshInstalledModels()
+            } catch {
+                if !error.isCancellation && !Task.isCancelled {
+                    searchError = error.localizedDescription
+                }
+            }
+        }
     }
 
     @MainActor
