@@ -1,4 +1,5 @@
 import Foundation
+import ArchonCore
 
 /// Remote OpenAI API provider for generating embeddings and structured LLM outputs.
 public final class OpenAIProvider: EmbeddingProvider, LLMProvider, @unchecked Sendable {
@@ -33,6 +34,7 @@ public final class OpenAIProvider: EmbeddingProvider, LLMProvider, @unchecked Se
     }
 
     public func embed(batch: [String]) async throws -> [[Float]] {
+        try ArchonNetworkSecurity.ensureRemoteNetworkAllowed(provider: "OpenAI embeddings")
         let endpoint = baseURL.appendingPathComponent("embeddings")
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
@@ -71,6 +73,7 @@ public final class OpenAIProvider: EmbeddingProvider, LLMProvider, @unchecked Se
         prompt: String,
         responseSchema: T.Type
     ) async throws -> T {
+        try ArchonNetworkSecurity.ensureRemoteNetworkAllowed(provider: "OpenAI chat completions")
         let endpoint = baseURL.appendingPathComponent("chat/completions")
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"

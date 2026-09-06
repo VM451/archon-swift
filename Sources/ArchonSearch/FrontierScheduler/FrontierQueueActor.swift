@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import ArchonCore
 
 @ModelActor
 public actor FrontierQueueActor {
@@ -10,8 +11,16 @@ public actor FrontierQueueActor {
     
 
     /// Enqueues new URLs to crawl if they haven't been crawled or queued yet.
-    public func enqueue(urls: [URL], priority: Int = 0, parentURLString: String? = nil) throws {
+    public func enqueue(
+        urls: [URL],
+        priority: Int = 0,
+        parentURLString: String? = nil,
+        localWorkspaceRoots: [URL] = []
+    ) throws {
         for url in urls {
+            guard isPermitted(url, localWorkspaceRoots: localWorkspaceRoots) else {
+                continue
+            }
             let urlString = url.absoluteString
             let domain = url.host?.lowercased() ?? ""
             
@@ -50,7 +59,7 @@ public actor FrontierQueueActor {
     }
     
     /// Dequeues the next crawlable URL, respecting robots.txt and domain rate limits.
-    public func dequeueNext() async throws -> URL? {
+    public func dequeueNext(localWorkspaceRoots: [URL] = []) async throws -> URL? {
         while true {
             // Fetch next pending node sorted by priority desc, addedAt asc
             var descriptor = FetchDescriptor<CrawlNode>()
@@ -80,36 +89,75 @@ public actor FrontierQueueActor {
                 try modelContext.save()
                 continue
             }
-            
-            // 1. Verify robots.txt permission
-            let isAllowed = await robotsParser.canCrawl(url)
-            if !isAllowed {
+
+            let isLocalFile = isAuthorizedLocalFile(url, roots: localWorkspaceRoots)
+            guard isLocalFile || (try? ArchonNetworkPolicy.publicInternet.validate(url)) != nil else {
+                nextNode.status = .failed
+                try modelContext.save()
+                continue
+            }
+            guard isLocalFile || !ArchonNetworkSecurity.isZeroCloudEnabled else {
                 nextNode.status = .failed
                 try modelContext.save()
                 continue
             }
             
-            // 2. Enforce Politeness / Domain Rate Limit
-            let domain = nextNode.domain
-            let robotsDelay = await robotsParser.crawlDelay(for: url)
-            let delay = min(max(robotsDelay ?? defaultPolitenessDelay, 0), 300)
-            
-            if let lastCrawl = lastCrawlTimes[domain] {
-                let elapsed = Date().timeIntervalSince(lastCrawl)
-                if elapsed < delay {
-                    let sleepTime = UInt64(min(max(delay - elapsed, 0), 300) * 1_000_000_000)
-                    try await Task.sleep(nanoseconds: sleepTime)
+            if !isLocalFile {
+                // 1. Verify robots.txt permission
+                let isAllowed = await robotsParser.canCrawl(url)
+                if !isAllowed {
+                    nextNode.status = .failed
+                    try modelContext.save()
+                    continue
                 }
+
+                // 2. Enforce Politeness / Domain Rate Limit
+                let domain = nextNode.domain
+                let robotsDelay = await robotsParser.crawlDelay(for: url)
+                let delay = min(max(robotsDelay ?? defaultPolitenessDelay, 0), 300)
+
+                if let lastCrawl = lastCrawlTimes[domain] {
+                    let elapsed = Date().timeIntervalSince(lastCrawl)
+                    if elapsed < delay {
+                        let sleepTime = UInt64(min(max(delay - elapsed, 0), 300) * 1_000_000_000)
+                        try await Task.sleep(nanoseconds: sleepTime)
+                    }
+                }
+
+                lastCrawlTimes[domain] = Date()
             }
             
             // Update crawl status and save timestamp
             nextNode.status = .crawling
             nextNode.lastAttemptedAt = Date()
-            lastCrawlTimes[domain] = Date()
             try modelContext.save()
             
             return url
         }
+    }
+
+    private func isPermitted(_ url: URL, localWorkspaceRoots: [URL]) -> Bool {
+        if (try? ArchonNetworkPolicy.publicInternet.validate(url)) != nil {
+            return !ArchonNetworkSecurity.isZeroCloudEnabled
+        }
+        return isAuthorizedLocalFile(url, roots: localWorkspaceRoots)
+    }
+
+    private func isAuthorizedLocalFile(_ url: URL, roots: [URL]) -> Bool {
+        guard url.isFileURL else { return false }
+        let resolvedURL = url.standardizedFileURL.resolvingSymlinksInPath()
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: resolvedURL.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue else {
+            return false
+        }
+
+        return roots
+            .filter(\.isFileURL)
+            .map { $0.standardizedFileURL.resolvingSymlinksInPath() }
+            .contains { root in
+                resolvedURL == root || resolvedURL.path.hasPrefix(root.path.hasSuffix("/") ? root.path : root.path + "/")
+            }
     }
     
     public func markCompleted(urlString: String) throws {

@@ -2,6 +2,9 @@ import Foundation
 
 /// Subsystem that converts live DOM trees into token-efficient semantic structures (Markdown or simplified JSON) optimized for Foundation Models.
 public enum SemanticDOMExtractor: Sendable {
+    /// Maximum token budget accepted by the bridge. Keeping this bounded also
+    /// makes the character conversion below overflow-safe.
+    public static let maximumTokenBudget = 64_000
     
     /// Returns the JavaScript snippet that extracts a simplified JSON representation of the DOM tree.
     public static func extractionScript(maxDepth: Int = 10) -> String {
@@ -117,11 +120,15 @@ public enum SemanticDOMExtractor: Sendable {
     
     /// Truncates string content to fit within a designated token budget (approx. 4 chars per token).
     public static func pruneToTokenBudget(_ content: String, maxTokens: Int = 4096) -> String {
-        let maxChars = maxTokens * 4
+        guard maxTokens >= 0 else {
+            return "Error: maxTokens must be non-negative."
+        }
+        let boundedTokens = min(maxTokens, maximumTokenBudget)
+        let maxChars = boundedTokens * 4
         if content.count <= maxChars {
             return content
         }
         let truncated = String(content.prefix(maxChars))
-        return truncated + "\n... [Truncated for token budget of \(maxTokens) tokens]"
+        return truncated + "\n... [Truncated for token budget of \(boundedTokens) tokens]"
     }
 }

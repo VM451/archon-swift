@@ -190,3 +190,27 @@ When answering questions or changing an application that uses this package:
 The package's user promise is validated, data-driven MLX model discovery—not
 an unbounded guarantee that every model checkpoint can execute on every Apple
 device without preparation.
+
+## iOS 27 iPhone guidance
+
+Apple lists every iPhone 11 through iPhone 17 model below as compatible with
+[iOS 27](https://www.apple.com/os/ios/). OS compatibility is not a model-size
+guarantee: storage determines whether an artifact can be retained, while
+Archon requires its declared **peak runtime memory** to fit the current process
+budget before download or load.
+
+| iPhone generation | Included models | Archon starting point |
+| --- | --- | --- |
+| 11 | 11, 11 Pro, 11 Pro Max | Use a compact catalogued MLX model with a peak estimate under the live device budget. |
+| 12 | 12 mini, 12, 12 Pro, 12 Pro Max | Use the same live peak-memory gate; Pro and non-Pro variants are not interchangeable. |
+| 13 | 13 mini, 13, 13 Pro, 13 Pro Max | Use the same live peak-memory gate; do not infer fit from the model name. |
+| 14 | 14, 14 Plus, 14 Pro, 14 Pro Max | Choose only variants that publish a peak-memory estimate and pass the current budget. |
+| 15 | 15, 15 Plus, 15 Pro, 15 Pro Max | Prefer Apple Foundation Models where the host reports them available; custom MLX remains separately gated. |
+| 16 | 16, 16 Plus, 16 Pro, 16 Pro Max, 16e | Custom MLX downloads remain gated by peak memory, not free storage. |
+| 17 | 17, 17 Pro, 17 Pro Max, 17e, iPhone Air | Same rule. `DeviceHardwareProfile.iPhone17Pro` is a conservative 12 GB test fixture, not a production entitlement to a 7B/8B model. |
+
+The supplied `DeviceHardwareProfile.iPhone17Pro` fixture has a 12 GB physical
+memory profile but retains the package's 3 GiB mobile process envelope and
+roughly 1.5 GiB safe model budget. This is deliberately more conservative than
+the phone's storage capacity. A host may only revise that envelope after it has
+captured representative signed-app memory, thermal, and inference evidence.

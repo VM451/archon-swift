@@ -92,7 +92,9 @@ enum ModelDownloadURLPolicy {
             newRequest request: URLRequest,
             completionHandler: @escaping (URLRequest?) -> Void
         ) {
-            guard let url = request.url, (try? ModelDownloadURLPolicy.validate(url)) != nil else {
+            guard let originalURL = task.originalRequest?.url,
+                  let url = request.url,
+                  ModelDownloadURLPolicy.validatesRedirect(from: originalURL, to: url) else {
                 completionHandler(nil)
                 return
             }
@@ -105,11 +107,21 @@ enum ModelDownloadURLPolicy {
     }
 
     static func validate(_ url: URL) throws {
+        try ArchonNetworkSecurity.ensureRemoteNetworkAllowed(provider: "Model download")
         do {
             try ArchonNetworkPolicy.publicInternet.validate(url)
         } catch {
             throw ArchonModelsError.invalidResponse
         }
+    }
+
+    static func validatesRedirect(from originalURL: URL, to newURL: URL) -> Bool {
+        guard (try? validate(newURL)) != nil else { return false }
+        let original = URLComponents(url: originalURL, resolvingAgainstBaseURL: false)
+        let target = URLComponents(url: newURL, resolvingAgainstBaseURL: false)
+        return original?.scheme?.lowercased() == target?.scheme?.lowercased()
+            && original?.host?.lowercased() == target?.host?.lowercased()
+            && original?.port == target?.port
     }
 }
 
@@ -1211,6 +1223,7 @@ public actor ModelDownloadManager {
 
         do {
             continuation.yield(ModelDownloadEvent(variantID: id, state: .resolving))
+            try await coordinator.bindDestinationRoot(library.rootURL)
             if let licensePolicy {
                 let identifier = request.license?.identifier ?? "unknown"
                 switch licensePolicy.decision(for: request.license) {

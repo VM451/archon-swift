@@ -30,7 +30,7 @@ struct AgentSearchToolsTests {
             encoding: .utf8
         )
 
-        let search = ArchonSearch()
+        let search = ArchonSearch(localWorkspaceRoots: [directoryURL])
         let args = "{\"query\": \"swift\", \"source\": \"localWorkspace\", \"directoryPath\": \"\(directoryURL.path)\", \"maxResults\": 3}"
         let result = try await ArchonSearchAgentTools.handleToolCall(
             search: search,
@@ -50,7 +50,7 @@ struct AgentSearchToolsTests {
         try "Actors isolate mutable state. Strict concurrency makes sendability explicit."
             .write(to: directoryURL.appendingPathComponent("swift.md"), atomically: true, encoding: .utf8)
 
-        let search = ArchonSearch()
+        let search = ArchonSearch(localWorkspaceRoots: [directoryURL])
         let args = "{\"query\": \"Swift concurrency\", \"subQueries\": [\"actors\"], \"source\": \"localWorkspace\", \"directoryPath\": \"\(directoryURL.path)\", \"maxPages\": 2}"
         let result = try await ArchonSearchAgentTools.handleToolCall(
             search: search,

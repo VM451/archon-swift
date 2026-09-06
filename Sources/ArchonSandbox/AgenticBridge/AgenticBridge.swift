@@ -20,6 +20,11 @@ public actor AgenticBridge {
     
     /// Extracts a token-optimized semantic representation of the current DOM state for LLM context windows.
     public func captureSemanticDOM(maxTokens: Int = 4096) async throws -> String {
+        guard (0...SemanticDOMExtractor.maximumTokenBudget).contains(maxTokens) else {
+            throw SandboxError.invalidExecutionRequest(
+                "maxTokens must be between 0 and \(SemanticDOMExtractor.maximumTokenBudget)."
+            )
+        }
         guard let engine = engine else {
             throw SandboxError.engineDeallocated
         }
@@ -32,6 +37,11 @@ public actor AgenticBridge {
     
     /// Extracts simplified JSON structure of the DOM tree.
     public func captureSemanticJSON(maxTokens: Int = 4096) async throws -> String {
+        guard (0...SemanticDOMExtractor.maximumTokenBudget).contains(maxTokens) else {
+            throw SandboxError.invalidExecutionRequest(
+                "maxTokens must be between 0 and \(SemanticDOMExtractor.maximumTokenBudget)."
+            )
+        }
         guard let engine = engine else {
             throw SandboxError.engineDeallocated
         }

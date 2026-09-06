@@ -1,32 +1,13 @@
 import Foundation
+import ArchonCore
 import Security
 
 /// Guardrail enforcing 100% on-device local execution.
 public struct ZeroCloudMode: Sendable {
-    private static let lock = NSLock()
-    nonisolated(unsafe) private static var _isEnabled: Bool = false
-
-    /// A task-local override lets a scoped execution policy remain isolated
-    /// when independent agent tasks run concurrently in the same process.
-    @TaskLocal
-    private static var scopedOverride: Bool?
-
     /// Global toggle forcing all agent executions to run locally on-device.
     public static var isEnabled: Bool {
-        get {
-            if let scopedOverride {
-                return scopedOverride
-            }
-
-            lock.lock()
-            defer { lock.unlock() }
-            return _isEnabled
-        }
-        set {
-            lock.lock()
-            defer { lock.unlock() }
-            _isEnabled = newValue
-        }
+        get { ArchonNetworkSecurity.isZeroCloudEnabled }
+        set { ArchonNetworkSecurity.setProcessZeroCloudEnabled(newValue) }
     }
 
     /// Runs an operation with zero-cloud enforcement scoped to the current
@@ -36,14 +17,14 @@ public struct ZeroCloudMode: Sendable {
     public static func withEnabled<Result: Sendable>(
         _ operation: sending () async throws -> Result
     ) async rethrows -> Result {
-        try await $scopedOverride.withValue(true) {
-            try await operation()
-        }
+        try await ArchonNetworkSecurity.withZeroCloud(operation)
     }
 
     /// Verifies that cloud egress is allowed. Throws `GraphError.zeroCloudViolation` if active.
     public static func ensureAllowed(provider: String) throws {
-        if isEnabled {
+        do {
+            try ArchonNetworkSecurity.ensureRemoteNetworkAllowed(provider: provider)
+        } catch {
             throw GraphError.zeroCloudViolation("Blocked network egress to external provider '\(provider)'. ZeroCloudMode is active.")
         }
     }
@@ -51,10 +32,9 @@ public struct ZeroCloudMode: Sendable {
     /// Local model servers remain available in ZeroCloudMode, but a custom endpoint
     /// must still be loopback-only so the mode cannot be bypassed by configuration.
     public static func ensureOllamaEndpointAllowed(_ endpoint: URL) throws {
-        guard isEnabled else { return }
-        let host = endpoint.host?.lowercased()
-        let localHosts: Set<String> = ["localhost", "127.0.0.1", "::1"]
-        guard endpoint.scheme?.lowercased() == "http", let host, localHosts.contains(host) else {
+        do {
+            try ArchonNetworkSecurity.ensureLoopbackEndpointAllowed(endpoint, provider: "Ollama")
+        } catch {
             throw GraphError.zeroCloudViolation(
                 "Blocked Ollama endpoint '\(endpoint.absoluteString)'. ZeroCloudMode only permits loopback model servers."
             )

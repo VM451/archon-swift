@@ -7,6 +7,7 @@ import WebKit
 public actor SandboxEngine {
     private var workspace: SandboxWorkspace
     nonisolated public let configuration: SandboxConfiguration
+    private let toolAuthorizationPolicy: SandboxToolAuthorizationPolicy
     
     private var registeredTools: [String: any SandboxAgentTool] = [:]
     private var eventContinuation: AsyncStream<SandboxEvent>.Continuation?
@@ -23,6 +24,9 @@ public actor SandboxEngine {
     public init(workspace: SandboxWorkspace, configuration: SandboxConfiguration = .default) {
         self.workspace = workspace
         self.configuration = configuration
+        self.toolAuthorizationPolicy = SandboxToolAuthorizationPolicy(
+            allowedToolNames: configuration.allowedSandboxToolNames
+        )
         
         var continuation: AsyncStream<SandboxEvent>.Continuation!
         self.eventStream = AsyncStream(bufferingPolicy: .bufferingNewest(500)) { continuation = $0 }
@@ -205,6 +209,20 @@ public actor SandboxEngine {
         defer { outstandingToolCalls = max(0, outstandingToolCalls - 1) }
         guard let tool = registeredTools[toolName] else {
             let errorMsg = "Tool '\(toolName)' is not registered."
+            emitEvent(.uncaughtError(message: errorMsg, stackTrace: nil))
+            return
+        }
+
+        guard toolAuthorizationPolicy.allows(tool) else {
+            let errorMsg = "Tool '\(toolName)' is not authorized for page-originated sandbox calls."
+            let safeID = Self.javascriptStringLiteral(id)
+            let safeError = Self.javascriptStringLiteral(errorMsg)
+            let callbackScript = """
+            if (window.__handleAgentResponse) {
+                window.__handleAgentResponse(\(safeID), null, \(safeError));
+            }
+            """
+            _ = try? await evaluateScript(callbackScript)
             emitEvent(.uncaughtError(message: errorMsg, stackTrace: nil))
             return
         }

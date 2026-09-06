@@ -117,7 +117,7 @@ private final class StubURLProtocol: URLProtocol, @unchecked Sendable {
             headerFields: ["Content-Type": contentType]
         )!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        if !body.isEmpty { client?.urlProtocol(self, didLoad: body) }
+        client?.urlProtocol(self, didLoad: body)
         client?.urlProtocolDidFinishLoading(self)
     }
 
@@ -135,6 +135,12 @@ private actor MockTransport: MCPTransport {
     func listTools() async throws -> [MCPTool] { availableTools }
     func callTool(name: String, arguments: [String: JSONValue]) async throws -> MCPToolResult {
         MCPToolResult(content: [.string(name)])
+    }
+}
+
+private struct HostApprovedReadOnlyPolicy: MCPPermissionPolicy, Sendable {
+    func allows(_ risk: MCPRisk, tool: MCPTool) async -> Bool {
+        risk == .read
     }
 }
 
@@ -211,7 +217,10 @@ struct ArchonConnectTests {
         configuration.protocolClasses = [StubURLProtocol.self]
         let session = URLSession(configuration: configuration)
         let transport = MCPHTTPTransport(endpoint: endpoint, session: session)
-        let client = MCPClient(transport: transport)
+        let client = MCPClient(
+            transport: transport,
+            permissionPolicy: HostApprovedReadOnlyPolicy()
+        )
 
         try await client.connect()
         let result = try await client.callTool(name: "read_file", arguments: ["path": .string("README.md")])
@@ -240,6 +249,7 @@ struct ArchonConnectTests {
         let transport = MCPHTTPTransport(endpoint: endpoint, session: session)
 
         try await transport.connect()
+        await transport.setAuthorizedToolNames(["metadata"])
         let result = try await transport.callTool(name: "metadata", arguments: [:])
 
         guard case .object(let value) = result.content.first,
@@ -269,6 +279,7 @@ struct ArchonConnectTests {
         let session = URLSession(configuration: configuration)
         let transport = MCPHTTPTransport(endpoint: endpoint, session: session)
         try await transport.connect()
+        await transport.setAuthorizedToolNames(["progress_tool"])
 
         let events = await transport.streamTool(name: "progress_tool", arguments: [:])
         var sawProgress = false
@@ -304,6 +315,7 @@ struct ArchonConnectTests {
         let session = URLSession(configuration: configuration)
         let transport = MCPHTTPTransport(endpoint: endpoint, session: session)
         try await transport.connect()
+        await transport.setAuthorizedToolNames(["slow_tool"])
 
         StubURLProtocol.setDelay(0.05, for: endpoint)
         let events = await transport.streamTool(name: "slow_tool", arguments: [:])
@@ -422,6 +434,7 @@ struct ArchonConnectTests {
             try await transport.connect()
             let tools = try await transport.listTools()
             let resources = try await transport.listResources()
+            await transport.setAuthorizedToolNames(["read_file"])
             let result = try await transport.callTool(name: "read_file", arguments: [:])
             return (tools, resources, result)
         }
@@ -459,6 +472,7 @@ struct ArchonConnectTests {
 
         let (sawProgress, resultText) = try await withTimeout(.seconds(2)) {
             try await transport.connect()
+            await transport.setAuthorizedToolNames(["long_task"])
             let events = await transport.streamTool(name: "long_task", arguments: [:])
             var sawProgress = false
             var resultText: String?
@@ -562,6 +576,7 @@ struct ArchonConnectTests {
         #expect(tool.name == "read_file")
         #expect(tool.id == "read_file")
         #expect(tool.risk == .read)
+        #expect(tool.trust == .remoteUnverified)
     }
 
     @Test("MCP wire resource metadata defaults its local identity")
@@ -622,6 +637,48 @@ struct ArchonConnectTests {
             Issue.record("Expected the read-only policy to deny a destructive tool.")
         } catch {
             #expect(error.localizedDescription.contains("denied"))
+        }
+    }
+
+    @Test("Read-only MCP policy rejects remote risk metadata without host approval")
+    func deniesRemoteRiskMetadata() async throws {
+        let transport = MockTransport(availableTools: [
+            MCPTool(name: "remote_read", risk: .read, trust: .remoteUnverified)
+        ])
+        let client = MCPClient(transport: transport)
+
+        try await client.connect()
+        do {
+            _ = try await client.callTool(name: "remote_read")
+            Issue.record("Expected remote MCP metadata to remain unapproved.")
+        } catch {
+            #expect(error.localizedDescription.contains("denied"))
+        }
+    }
+
+    @Test("HTTP MCP transport bounds complete response bodies")
+    func boundsHTTPResponseBody() async throws {
+        let endpoint = URL(string: "https://mcp.example.test/rpc-\(UUID().uuidString)")!
+        let oversizedBody = Data(repeating: 0x61, count: 8 * 1024 * 1024 + 1)
+        StubURLProtocol.configure(responseBodies: [
+            Data(#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18"}}"#.utf8),
+            Data(),
+            oversizedBody
+        ], for: endpoint)
+        defer { StubURLProtocol.reset(for: endpoint) }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let transport = MCPHTTPTransport(endpoint: endpoint, session: session)
+        try await transport.connect()
+        await transport.setAuthorizedToolNames(["oversized"])
+
+        do {
+            _ = try await transport.callTool(name: "oversized", arguments: [:])
+            Issue.record("Expected the oversized MCP response to be rejected.")
+        } catch let error as MCPTransportError {
+            #expect(error == .responseTooLarge(maximumBytes: 8 * 1024 * 1024))
         }
     }
 }

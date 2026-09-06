@@ -114,7 +114,7 @@ extension ArchonSearch {
                 }
             }
         case .full(let scrapeConfig):
-            let scraper = await StealthScraper()
+            let scraper = await StealthScraper(localWorkspaceRoots: localWorkspaceRoots)
             for (index, url) in targetURLs.enumerated() {
                 if let timeout = timeout, Date().timeIntervalSince(startTime) >= timeout { break }
                 do {

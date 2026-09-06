@@ -70,6 +70,34 @@ struct DocumentRAGTests {
         #expect(doc.sectionHeadings.contains { $0.contains("func recall") })
     }
 
+    @Test("Concrete document and OCR loaders reject oversized inputs")
+    func concreteLoadersRespectInputLimit() async throws {
+        let oversized = Data(repeating: 0x61, count: DocumentInputLimits.maxBytes + 1)
+        let loaders: [(any DocumentLoader, String)] = [
+            (MarkdownDocumentLoader(), "document.md"),
+            (CodeDocumentLoader(), "document.swift"),
+            (StructuredDataDocumentLoader(), "document.json"),
+            (AppleNotesExportLoader(), "document.note"),
+            (PDFDocumentLoader(), "document.pdf")
+        ]
+
+        for (loader, filename) in loaders {
+            do {
+                _ = try await loader.load(data: oversized, filename: filename, metadata: [:])
+                Issue.record("Expected \(filename) to reject oversized input.")
+            } catch let error as ArchonMemoryError {
+                #expect(error == .inputTooLarge(maxBytes: DocumentInputLimits.maxBytes))
+            }
+        }
+
+        do {
+            _ = try await OCRDocumentProcessor().extractText(from: oversized)
+            Issue.record("Expected OCR to reject oversized input.")
+        } catch let error as ArchonMemoryError {
+            #expect(error == .inputTooLarge(maxBytes: DocumentInputLimits.maxBytes))
+        }
+    }
+
     @Test("StructuredDataDocumentLoader transforms CSV rows into semantic key-value strings")
     func csvLoaderParsing() async throws {
         let csv = """

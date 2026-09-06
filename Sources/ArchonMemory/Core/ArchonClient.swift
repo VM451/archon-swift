@@ -480,6 +480,7 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
         userId: String? = nil,
         metadata: [String: String] = [:]
     ) async throws -> [DocumentChunk] {
+        try DocumentInputLimits.validate(fileURL: fileURL)
         let docLoader = loader ?? AutoDocumentLoader()
         let loadedDocs = try await docLoader.load(from: fileURL)
         var allChunks: [DocumentChunk] = []

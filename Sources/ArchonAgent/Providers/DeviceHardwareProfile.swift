@@ -101,9 +101,10 @@ public struct DeviceHardwareProfile: Sendable, Equatable {
     /// `os_proc_available_memory()` is advisory and can briefly dip while the
     /// app is foregrounding or another framework is releasing memory. Using it
     /// as the only gate can make a model that passed the catalog preflight fail
-    /// immediately at load time. The static profile remains the upper bound for
-    /// this fallback; it already reserves application growth, runtime overhead,
-    /// and pressure headroom.
+    /// immediately at load time. The static profile provides a conservative
+    /// floor for this fallback; it already reserves application growth, runtime
+    /// overhead, and pressure headroom, while a stronger dynamic recommendation
+    /// may still be used when the OS reports more headroom.
     public static func effectiveModelMemoryBudgetBytes(
         dynamicRecommendationBytes: UInt64,
         profile: DeviceHardwareProfile

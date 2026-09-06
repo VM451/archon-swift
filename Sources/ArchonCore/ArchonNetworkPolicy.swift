@@ -107,12 +107,14 @@ public enum ArchonNetworkPolicyError: Error, LocalizedError, Equatable, Sendable
     case invalidURL
     case privateNetworkAddress
     case resolutionFailed
+    case zeroCloudViolation(provider: String)
 
     public var errorDescription: String? {
         switch self {
         case .invalidURL: "The URL is not permitted by the active network policy."
         case .privateNetworkAddress: "The URL resolves to a private or local network address."
         case .resolutionFailed: "The hostname could not be resolved to a permitted address."
+        case .zeroCloudViolation(let provider): "Remote network egress to \(provider) is blocked by ZeroCloudMode."
         }
     }
 }

@@ -101,9 +101,17 @@ public actor OfficialMCPTransport: MCPTransport {
             var tools: [MCPTool] = []
             var cursor: String?
             var seenCursors = Set<String>()
+            var pageCount = 0
             repeat {
+                pageCount += 1
+                guard pageCount <= MCPTransportLimits.maximumPaginationPages else {
+                    throw MCPTransportError.collectionTooLarge(maximumItems: MCPTransportLimits.maximumCollectionItems)
+                }
                 let page = try await client.listTools(cursor: cursor)
                 tools.append(contentsOf: try page.tools.map(Self.archonTool(from:)))
+                guard tools.count <= MCPTransportLimits.maximumCollectionItems else {
+                    throw MCPTransportError.collectionTooLarge(maximumItems: MCPTransportLimits.maximumCollectionItems)
+                }
                 guard let nextCursor = page.nextCursor else { break }
                 guard seenCursors.insert(nextCursor).inserted else {
                     throw MCPTransportError.invalidResponse
@@ -179,7 +187,12 @@ public actor OfficialMCPTransport: MCPTransport {
             var resources: [MCPResource] = []
             var cursor: String?
             var seenCursors = Set<String>()
+            var pageCount = 0
             repeat {
+                pageCount += 1
+                guard pageCount <= MCPTransportLimits.maximumPaginationPages else {
+                    throw MCPTransportError.collectionTooLarge(maximumItems: MCPTransportLimits.maximumCollectionItems)
+                }
                 let page = try await client.listResources(cursor: cursor)
                 resources.append(contentsOf: page.resources.map {
                     MCPResource(
@@ -190,6 +203,9 @@ public actor OfficialMCPTransport: MCPTransport {
                         mimeType: $0.mimeType
                     )
                 })
+                guard resources.count <= MCPTransportLimits.maximumCollectionItems else {
+                    throw MCPTransportError.collectionTooLarge(maximumItems: MCPTransportLimits.maximumCollectionItems)
+                }
                 guard let nextCursor = page.nextCursor else { break }
                 guard seenCursors.insert(nextCursor).inserted else {
                     throw MCPTransportError.invalidResponse
@@ -205,7 +221,11 @@ public actor OfficialMCPTransport: MCPTransport {
     public func readResource(uri: String) async throws -> [MCPResourceContent] {
         try requireConnection()
         do {
-            return try await client.readResource(uri: uri).map {
+            let contents = try await client.readResource(uri: uri)
+            guard contents.count <= MCPTransportLimits.maximumCollectionItems else {
+                throw MCPTransportError.collectionTooLarge(maximumItems: MCPTransportLimits.maximumCollectionItems)
+            }
+            return contents.map {
                 MCPResourceContent(
                     uri: $0.uri,
                     mimeType: $0.mimeType,
@@ -224,9 +244,17 @@ public actor OfficialMCPTransport: MCPTransport {
             var prompts: [MCPPrompt] = []
             var cursor: String?
             var seenCursors = Set<String>()
+            var pageCount = 0
             repeat {
+                pageCount += 1
+                guard pageCount <= MCPTransportLimits.maximumPaginationPages else {
+                    throw MCPTransportError.collectionTooLarge(maximumItems: MCPTransportLimits.maximumCollectionItems)
+                }
                 let page = try await client.listPrompts(cursor: cursor)
                 prompts.append(contentsOf: page.prompts.map(Self.archonPrompt(from:)))
+                guard prompts.count <= MCPTransportLimits.maximumCollectionItems else {
+                    throw MCPTransportError.collectionTooLarge(maximumItems: MCPTransportLimits.maximumCollectionItems)
+                }
                 guard let nextCursor = page.nextCursor else { break }
                 guard seenCursors.insert(nextCursor).inserted else {
                     throw MCPTransportError.invalidResponse
@@ -246,6 +274,9 @@ public actor OfficialMCPTransport: MCPTransport {
                 name: name,
                 arguments: arguments.isEmpty ? nil : arguments
             )
+            guard result.messages.count <= MCPTransportLimits.maximumCollectionItems else {
+                throw MCPTransportError.collectionTooLarge(maximumItems: MCPTransportLimits.maximumCollectionItems)
+            }
             return MCPPromptResult(
                 description: result.description,
                 messages: result.messages.map(Self.archonPromptMessage(from:))
@@ -259,7 +290,7 @@ public actor OfficialMCPTransport: MCPTransport {
         guard connected else { throw MCPTransportError.notConnected }
     }
 
-    public func setAuthorizedToolNames(_ names: Set<String>) {
+    public func setAuthorizedToolNames(_ names: Set<String>) async {
         authorizedToolNames = names
     }
 
@@ -289,6 +320,9 @@ public actor OfficialMCPTransport: MCPTransport {
                     reason: "The Archon stream consumer was cancelled."
                 )
             }
+        }
+        guard result.content.count <= MCPTransportLimits.maximumCollectionItems else {
+            throw MCPTransportError.collectionTooLarge(maximumItems: MCPTransportLimits.maximumCollectionItems)
         }
         return Self.archonToolResult(from: result)
     }

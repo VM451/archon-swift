@@ -42,6 +42,11 @@ public struct SandboxConfiguration: Sendable, Equatable {
     
     /// Polling interval for memory watchdog checking.
     public var watchdogCheckIntervalSeconds: TimeInterval
+
+    /// Tool names explicitly approved for invocation by page JavaScript.
+    /// Every page-originated tool requires an entry in this set; a tool's
+    /// read-only classification describes effects but is not authorization.
+    public var allowedSandboxToolNames: Set<String>
     
     public init(
         allowNetworkAccess: Bool = false,
@@ -54,7 +59,8 @@ public struct SandboxConfiguration: Sendable, Equatable {
         developerModeEnabled: Bool = false,
         allowedSchemes: [String] = ["sandbox", "data", "blob"],
         isInspectable: Bool = true,
-        watchdogCheckIntervalSeconds: TimeInterval = 5.0
+        watchdogCheckIntervalSeconds: TimeInterval = 5.0,
+        allowedSandboxToolNames: Set<String> = []
     ) {
         self.allowNetworkAccess = allowNetworkAccess
         self.allowedPermissions = allowedPermissions
@@ -67,6 +73,7 @@ public struct SandboxConfiguration: Sendable, Equatable {
         self.allowedSchemes = allowedSchemes
         self.isInspectable = isInspectable
         self.watchdogCheckIntervalSeconds = watchdogCheckIntervalSeconds
+        self.allowedSandboxToolNames = allowedSandboxToolNames
     }
     
     public static let `default` = SandboxConfiguration()

@@ -1,4 +1,5 @@
 import Foundation
+import ArchonCore
 
 /// Fast, dependency-free helpers for turning raw HTML into plain text,
 /// extracting a title, and splitting semantic highlights.
@@ -17,6 +18,7 @@ internal struct HTMLContentExtractor {
             }
             html = string
         } else {
+            try ArchonNetworkSecurity.ensureRemoteNetworkAllowed(provider: "Search page fetch")
             do {
             var request = URLRequest(url: url)
             request.httpMethod = "GET"

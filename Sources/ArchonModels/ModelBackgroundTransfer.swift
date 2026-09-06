@@ -341,11 +341,13 @@ public actor ModelBackgroundTransferCoordinator {
     private var pauseRequested: Set<String> = []
     private var cancelRequested: Set<String> = []
     private var finishedTaskIdentifiers: Set<Int> = []
+    private var destinationRootURL: URL?
 
     public init(
         sessionIdentifier: String,
         store: any ModelBackgroundDownloadStore = InMemoryModelBackgroundDownloadStore(),
-        waitsForConnectivity: Bool = true
+        waitsForConnectivity: Bool = true,
+        destinationRootURL: URL? = nil
     ) {
         let delegate = ModelBackgroundURLSessionDelegate()
         let configuration = URLSessionConfiguration.background(withIdentifier: sessionIdentifier)
@@ -353,7 +355,24 @@ public actor ModelBackgroundTransferCoordinator {
         self.delegate = delegate
         self.store = store
         self.session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: delegate.queue)
+        self.destinationRootURL = destinationRootURL.map { $0.standardizedFileURL.resolvingSymlinksInPath() }
         delegate.owner = self
+    }
+
+    /// Binds this low-level transfer coordinator to one application-owned
+    /// model root. A coordinator cannot write, replace, or delete files
+    /// outside that root. The binding is intentionally explicit because a
+    /// standalone background coordinator has no safe root to infer.
+    public func bindDestinationRoot(_ rootURL: URL) throws {
+        guard rootURL.isFileURL else {
+            throw ModelBackgroundTransferError.invalidRequest("destination root must be a file URL")
+        }
+        let resolvedRoot = rootURL.standardizedFileURL.resolvingSymlinksInPath()
+        try FileManager.default.createDirectory(at: resolvedRoot, withIntermediateDirectories: true)
+        if let destinationRootURL, destinationRootURL != resolvedRoot {
+            throw ModelBackgroundTransferError.invalidRequest("destination root cannot change after binding")
+        }
+        destinationRootURL = resolvedRoot
     }
 
     public func start(_ request: ModelBackgroundDownloadRequest) async throws -> AsyncThrowingStream<ModelBackgroundTransferEvent, Error> {
@@ -411,7 +430,9 @@ public actor ModelBackgroundTransferCoordinator {
             guard let record = try await store.record(for: identifier) else {
                 throw ModelBackgroundTransferError.noRecord(identifier)
             }
-            try? FileManager.default.removeItem(at: record.request.destinationURL)
+            if isSafeDestination(record.request.destinationURL) {
+                try? FileManager.default.removeItem(at: record.request.destinationURL)
+            }
             await finish(identifier: identifier, status: .cancelled, state: .cancelled, errorMessage: nil)
             return
         }
@@ -422,6 +443,9 @@ public actor ModelBackgroundTransferCoordinator {
     public func events(for identifier: String) async throws -> AsyncThrowingStream<ModelBackgroundTransferEvent, Error> {
         guard let record = try await store.record(for: identifier) else {
             throw ModelBackgroundTransferError.noRecord(identifier)
+        }
+        guard isSafeDestination(record.request.destinationURL) else {
+            throw ModelBackgroundTransferError.invalidRequest("stored destination is outside the bound model root")
         }
         guard continuations[identifier] == nil else {
             throw ModelBackgroundTransferError.alreadyActive(identifier)
@@ -481,6 +505,9 @@ public actor ModelBackgroundTransferCoordinator {
     /// process relaunch. The returned records are the authoritative persisted
     /// metadata; use `events(for:)` to observe a reconnected transfer.
     public func reconnect() async throws -> [ModelBackgroundDownloadRecord] {
+        guard destinationRootURL != nil else {
+            throw ModelBackgroundTransferError.invalidRequest("destination root must be bound before reconnect")
+        }
         let tasks = await sessionTaskSnapshots()
         var records = try await store.allRecords()
         var reconnectedIdentifiers = Set<String>()
@@ -488,6 +515,14 @@ public actor ModelBackgroundTransferCoordinator {
             guard let identifier = task.taskDescription,
                   let index = records.firstIndex(where: { $0.request.identifier == identifier }),
                   let downloadTask = delegate.task(withIdentifier: task.taskIdentifier) else { continue }
+            guard isSafeDestination(records[index].request.destinationURL) else {
+                records[index].taskIdentifier = nil
+                records[index].resumeData = nil
+                records[index].status = .failed
+                records[index].lastError = "Stored background destination is outside the bound model root."
+                try await store.save(records[index])
+                continue
+            }
             reconnectedIdentifiers.insert(identifier)
             taskIdentifiers[identifier] = task.taskIdentifier
             identifiersByTask[task.taskIdentifier] = identifier
@@ -506,6 +541,14 @@ public actor ModelBackgroundTransferCoordinator {
         for index in records.indices where
             (records[index].status == .queued || records[index].status == .downloading) &&
             !reconnectedIdentifiers.contains(records[index].request.identifier) {
+            guard isSafeDestination(records[index].request.destinationURL) else {
+                records[index].taskIdentifier = nil
+                records[index].resumeData = nil
+                records[index].status = .failed
+                records[index].lastError = "Stored background destination is outside the bound model root."
+                try await store.save(records[index])
+                continue
+            }
             records[index].taskIdentifier = nil
             records[index].resumeData = nil
             records[index].status = .failed
@@ -580,6 +623,16 @@ public actor ModelBackgroundTransferCoordinator {
         guard request.destinationURL.isFileURL else {
             throw ModelBackgroundTransferError.invalidRequest("destinationURL must be a file URL")
         }
+        guard isSafeDestination(request.destinationURL) else {
+            throw ModelBackgroundTransferError.invalidRequest("destinationURL must be inside the bound model root")
+        }
+    }
+
+    private func isSafeDestination(_ destinationURL: URL) -> Bool {
+        guard let destinationRootURL, destinationURL.isFileURL else { return false }
+        let rootPath = destinationRootURL.standardizedFileURL.resolvingSymlinksInPath().path
+        let destinationPath = destinationURL.standardizedFileURL.resolvingSymlinksInPath().path
+        return destinationPath.hasPrefix(rootPath + "/")
     }
 
     private func sessionTaskSnapshots() async -> [ModelBackgroundTaskSnapshot] {
@@ -624,7 +677,10 @@ public actor ModelBackgroundTransferCoordinator {
         identifiersByTask[taskIdentifier] = nil
         delegate.unregister(taskIdentifier: taskIdentifier)
         if cancellationWasRequested {
-            try? FileManager.default.removeItem(at: destinationURL ?? record.request.destinationURL)
+            let cancellationDestination = destinationURL ?? record.request.destinationURL
+            if isSafeDestination(cancellationDestination) {
+                try? FileManager.default.removeItem(at: cancellationDestination)
+            }
             await finish(identifier: identifier, status: .cancelled, state: .cancelled, errorMessage: nil)
             return
         }
@@ -637,13 +693,66 @@ public actor ModelBackgroundTransferCoordinator {
             clearContinuation(for: identifier)
             return
         }
+        guard let destinationURL, isSafeDestination(destinationURL) else {
+            record.status = .failed
+            record.lastError = "Background destination is outside the bound model root."
+            try? await store.save(record)
+            continuations[identifier]?.yield(.init(identifier: identifier, state: .failed(record.lastError!)))
+            continuations[identifier]?.finish()
+            clearContinuation(for: identifier)
+            return
+        }
         record.status = .ready
         record.resumeData = nil
         record.lastError = nil
         try? await store.save(record)
-        continuations[identifier]?.yield(.init(identifier: identifier, state: .ready(destinationURL ?? record.request.destinationURL)))
+        continuations[identifier]?.yield(.init(identifier: identifier, state: .ready(destinationURL)))
         continuations[identifier]?.finish()
         clearContinuation(for: identifier)
+    }
+
+    /// Performs the final background-file installation only after the actor
+    /// revalidates the destination against the bound root. The URLSession
+    /// delegate never moves a file based solely on persisted metadata.
+    func receiveDownloadedFile(taskIdentifier: Int, location: URL, destinationURL: URL) async {
+        guard isSafeDestination(destinationURL) else {
+            try? FileManager.default.removeItem(at: location)
+            await receiveFinished(
+                taskIdentifier: taskIdentifier,
+                destinationURL: nil,
+                errorMessage: "Background destination is outside the bound model root."
+            )
+            return
+        }
+
+        do {
+            try FileManager.default.createDirectory(
+                at: destinationURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            guard isSafeDestination(destinationURL) else {
+                throw ModelBackgroundTransferError.invalidRequest(
+                    "background destination changed outside the bound model root"
+                )
+            }
+            if FileManager.default.fileExists(atPath: destinationURL.path) {
+                _ = try FileManager.default.replaceItemAt(destinationURL, withItemAt: location)
+            } else {
+                try FileManager.default.moveItem(at: location, to: destinationURL)
+            }
+            await receiveFinished(
+                taskIdentifier: taskIdentifier,
+                destinationURL: destinationURL,
+                errorMessage: nil
+            )
+        } catch {
+            try? FileManager.default.removeItem(at: location)
+            await receiveFinished(
+                taskIdentifier: taskIdentifier,
+                destinationURL: nil,
+                errorMessage: error.localizedDescription
+            )
+        }
     }
 
     func receiveCompleted(taskIdentifier: Int, errorMessage: String?) async {
@@ -654,7 +763,9 @@ public actor ModelBackgroundTransferCoordinator {
         }
         if cancelRequested.remove(identifier) != nil {
             if let record = try? await store.record(for: identifier) {
-                try? FileManager.default.removeItem(at: record.request.destinationURL)
+                if isSafeDestination(record.request.destinationURL) {
+                    try? FileManager.default.removeItem(at: record.request.destinationURL)
+                }
             }
             await finish(identifier: identifier, status: .cancelled, state: .cancelled, errorMessage: nil)
             return
@@ -786,6 +897,22 @@ private final class ModelBackgroundURLSessionDelegate: NSObject, URLSessionDownl
         }
     }
 
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        guard let originalURL = task.originalRequest?.url,
+              let url = request.url,
+              ModelDownloadURLPolicy.validatesRedirect(from: originalURL, to: url) else {
+            completionHandler(nil)
+            return
+        }
+        completionHandler(request)
+    }
+
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
         let destination: URL?
         lock.lock()
@@ -795,16 +922,12 @@ private final class ModelBackgroundURLSessionDelegate: NSObject, URLSessionDownl
             Task { await owner?.receiveFinished(taskIdentifier: downloadTask.taskIdentifier, destinationURL: nil, errorMessage: "No destination was registered for the background task.") }
             return
         }
-        do {
-            try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-            if FileManager.default.fileExists(atPath: destination.path) {
-                _ = try FileManager.default.replaceItemAt(destination, withItemAt: location)
-            } else {
-                try FileManager.default.moveItem(at: location, to: destination)
-            }
-            Task { await owner?.receiveFinished(taskIdentifier: downloadTask.taskIdentifier, destinationURL: destination, errorMessage: nil) }
-        } catch {
-            Task { await owner?.receiveFinished(taskIdentifier: downloadTask.taskIdentifier, destinationURL: nil, errorMessage: error.localizedDescription) }
+        Task {
+            await owner?.receiveDownloadedFile(
+                taskIdentifier: downloadTask.taskIdentifier,
+                location: location,
+                destinationURL: destination
+            )
         }
     }
 

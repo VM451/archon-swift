@@ -43,7 +43,7 @@ struct RobotsParserTests {
         Disallow: /private/
         Disallow: /admin
         Crawl-delay: 5.5
-        
+
         User-agent: OtherBot
         Disallow: /
         """
@@ -186,7 +186,7 @@ struct UpgradedCompetitorFeaturesTests {
             try? fileManager.removeItem(at: tempDir)
         }
         
-        let engine = DiscoveryEngine()
+        let engine = DiscoveryEngine(localWorkspaceRoots: [tempDir])
         let results = try await engine.search(query: "Apple Intelligence", source: .localWorkspace(directoryPath: tempDir.path))
         #expect(results.count == 1)
         #expect(results.first?.lastPathComponent == "file1.md")
@@ -264,7 +264,7 @@ struct UpgradedCompetitorFeaturesTests {
             try? fileManager.removeItem(at: tempDir)
         }
         
-        let scraper = await StealthScraper()
+        let scraper = await StealthScraper(localWorkspaceRoots: [tempDir])
         
         let config = ScrapeConfiguration(
             includeSelectors: ["#main-content"],
@@ -343,20 +343,22 @@ struct UpgradedCompetitorFeaturesTests {
     
     @Test("Workspace Directory Edge Cases")
     func workspaceEdgeCases() async throws {
-        let engine = DiscoveryEngine()
-        
-        // 1. Non-existent path
-        let nonExistentResults = try await engine.search(query: "Apple", source: .localWorkspace(directoryPath: "/non-existent-path/random-uuid"))
-        #expect(nonExistentResults.isEmpty)
-        
-        // 2. Empty directory
         let fileManager = FileManager.default
         let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer {
             try? fileManager.removeItem(at: tempDir)
         }
+        let engine = DiscoveryEngine(localWorkspaceRoots: [tempDir])
         
+        // 1. Non-existent path
+        let nonExistentResults = try await engine.search(
+            query: "Apple",
+            source: .localWorkspace(directoryPath: tempDir.appendingPathComponent("missing").path)
+        )
+        #expect(nonExistentResults.isEmpty)
+
+        // 2. Empty directory
         let emptyResults = try await engine.search(query: "Apple", source: .localWorkspace(directoryPath: tempDir.path))
         #expect(emptyResults.isEmpty)
         
@@ -388,7 +390,7 @@ struct UpgradedCompetitorFeaturesTests {
             try? fileManager.removeItem(at: tempDir)
         }
         
-        let scraper = await StealthScraper()
+        let scraper = await StealthScraper(localWorkspaceRoots: [tempDir])
         
         // 1. Selector whitelisting non-matching elements (should fallback to body text)
         let config1 = ScrapeConfiguration(includeSelectors: [".non-existent-class"])
@@ -426,13 +428,14 @@ struct UpgradedCompetitorFeaturesTests {
         }
         
         // 2. Verify throw when no results are found/crawled
-        let searchEngine2 = ArchonSearch()
+        let searchEngine2: ArchonSearch
         let fileManager = FileManager.default
         let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer {
             try? fileManager.removeItem(at: tempDir)
         }
+        searchEngine2 = ArchonSearch(localWorkspaceRoots: [tempDir])
         
         do {
             _ = try await searchEngine2.research(

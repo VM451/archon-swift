@@ -249,7 +249,7 @@ public final class CoreAIProvider: LLMProvider, @unchecked Sendable {
         guard let predictedPeakMemoryBytes, predictedPeakMemoryBytes > 0 else {
             throw CoreAIProviderError.memoryEstimateUnavailable
         }
-        let availableBudgetBytes = ArchonDeviceCapabilities.current.recommendedModelMemoryBytes
+        let availableBudgetBytes = DeviceHardwareProfile.currentEffectiveModelMemoryBudgetBytes
         guard predictedPeakMemoryBytes <= availableBudgetBytes else {
             throw CoreAIProviderError.insufficientMemory(
                 predictedPeakBytes: predictedPeakMemoryBytes,

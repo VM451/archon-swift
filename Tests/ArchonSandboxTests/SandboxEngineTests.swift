@@ -4,6 +4,42 @@ import Foundation
 
 @Suite("Sandbox Engine Actor & Event Stream Tests")
 struct SandboxEngineTests {
+
+    @Test("Page-originated sandbox tool calls require an explicit capability")
+    func pageToolCallsHonorAuthorizationPolicy() async throws {
+        actor CallCounter {
+            var count = 0
+            func increment() { count += 1 }
+            func value() -> Int { count }
+        }
+
+        let counter = CallCounter()
+        let tool = ClosureAgentTool(
+            name: "writeOutsideSandbox",
+            description: "Writes to a host-owned resource",
+            authorizationRequirement: .explicitApproval
+        ) { _ in
+            await counter.increment()
+            return "{}"
+        }
+
+        let deniedEngine = SandboxEngine(workspace: SandboxWorkspace.defaultTemplate(name: "Denied"))
+        await deniedEngine.bindEvaluator { script in script }
+        await deniedEngine.registerTool(tool)
+        await deniedEngine.handleIncomingJSON(#"{"type":"TOOL_CALL","id":"1","toolName":"writeOutsideSandbox","arguments":{}}"#)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await counter.value() == 0)
+
+        let approvedEngine = SandboxEngine(
+            workspace: SandboxWorkspace.defaultTemplate(name: "Approved"),
+            configuration: SandboxConfiguration(allowedSandboxToolNames: ["writeOutsideSandbox"])
+        )
+        await approvedEngine.bindEvaluator { script in script }
+        await approvedEngine.registerTool(tool)
+        await approvedEngine.handleIncomingJSON(#"{"type":"TOOL_CALL","id":"2","toolName":"writeOutsideSandbox","arguments":{}}"#)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await counter.value() == 1)
+    }
     
     @Test("SandboxEngine actor lifecycle and tool registration")
     func testEngineToolLifecycle() async throws {

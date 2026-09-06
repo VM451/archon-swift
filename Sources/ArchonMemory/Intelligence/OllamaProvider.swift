@@ -1,4 +1,5 @@
 import Foundation
+import ArchonCore
 
 /// Local Ollama provider running models (e.g. Llama 3, Mistral, Gemma, Nomic-Embed) locally on Mac without external cloud hosting.
 public final class OllamaProvider: EmbeddingProvider, LLMProvider, @unchecked Sendable {
@@ -22,6 +23,7 @@ public final class OllamaProvider: EmbeddingProvider, LLMProvider, @unchecked Se
     // MARK: - EmbeddingProvider
 
     public func embed(text: String) async throws -> [Float] {
+        try ArchonNetworkSecurity.ensureLoopbackEndpointAllowed(baseURL, provider: "Ollama")
         let endpoint = baseURL.appendingPathComponent("api/embeddings")
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
@@ -61,6 +63,7 @@ public final class OllamaProvider: EmbeddingProvider, LLMProvider, @unchecked Se
         prompt: String,
         responseSchema: T.Type
     ) async throws -> T {
+        try ArchonNetworkSecurity.ensureLoopbackEndpointAllowed(baseURL, provider: "Ollama")
         let endpoint = baseURL.appendingPathComponent("api/chat")
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"

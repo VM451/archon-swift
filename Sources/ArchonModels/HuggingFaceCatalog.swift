@@ -139,6 +139,7 @@ public struct HuggingFaceCatalog: PaginatedModelCatalogProvider, Sendable {
     }
 
     private func response(for url: URL) async throws -> (Data, HTTPURLResponse) {
+        try ModelDownloadURLPolicy.validate(url)
         var request = URLRequest(url: url)
         request.timeoutInterval = 30
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -150,6 +151,11 @@ public struct HuggingFaceCatalog: PaginatedModelCatalogProvider, Sendable {
             throw ArchonModelsError.invalidResponse
         }
         guard let response = response as? HTTPURLResponse else { throw ArchonModelsError.invalidResponse }
+        guard let finalURL = response.url,
+              (try? ModelDownloadURLPolicy.validate(finalURL)) != nil,
+              Self.isSameOrigin(finalURL, as: baseURL) else {
+            throw ArchonModelsError.invalidResponse
+        }
         guard (200...299).contains(response.statusCode) else {
             throw ArchonModelsError.httpFailure(statusCode: response.statusCode)
         }
@@ -177,7 +183,7 @@ public struct HuggingFaceCatalog: PaginatedModelCatalogProvider, Sendable {
 
         let urls: [URL]
         if let continuationToken = request.continuationToken {
-            urls = try Self.urls(from: continuationToken)
+            urls = try Self.urls(from: continuationToken, sameOriginAs: baseURL)
         } else {
             // The Hub's generic popularity list is dominated by raw
             // Transformers and SafeTensors repositories. A local-compatible
@@ -201,7 +207,9 @@ public struct HuggingFaceCatalog: PaginatedModelCatalogProvider, Sendable {
             let result = try await response(for: url)
             let data = result.0
             payloads.append(contentsOf: try JSONDecoder().decode([HuggingFaceModelPayload].self, from: data))
-            if let nextURL = Self.nextPageURL(from: result.1) {
+            if let nextURL = Self.nextPageURL(from: result.1, baseURL: baseURL),
+               (try? ModelDownloadURLPolicy.validate(nextURL)) != nil,
+               Self.isSameOrigin(nextURL, as: baseURL) {
                 nextURLs.append(nextURL)
             }
         }
@@ -237,7 +245,7 @@ public struct HuggingFaceCatalog: PaginatedModelCatalogProvider, Sendable {
         return url
     }
 
-    private static func nextPageURL(from response: HTTPURLResponse) -> URL? {
+    private static func nextPageURL(from response: HTTPURLResponse, baseURL: URL) -> URL? {
         guard let linkHeader = response.value(forHTTPHeaderField: "Link") else { return nil }
         for link in linkHeader.split(separator: ",") {
             let value = String(link)
@@ -248,7 +256,7 @@ public struct HuggingFaceCatalog: PaginatedModelCatalogProvider, Sendable {
             guard attributes.contains("rel=\"next\"") ||
                     attributes.contains("rel='next'") ||
                     attributes.contains("rel=next") else { continue }
-            return URL(string: String(value[value.index(after: opening)..<closing]))
+            return URL(string: String(value[value.index(after: opening)..<closing]), relativeTo: baseURL)?.absoluteURL
         }
         return nil
     }
@@ -259,7 +267,7 @@ public struct HuggingFaceCatalog: PaginatedModelCatalogProvider, Sendable {
         return data.base64EncodedString()
     }
 
-    private static func urls(from token: String) throws -> [URL] {
+    private static func urls(from token: String, sameOriginAs baseURL: URL) throws -> [URL] {
         guard let data = Data(base64Encoded: token),
               let strings = try? JSONDecoder().decode([String].self, from: data),
               !strings.isEmpty else {
@@ -267,7 +275,20 @@ public struct HuggingFaceCatalog: PaginatedModelCatalogProvider, Sendable {
         }
         let urls = strings.compactMap(URL.init(string:))
         guard urls.count == strings.count else { throw ArchonModelsError.invalidResponse }
+        guard urls.allSatisfy({
+            (try? ModelDownloadURLPolicy.validate($0)) != nil && isSameOrigin($0, as: baseURL)
+        }) else {
+            throw ArchonModelsError.invalidResponse
+        }
         return urls
+    }
+
+    private static func isSameOrigin(_ lhs: URL, as rhs: URL) -> Bool {
+        let left = URLComponents(url: lhs, resolvingAgainstBaseURL: false)
+        let right = URLComponents(url: rhs, resolvingAgainstBaseURL: false)
+        return left?.scheme?.lowercased() == right?.scheme?.lowercased()
+            && left?.host?.lowercased() == right?.host?.lowercased()
+            && left?.port == right?.port
     }
 
     private func makeDescriptor(from payload: HuggingFaceModelPayload, includeVariants: Bool) -> ModelDescriptor {

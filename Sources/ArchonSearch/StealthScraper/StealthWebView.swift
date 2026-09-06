@@ -1,6 +1,7 @@
 import Foundation
 import WebKit
 import Vision
+import ArchonCore
 
 #if os(macOS)
 import AppKit
@@ -38,6 +39,16 @@ public enum ScrapeAction: Sendable, Codable, Hashable {
     case fill(selector: String, text: String)
 }
 
+/// Bounds the strings and raster dimensions returned by a WebKit scrape.
+public enum ScrapeOutputLimits: Sendable {
+    public static let maximumBytes = 8 * 1024 * 1024
+    /// Keep JavaScript bridge results bounded before WebKit materializes them in Swift.
+    public static let maximumCharacters = maximumBytes / 4
+    public static let maximumTitleBytes = 4 * 1024
+    public static let maximumSnapshotWidth: CGFloat = 2048
+    public static let maximumSnapshotHeight: CGFloat = 4096
+}
+
 @MainActor
 public final class StealthScraper: NSObject, WKNavigationDelegate, Sendable {
     
@@ -51,16 +62,28 @@ public final class StealthScraper: NSObject, WKNavigationDelegate, Sendable {
     private var continuation: CheckedContinuation<Void, any Error>?
     private var webView: WKWebView?
     private var navigationID: UUID?
+    private let localWorkspaceRoots: [URL]
     
     public override init() {
+        self.localWorkspaceRoots = []
+        super.init()
+    }
+
+    public init(localWorkspaceRoots: [URL]) {
+        self.localWorkspaceRoots = localWorkspaceRoots
+            .filter(\.isFileURL)
+            .map { $0.standardizedFileURL.resolvingSymlinksInPath() }
         super.init()
     }
     
     /// Scrapes a URL, rendering JS, running user interaction actions, and converting to structured output.
     /// Uses Vision OCR fallback for dynamic or graphical contents.
     public func scrape(url: URL, configuration: ScrapeConfiguration = ScrapeConfiguration()) async throws -> ScrapeResult {
-        guard SearchURLPolicy.validateRemoteOrLocalFile(url) else {
+        guard url.isFileURL ? isAllowedLocalFile(url) : SearchURLPolicy.validate(url) else {
             throw SearchError.extractionFailed(reason: "Only public HTTP(S) URLs or bounded local files are supported.")
+        }
+        if !url.isFileURL {
+            try ArchonNetworkSecurity.ensureRemoteNetworkAllowed(provider: "WebKit scrape")
         }
         try Task.checkCancellation()
         let config = WKWebViewConfiguration()
@@ -167,8 +190,17 @@ public final class StealthScraper: NSObject, WKNavigationDelegate, Sendable {
         
         // Extract standard text and HTML
         try Task.checkCancellation()
-        let html = try await webView.evaluateJavaScript("document.documentElement.outerHTML") as? String ?? ""
-        let title = try await webView.evaluateJavaScript("document.title") as? String ?? ""
+        let html = Self.boundedOutput(
+            try await webView.evaluateJavaScript(
+                "document.documentElement.outerHTML.slice(0, \(ScrapeOutputLimits.maximumCharacters))"
+            ) as? String ?? ""
+        )
+        let title = Self.boundedOutput(
+            try await webView.evaluateJavaScript(
+                "document.title.slice(0, \(ScrapeOutputLimits.maximumTitleBytes))"
+            ) as? String ?? "",
+            maximumBytes: ScrapeOutputLimits.maximumTitleBytes
+        )
         
         // Extract text based on markdown setting
         var bodyText = ""
@@ -177,9 +209,13 @@ public final class StealthScraper: NSObject, WKNavigationDelegate, Sendable {
                 include: configuration.includeSelectors,
                 exclude: configuration.excludeSelectors
             )
-            bodyText = try await webView.evaluateJavaScript(markdownScript) as? String ?? ""
+            bodyText = Self.boundedOutput(try await webView.evaluateJavaScript(markdownScript) as? String ?? "")
         } else {
-            bodyText = try await webView.evaluateJavaScript("document.body.innerText") as? String ?? ""
+            bodyText = Self.boundedOutput(
+                try await webView.evaluateJavaScript(
+                    "document.body.innerText.slice(0, \(ScrapeOutputLimits.maximumCharacters))"
+                ) as? String ?? ""
+            )
         }
         try Task.checkCancellation()
         
@@ -216,18 +252,29 @@ public final class StealthScraper: NSObject, WKNavigationDelegate, Sendable {
             }
             
             let snapshot = try await captureSnapshot(of: webView)
-            finalocrText = try await runOCR(on: snapshot)
+            finalocrText = Self.boundedOutput(try await runOCR(on: snapshot))
         } catch {
             // Ignore snapshot/OCR errors and fallback to bodyText
         }
         
-        let mergedText = bodyText + (finalocrText.isEmpty ? "" : "\n\n[Visual OCR Content]:\n" + finalocrText)
+        let mergedText = Self.boundedOutput(
+            bodyText + (finalocrText.isEmpty ? "" : "\n\n[Visual OCR Content]:\n" + finalocrText)
+        )
         
         // Clean references
         self.webView = nil
         self.continuation = nil
         
         return ScrapeResult(urlString: url.absoluteString, html: html, text: mergedText, title: title)
+    }
+
+    private func isAllowedLocalFile(_ url: URL) -> Bool {
+        guard SearchURLPolicy.validateLocalFile(url), !localWorkspaceRoots.isEmpty else { return false }
+        let resolved = url.standardizedFileURL.resolvingSymlinksInPath()
+        return localWorkspaceRoots.contains { root in
+            let rootPath = root.path.hasSuffix("/") ? String(root.path.dropLast()) : root.path
+            return resolved.path == rootPath || resolved.path.hasPrefix(rootPath + "/")
+        }
     }
     
     // MARK: - WKNavigationDelegate
@@ -237,7 +284,9 @@ public final class StealthScraper: NSObject, WKNavigationDelegate, Sendable {
         decidePolicyFor navigationAction: WKNavigationAction,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
     ) {
-        guard let url = navigationAction.request.url, SearchURLPolicy.validateRemoteOrLocalFile(url) else {
+        guard let url = navigationAction.request.url,
+              SearchURLPolicy.validateRemoteOrLocalFile(url),
+              url.isFileURL || !ArchonNetworkSecurity.isZeroCloudEnabled else {
             decisionHandler(.cancel)
             return
         }
@@ -276,6 +325,12 @@ public final class StealthScraper: NSObject, WKNavigationDelegate, Sendable {
     private func captureSnapshot(of webView: WKWebView) async throws -> PlatformImage {
         return try await withCheckedThrowingContinuation { continuation in
             let config = WKSnapshotConfiguration()
+            config.rect = CGRect(
+                x: 0,
+                y: 0,
+                width: ScrapeOutputLimits.maximumSnapshotWidth,
+                height: ScrapeOutputLimits.maximumSnapshotHeight
+            )
             webView.takeSnapshot(with: config) { image, error in
                 if let error = error {
                     continuation.resume(throwing: error)
@@ -311,12 +366,51 @@ public final class StealthScraper: NSObject, WKNavigationDelegate, Sendable {
                     return
                 }
                 
-                let text = results.compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
-                continuation.resume(returning: text)
+                let lines = results.compactMap { $0.topCandidates(1).first?.string }
+                continuation.resume(returning: Self.boundedJoinedLines(lines))
             } catch {
                 continuation.resume(throwing: error)
             }
         }
+    }
+
+    private static func boundedOutput(
+        _ output: String,
+        maximumBytes: Int = ScrapeOutputLimits.maximumBytes
+    ) -> String {
+        guard output.utf8.count > maximumBytes else { return output }
+        let marker = "\n[output truncated]"
+        let prefixLimit = max(0, maximumBytes - marker.utf8.count)
+        let prefix = output.utf8.prefix(prefixLimit)
+        return String(decoding: prefix, as: UTF8.self) + marker
+    }
+
+    private static func boundedJoinedLines(_ lines: [String]) -> String {
+        let marker = "\n[output truncated]"
+        let contentLimit = max(0, ScrapeOutputLimits.maximumBytes - marker.utf8.count)
+        var output = Data()
+        output.reserveCapacity(min(contentLimit, 64 * 1024))
+        var truncated = false
+        for line in lines {
+            let separator = output.isEmpty ? Data() : Data([10])
+            let remaining = contentLimit - output.count - separator.count
+            guard remaining > 0 else {
+                truncated = true
+                break
+            }
+
+            let lineData = Data(line.utf8)
+            output.append(separator)
+            if lineData.count <= remaining {
+                output.append(lineData)
+            } else {
+                output.append(lineData.prefix(remaining))
+                truncated = true
+                break
+            }
+        }
+        let result = String(decoding: output, as: UTF8.self)
+        return truncated ? result + marker : result
     }
     
     // MARK: - JavaScript Generation
@@ -403,12 +497,18 @@ public final class StealthScraper: NSObject, WKNavigationDelegate, Sendable {
             }
             
             let markdown = "";
+
+            const maximumOutputCharacters = \(ScrapeOutputLimits.maximumCharacters);
+            function append(value) {
+                if (markdown.length >= maximumOutputCharacters) return;
+                markdown += String(value).slice(0, maximumOutputCharacters - markdown.length);
+            }
             
             function walk(node) {
                 if (node.nodeType === 3) { // TEXT_NODE
                     let text = node.nodeValue.trim();
                     if (text) {
-                        markdown += text + " ";
+                        append(text + " ");
                     }
                     return;
                 }
@@ -417,25 +517,25 @@ public final class StealthScraper: NSObject, WKNavigationDelegate, Sendable {
                     let tagName = node.tagName.toLowerCase();
                     
                     if (['h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(tagName)) {
-                        markdown += "\\n\\n" + "#".repeat(parseInt(tagName[1])) + " ";
+                        append("\\n\\n" + "#".repeat(parseInt(tagName[1])) + " ");
                         node.childNodes.forEach(walk);
-                        markdown += "\\n\\n";
+                        append("\\n\\n");
                         return;
                     }
                     
                     if (tagName === 'p') {
-                        markdown += "\\n\\n";
+                        append("\\n\\n");
                         node.childNodes.forEach(walk);
-                        markdown += "\\n\\n";
+                        append("\\n\\n");
                         return;
                     }
                     
                     if (tagName === 'a') {
                         let href = node.getAttribute('href') || "";
                         if (href.startsWith('http')) {
-                            markdown += " [";
+                            append(" [");
                             node.childNodes.forEach(walk);
-                            markdown += "](" + href + ") ";
+                            append("](" + href + ") ");
                         } else {
                             node.childNodes.forEach(walk);
                         }
@@ -443,21 +543,21 @@ public final class StealthScraper: NSObject, WKNavigationDelegate, Sendable {
                     }
                     
                     if (tagName === 'li') {
-                        markdown += "\\n* ";
+                        append("\\n* ");
                         node.childNodes.forEach(walk);
                         return;
                     }
                     
                     if (tagName === 'tr') {
-                        markdown += "\\n| ";
+                        append("\\n| ");
                         node.childNodes.forEach(walk);
-                        markdown += " |";
+                        append(" |");
                         return;
                     }
                     
                     if (tagName === 'td' || tagName === 'th') {
                         node.childNodes.forEach(walk);
-                        markdown += " | ";
+                        append(" | ");
                         return;
                     }
                     
@@ -469,7 +569,8 @@ public final class StealthScraper: NSObject, WKNavigationDelegate, Sendable {
             return markdown
                 .replace(/\\n\\s*\\n/g, '\\n\\n')
                 .replace(/[ \\t]+/g, ' ')
-                .trim();
+                .trim()
+                .slice(0, maximumOutputCharacters);
         })()
         """
     }
