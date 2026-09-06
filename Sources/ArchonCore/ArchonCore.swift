@@ -428,7 +428,6 @@ public struct ArchonDeviceCapabilities: Codable, Equatable, Sendable {
             platform: platform,
             physicalMemoryBytes: physicalMemoryBytes
         )
-        let currentHeadroom = min(availableMemoryBytes, predictedLimit)
         let applicationReserve = archonApplicationGrowthReserve(
             platform: platform,
             physicalMemoryBytes: physicalMemoryBytes
@@ -438,13 +437,28 @@ public struct ArchonDeviceCapabilities: Codable, Equatable, Sendable {
             archonMinimumSafetyReserve(for: platform),
             UInt64(Double(predictedLimit) * archonSafetyFraction(for: platform))
         )
-        let availableAfterReserves = archonSubtract(
-            currentHeadroom,
+        let envelopeBudget = archonSubtract(
+            predictedLimit,
             applicationReserve,
             runtimeReserve,
             safetyReserve,
             loadedModelMemoryBytes
         )
+        let currentHeadroom: UInt64
+        let availableAfterReserves: UInt64
+        if availableMemoryBytes > 0 {
+            currentHeadroom = min(availableMemoryBytes, predictedLimit)
+            let dynamicBudget = archonSubtract(
+                availableMemoryBytes,
+                runtimeReserve,
+                safetyReserve,
+                loadedModelMemoryBytes
+            )
+            availableAfterReserves = min(dynamicBudget, envelopeBudget)
+        } else {
+            currentHeadroom = predictedLimit
+            availableAfterReserves = envelopeBudget
+        }
         let confidence: ArchonMemoryBudgetConfidence
         #if canImport(Darwin) && (os(iOS) || os(visionOS))
         confidence = availableMemoryBytes > 0 ? .observedHeadroom : .platformHeuristic

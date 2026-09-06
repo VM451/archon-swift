@@ -1,5 +1,6 @@
 import Foundation
 import MCP
+import ArchonCore
 
 /// Archon policy adapter over the official Model Context Protocol Swift SDK.
 ///
@@ -15,6 +16,7 @@ public actor OfficialMCPTransport: MCPTransport {
     private let client: MCP.Client
     private let transport: MCP.HTTPClientTransport
     private var connected = false
+    private var authorizedToolNames: Set<String> = []
     private var progressContinuations: [MCP.ProgressToken: AsyncThrowingStream<MCPStreamEvent, Error>.Continuation] = [:]
     private var activeRequestIDs: Set<MCP.ID> = []
 
@@ -84,6 +86,7 @@ public actor OfficialMCPTransport: MCPTransport {
             )
         }
         activeRequestIDs.removeAll()
+        authorizedToolNames.removeAll()
         for continuation in progressContinuations.values {
             continuation.finish(throwing: CancellationError())
         }
@@ -115,6 +118,9 @@ public actor OfficialMCPTransport: MCPTransport {
 
     public func callTool(name: String, arguments: [String: JSONValue]) async throws -> MCPToolResult {
         try requireConnection()
+        guard authorizedToolNames.contains(name) else {
+            throw ArchonCoreError.invalidConfiguration("MCP tool \(name) has not been approved by the host.")
+        }
         do {
             return try await callToolWithRequestContext(
                 name: name,
@@ -133,6 +139,10 @@ public actor OfficialMCPTransport: MCPTransport {
         let (stream, continuation) = AsyncThrowingStream<MCPStreamEvent, Error>.makeStream()
         guard connected else {
             continuation.finish(throwing: MCPTransportError.notConnected)
+            return stream
+        }
+        guard authorizedToolNames.contains(name) else {
+            continuation.finish(throwing: ArchonCoreError.invalidConfiguration("MCP tool \(name) has not been approved by the host."))
             return stream
         }
 
@@ -249,6 +259,10 @@ public actor OfficialMCPTransport: MCPTransport {
         guard connected else { throw MCPTransportError.notConnected }
     }
 
+    public func setAuthorizedToolNames(_ names: Set<String>) {
+        authorizedToolNames = names
+    }
+
     private func callToolWithRequestContext(
         name: String,
         arguments: [String: JSONValue],
@@ -350,6 +364,7 @@ public actor OfficialMCPTransport: MCPTransport {
             description: tool.description ?? "",
             inputSchema: schema.mapValues(Self.jsonValue(from:)),
             risk: risk,
+            trust: .remoteUnverified,
             title: tool.title,
             outputSchema: tool.outputSchema.flatMap {
                 guard case .object(let schema) = $0 else { return nil }

@@ -285,7 +285,7 @@ public final class MLXLocalProvider: LLMProvider, @unchecked Sendable {
         guard let predictedPeakMemoryBytes, predictedPeakMemoryBytes > 0 else {
             throw MLXLocalProviderError.memoryEstimateUnavailable
         }
-        let availableBudgetBytes = ArchonDeviceCapabilities.current.recommendedModelMemoryBytes
+        let availableBudgetBytes = DeviceHardwareProfile.currentEffectiveModelMemoryBudgetBytes
         guard predictedPeakMemoryBytes <= availableBudgetBytes else {
             throw MLXLocalProviderError.insufficientMemory(
                 predictedPeakBytes: predictedPeakMemoryBytes,

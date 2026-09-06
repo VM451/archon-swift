@@ -95,6 +95,30 @@ public struct DeviceHardwareProfile: Sendable, Equatable {
         Int(safeModelMemoryBudgetBytes / (1024 * 1024))
     }
 
+    /// Resolves the model budget used at load time from both the dynamic system
+    /// recommendation and this device's conservative process envelope.
+    ///
+    /// `os_proc_available_memory()` is advisory and can briefly dip while the
+    /// app is foregrounding or another framework is releasing memory. Using it
+    /// as the only gate can make a model that passed the catalog preflight fail
+    /// immediately at load time. The static profile remains the upper bound for
+    /// this fallback; it already reserves application growth, runtime overhead,
+    /// and pressure headroom.
+    public static func effectiveModelMemoryBudgetBytes(
+        dynamicRecommendationBytes: UInt64,
+        profile: DeviceHardwareProfile
+    ) -> UInt64 {
+        max(dynamicRecommendationBytes, profile.safeModelMemoryBudgetBytes)
+    }
+
+    /// Current conservative model budget for an on-device provider load.
+    public static var currentEffectiveModelMemoryBudgetBytes: UInt64 {
+        effectiveModelMemoryBudgetBytes(
+            dynamicRecommendationBytes: ArchonDeviceCapabilities.current.recommendedModelMemoryBytes,
+            profile: current
+        )
+    }
+
     /// Number of active processor cores.
     public let processorCount: Int
 
@@ -234,6 +258,20 @@ public struct DeviceHardwareProfile: Sendable, Equatable {
     public static let iPhone15Pro = DeviceHardwareProfile(
         platform: .iOS,
         physicalMemoryBytes: 8 * 1024 * 1024 * 1024,
+        appProcessMemoryLimitBytes: UInt64(3.0 * 1024.0 * 1024.0 * 1024.0),
+        availableProcessMemoryBytes: UInt64(2.7 * 1024.0 * 1024.0 * 1024.0),
+        modelMemoryBudgetFraction: 0.50,
+        processorCount: 6,
+        isAppleFoundationModelSupported: true
+    )
+
+    /// Simulated iPhone 17 Pro-class device (12 GB RAM). This preserves the
+    /// conservative mobile process envelope until a consuming app captures
+    /// device-specific memory and thermal measurements; physical RAM alone is
+    /// not permission to load a larger model.
+    public static let iPhone17Pro = DeviceHardwareProfile(
+        platform: .iOS,
+        physicalMemoryBytes: 12 * 1024 * 1024 * 1024,
         appProcessMemoryLimitBytes: UInt64(3.0 * 1024.0 * 1024.0 * 1024.0),
         availableProcessMemoryBytes: UInt64(2.7 * 1024.0 * 1024.0 * 1024.0),
         modelMemoryBudgetFraction: 0.50,
