@@ -241,9 +241,21 @@ public struct HuggingFaceCatalog: PaginatedModelCatalogProvider, Sendable {
                 name: "full",
                 value: (request.includeVariants || request.compatibleOnly || request.runtime != nil || request.format != nil) ? "true" : "false"
             ),
-            URLQueryItem(name: "sort", value: "downloads"),
+            // Freshness is the primary server-side ordering. The browser
+            // applies installability/device ranking locally after decoding the
+            // full page, so new runnable packages are not hidden behind stale
+            // popularity results.
+            URLQueryItem(name: "sort", value: "lastModified"),
             URLQueryItem(name: "direction", value: "-1")
         ]
+        let expandedFields = [
+            "author", "createdAt", "lastModified", "downloads", "likes",
+            "tags", "pipeline_tag", "library_name", "gated",
+            "private", "sha", "siblings", "safetensors", "cardData"
+        ]
+        queryItems.append(contentsOf: expandedFields.map {
+            URLQueryItem(name: "expand[]", value: $0)
+        })
         if let organization {
             queryItems.append(URLQueryItem(name: "author", value: organization))
         }
@@ -326,7 +338,11 @@ public struct HuggingFaceCatalog: PaginatedModelCatalogProvider, Sendable {
             ),
             gated: payload.gated?.boolValue ?? false,
             supportedLanguages: payload.cardData?["language"]?.stringArrayValue ?? [],
-            variants: variants
+            variants: variants,
+            createdAt: payload.createdAt.flatMap(Self.parseDate),
+            lastModifiedAt: payload.lastModified.flatMap(Self.parseDate),
+            downloads: payload.downloads,
+            likes: payload.likes
         )
     }
 
@@ -364,7 +380,9 @@ public struct HuggingFaceCatalog: PaginatedModelCatalogProvider, Sendable {
                hasTokenizer,
                let primary = mlxResources.first(where: { $0.relativePath.lowercased().hasSuffix(".safetensors") }) {
                 let sizes = mlxResources.map(\.sizeBytes)
-                let totalSize = sizes.allSatisfy { $0 != nil } ? sizes.compactMap { $0 }.reduce(0, +) : nil
+                let totalSize = sizes.allSatisfy { $0 != nil }
+                    ? sizes.compactMap { $0 }.reduce(0, +)
+                    : payload.safetensors?.total
                 let mlxQuantization = quantization(from: primary.relativePath)
                     ?? quantization(from: payload.id)
                     ?? quantization(from: tags.joined(separator: " "))
@@ -471,8 +489,21 @@ public struct HuggingFaceCatalog: PaginatedModelCatalogProvider, Sendable {
             license: model.license,
             gated: model.gated,
             supportedLanguages: model.supportedLanguages,
-            variants: request.includeVariants ? filteredVariants : []
+            variants: request.includeVariants ? filteredVariants : [],
+            createdAt: model.createdAt,
+            lastModifiedAt: model.lastModifiedAt,
+            downloads: model.downloads,
+            likes: model.likes
         )
+    }
+
+    private static func parseDate(_ value: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: value) ?? {
+            formatter.formatOptions = [.withInternetDateTime]
+            return formatter.date(from: value)
+        }()
     }
 
     private func artifactURL(repositoryID: String, revision: String, filename: String) -> URL {
@@ -679,14 +710,24 @@ private struct HuggingFaceModelPayload: Decodable, Sendable {
     let sha: String?
     let cardData: [String: JSONValue]?
     let siblings: [HuggingFaceSibling]?
+    let createdAt: String?
+    let lastModified: String?
+    let downloads: Int?
+    let likes: Int?
+    let safetensors: HuggingFaceSafetensors?
 
     enum CodingKeys: String, CodingKey {
         case id, author, tags, architectures, gated, sha, siblings
+        case createdAt, lastModified, downloads, likes, safetensors
         case pipelineTag = "pipeline_tag"
         case libraryName = "library_name"
         case `private`
         case cardData = "cardData"
     }
+}
+
+private struct HuggingFaceSafetensors: Decodable, Sendable {
+    let total: Int64?
 }
 
 private struct HuggingFaceSibling: Decodable, Sendable {

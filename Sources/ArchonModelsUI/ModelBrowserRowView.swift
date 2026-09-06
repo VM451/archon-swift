@@ -108,10 +108,21 @@ struct ModelBrowserRowView: View {
                 Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
                     .lineLimit(1)
             }
+
+            Text("•")
+                .foregroundStyle(.tertiary)
+            Text(releaseAgeText)
+                .lineLimit(1)
         }
         .font(.caption)
         .foregroundStyle(.secondary)
         .minimumScaleFactor(0.85)
+    }
+
+    private var releaseAgeText: String {
+        guard let releaseDate = model.releaseDate else { return "Release age unavailable" }
+        let days = max(0, Calendar.current.dateComponents([.day], from: releaseDate, to: Date()).day ?? 0)
+        return days == 1 ? "1 day ago" : "\(days) days ago"
     }
 
     private var displayTitle: String {

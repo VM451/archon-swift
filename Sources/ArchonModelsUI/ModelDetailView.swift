@@ -50,6 +50,16 @@ public struct ModelDetailView: View {
                 if let revision = model.revision {
                     LabeledContent("Revision", value: revision)
                 }
+                if let releaseDate = model.releaseDate {
+                    LabeledContent("Released", value: releaseAgeText(for: releaseDate))
+                }
+                if let lastModifiedAt = model.lastModifiedAt,
+                   lastModifiedAt != model.createdAt {
+                    LabeledContent("Updated", value: releaseAgeText(for: lastModifiedAt))
+                }
+                if let downloads = model.downloads {
+                    LabeledContent("Downloads", value: downloads.formatted())
+                }
                 LabeledContent("Source", value: model.source.displayName)
                 if !model.tasks.isEmpty {
                     LabeledContent("Capabilities", value: model.tasks.map(\.displayName).sorted().joined(separator: ", "))
@@ -158,6 +168,11 @@ public struct ModelDetailView: View {
 
     private var mlxVariants: [ModelVariant] {
         model.variants.filter { $0.runtime == .mlx && $0.format == .mlx }
+    }
+
+    private func releaseAgeText(for date: Date) -> String {
+        let days = max(0, Calendar.current.dateComponents([.day], from: date, to: Date()).day ?? 0)
+        return days == 1 ? "1 day ago" : "\(days) days ago"
     }
 
     @ViewBuilder

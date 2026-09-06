@@ -25,7 +25,7 @@ public struct ModelLibraryView: View {
         device: ArchonDeviceCapabilities? = nil
     ) {
         self.library = library
-        self.catalog = catalog.map { OfficialModelCatalog(provider: $0) }
+        self.catalog = catalog.map { MLXModelCatalog(provider: $0) }
         self.downloadManager = downloadManager
         self.deviceOverride = device
     }
@@ -268,15 +268,16 @@ public struct ModelLibraryView: View {
     }
 }
 
-/// A small, functional official-model catalog browser. The caller supplies the
+/// A small, functional MLX model catalog browser. The caller supplies the
 /// catalog and manager so network/auth policy remains in the host application;
-/// the browser applies the package's strict official-publisher and MLX-only
-/// user-facing policy.
+/// the browser applies the package's directly-runnable MLX-only policy while
+/// allowing trusted community conversions to participate in discovery.
 @available(iOS 27.0, macOS 27.0, visionOS 27.0, *)
 public struct ModelBrowserView: View {
     private enum Collection: String, CaseIterable, Identifiable {
         case all
         case recommended
+        case downloadable
         case downloaded
 
         var id: Self { self }
@@ -285,6 +286,7 @@ public struct ModelBrowserView: View {
             switch self {
             case .all: "All MLX Models"
             case .recommended: "Recommended"
+            case .downloadable: "Downloadable"
             case .downloaded: "Downloaded"
             }
         }
@@ -313,17 +315,18 @@ public struct ModelBrowserView: View {
     @State private var publisherFilter = ""
     @State private var licenseFilter = ""
     @State private var maximumSizeGB = 0
+    @State private var maximumReleaseAgeDays = 0
     @State private var searchError: String?
 
     public init(
-        title: String = "Official MLX Models",
+        title: String = "MLX Models",
         catalog: any ModelCatalogProvider,
         library: ModelLibrary = .makeDefault(),
         downloadManager: ModelDownloadManager = ModelDownloadManager(),
         device: ArchonDeviceCapabilities? = nil
     ) {
         self.title = title
-        self.catalog = OfficialModelCatalog(provider: catalog)
+        self.catalog = MLXModelCatalog(provider: catalog)
         self.library = library
         self.downloadManager = downloadManager
         self.deviceOverride = device
@@ -333,7 +336,7 @@ public struct ModelBrowserView: View {
         List {
             if isInitialLoading, results.isEmpty {
                 Section {
-                    ProgressView("Loading official MLX models…")
+                    ProgressView("Loading MLX models…")
                         .frame(maxWidth: .infinity, alignment: .center)
                 }
             }
@@ -341,7 +344,7 @@ public struct ModelBrowserView: View {
             if !isInitialLoading, displayedResults.isEmpty, !hasMoreResults {
                 Section {
                     ContentUnavailableView(
-                        "No Official MLX Models Found",
+                        "No MLX Models Found",
                         systemImage: "shippingbox",
                         description: Text("Try changing the search or filters.")
                     )
@@ -379,6 +382,11 @@ public struct ModelBrowserView: View {
                             onRedownload: { redownload(variant, descriptor: model) },
                             onDelete: { deleteInstalled(variant) }
                         )
+                        .onAppear {
+                            guard model.id == displayedResults.last?.id,
+                                  variant.id == model.variants.last?.id else { return }
+                            requestNextPage()
+                        }
                     }
                 }
             }
@@ -386,10 +394,10 @@ public struct ModelBrowserView: View {
             if hasMoreResults {
                 Section {
                     if isLoadingMore {
-                        ProgressView("Loading more official MLX models…")
+                        ProgressView("Loading more MLX models…")
                             .frame(maxWidth: .infinity, alignment: .center)
                     } else {
-                        Button("Load more official MLX models", systemImage: "arrow.down.circle") {
+                        Button("Load more MLX models", systemImage: "arrow.down.circle") {
                             requestNextPage()
                         }
                         .frame(maxWidth: .infinity, alignment: .center)
@@ -416,7 +424,7 @@ public struct ModelBrowserView: View {
             }
             #endif
         }
-        .task(id: "\(query)|\(compatibleOnly)|\(selectedTaskRaw)") {
+        .task(id: "\(query)|\(compatibleOnly)|\(selectedTaskRaw)|\(collection.rawValue)|\(maximumSizeGB)|\(maximumReleaseAgeDays)") {
             do {
                 // Search fields can change several times while the user is
                 // typing. Debounce them so each keystroke does not start a
@@ -507,6 +515,15 @@ public struct ModelBrowserView: View {
                 Text("Up to 16 GB").tag(16)
             }
 
+            Picker("Released Within", selection: $maximumReleaseAgeDays) {
+                Text("Any release date").tag(0)
+                Text("7 days").tag(7)
+                Text("30 days").tag(30)
+                Text("90 days").tag(90)
+                Text("180 days").tag(180)
+                Text("365 days").tag(365)
+            }
+
             if hasActiveFilters {
                 Divider()
                 Button(role: .destructive) {
@@ -522,7 +539,7 @@ public struct ModelBrowserView: View {
     }
 
     private var hasActiveFilters: Bool {
-        compatibleOnly || collection != .all || !selectedTaskRaw.isEmpty || maximumSizeGB > 0 || !publisherFilter.isEmpty || !licenseFilter.isEmpty
+        compatibleOnly || collection != .all || !selectedTaskRaw.isEmpty || maximumSizeGB > 0 || maximumReleaseAgeDays > 0 || !publisherFilter.isEmpty || !licenseFilter.isEmpty
     }
 
     private func resetFilters() {
@@ -530,6 +547,7 @@ public struct ModelBrowserView: View {
         collection = .all
         selectedTaskRaw = ""
         maximumSizeGB = 0
+        maximumReleaseAgeDays = 0
         publisherFilter = ""
         licenseFilter = ""
     }
@@ -551,10 +569,19 @@ public struct ModelBrowserView: View {
                     guard let size = variant.sizeBytes,
                           size <= Int64(maximumSizeGB) * 1_000_000_000 else { return false }
                 }
+                if maximumReleaseAgeDays > 0 {
+                    guard let age = releaseAgeInDays(for: model), age <= maximumReleaseAgeDays else { return false }
+                }
                 if collection == .downloaded && !isInstalled(variant) { return false }
                 if collection == .recommended {
-                    let fit = ModelCompatibilityAnalyzer.analyze(variant: variant, device: device).fit
+                    let compatibility = compatibility(for: variant)
+                    guard compatibility.canDownload, hasInstallableArtifact(variant) else { return false }
+                    let fit = compatibility.fit
                     guard fit == .excellentFit || fit == .goodFit else { return false }
+                }
+                if collection == .downloadable {
+                    let compatibility = compatibility(for: variant)
+                    guard compatibility.canDownload, hasInstallableArtifact(variant) else { return false }
                 }
                 return true
             }
@@ -575,7 +602,11 @@ public struct ModelBrowserView: View {
                 license: model.license,
                 gated: model.gated,
                 supportedLanguages: model.supportedLanguages,
-                variants: variants.sorted(by: isPreferredVariant)
+                variants: variants.sorted(by: isPreferredVariant),
+                createdAt: model.createdAt,
+                lastModifiedAt: model.lastModifiedAt,
+                downloads: model.downloads,
+                likes: model.likes
             )
         }
 
@@ -595,6 +626,14 @@ public struct ModelBrowserView: View {
         let leftMemory = ModelCompatibilityAnalyzer.estimatedPeakMemoryBytes(for: leftVariant) ?? UInt64.max
         let rightMemory = ModelCompatibilityAnalyzer.estimatedPeakMemoryBytes(for: rightVariant) ?? UInt64.max
         if leftMemory != rightMemory { return leftMemory < rightMemory }
+
+        let leftDate = lhs.releaseDate ?? .distantPast
+        let rightDate = rhs.releaseDate ?? .distantPast
+        if leftDate != rightDate { return leftDate > rightDate }
+
+        let leftDownloads = lhs.downloads ?? 0
+        let rightDownloads = rhs.downloads ?? 0
+        if leftDownloads != rightDownloads { return leftDownloads > rightDownloads }
 
         let leftName = lhs.name.localizedLowercase
         let rightName = rhs.name.localizedLowercase
@@ -616,7 +655,20 @@ public struct ModelBrowserView: View {
         let leftMemory = ModelCompatibilityAnalyzer.estimatedPeakMemoryBytes(for: lhs) ?? UInt64.max
         let rightMemory = ModelCompatibilityAnalyzer.estimatedPeakMemoryBytes(for: rhs) ?? UInt64.max
         if leftMemory != rightMemory { return leftMemory < rightMemory }
+        let leftDate = lhsReleaseDate(lhs)
+        let rightDate = lhsReleaseDate(rhs)
+        if leftDate != rightDate { return leftDate > rightDate }
         return lhs.id < rhs.id
+    }
+
+    private func lhsReleaseDate(_ variant: ModelVariant) -> Date {
+        results.first(where: { $0.id == variant.modelID })?.releaseDate ?? .distantPast
+    }
+
+    private func releaseAgeInDays(for model: ModelDescriptor) -> Int? {
+        guard let releaseDate = model.releaseDate else { return nil }
+        let days = Calendar.current.dateComponents([.day], from: releaseDate, to: Date()).day
+        return max(0, days ?? 0)
     }
 
     private func compatibility(for variant: ModelVariant) -> ModelCompatibility {

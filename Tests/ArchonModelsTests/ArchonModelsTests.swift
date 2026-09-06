@@ -1035,16 +1035,21 @@ struct ArchonModelsTests {
         [{
           "id": "lmstudio-community/Qwen3.8-27B-MLX-4bit",
           "author": "lmstudio-community",
+          "createdAt": "2026-08-01T00:00:00.000Z",
+          "lastModified": "2026-08-20T00:00:00.000Z",
+          "downloads": 12345,
+          "likes": 678,
           "pipeline_tag": "image-text-to-text",
           "library_name": "transformers",
           "tags": ["transformers", "safetensors", "qwen3_5", "image-text-to-text", "mlx", "base_model:Qwen/Qwen3.8-27B", "4-bit"],
           "gated": false,
           "private": false,
           "sha": "current-mlx-revision",
+          "safetensors": {"total": 150},
           "siblings": [
-            {"rfilename": "model.safetensors", "size": 100},
-            {"rfilename": "config.json", "size": 20},
-            {"rfilename": "tokenizer.json", "size": 30}
+            {"rfilename": "model.safetensors"},
+            {"rfilename": "config.json"},
+            {"rfilename": "tokenizer.json"}
           ]
         }]
         """#.utf8)
@@ -1069,7 +1074,15 @@ struct ArchonModelsTests {
         #expect(model.tasks.contains(.textGeneration))
         #expect(model.tasks.contains(.vision))
         #expect(variant.format == .mlx)
+        #expect(variant.sizeBytes == 150)
+        #expect(variant.estimatedMemoryBytes == 172)
         #expect(variant.capabilities.tasks.contains(.textGeneration))
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        #expect(model.createdAt == isoFormatter.date(from: "2026-08-01T00:00:00.000Z"))
+        #expect(model.lastModifiedAt == isoFormatter.date(from: "2026-08-20T00:00:00.000Z"))
+        #expect(model.downloads == 12345)
+        #expect(model.likes == 678)
         #expect(queryItems.first(where: { $0.name == "filter" })?.value == "mlx")
     }
 

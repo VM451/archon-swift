@@ -338,6 +338,16 @@ public struct ModelDescriptor: Codable, Equatable, Sendable, Identifiable {
     public let gated: Bool
     public let supportedLanguages: [String]
     public let variants: [ModelVariant]
+    /// Provider publication metadata used for freshness sorting and age filters.
+    public let createdAt: Date?
+    public let lastModifiedAt: Date?
+    public let downloads: Int?
+    public let likes: Int?
+
+    /// The original publication date when available, otherwise the latest
+    /// provider update date. This is deliberately optional: a catalog must not
+    /// invent a release date for incomplete metadata.
+    public var releaseDate: Date? { createdAt ?? lastModifiedAt }
 
     /// Convenience access to the declared license URL without requiring
     /// callers to unwrap the full license metadata value.
@@ -359,7 +369,11 @@ public struct ModelDescriptor: Codable, Equatable, Sendable, Identifiable {
         license: ModelLicenseMetadata? = nil,
         gated: Bool = false,
         supportedLanguages: [String] = [],
-        variants: [ModelVariant] = []
+        variants: [ModelVariant] = [],
+        createdAt: Date? = nil,
+        lastModifiedAt: Date? = nil,
+        downloads: Int? = nil,
+        likes: Int? = nil
     ) {
         self.id = id
         self.name = name
@@ -377,6 +391,58 @@ public struct ModelDescriptor: Codable, Equatable, Sendable, Identifiable {
         self.gated = gated
         self.supportedLanguages = supportedLanguages
         self.variants = variants
+        self.createdAt = createdAt
+        self.lastModifiedAt = lastModifiedAt
+        self.downloads = downloads
+        self.likes = likes
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, publisher, family, parameterCount, tasks, architecture
+        case description, logoURL, source, sourceURL, revision, license, gated
+        case supportedLanguages, variants, createdAt, lastModifiedAt, downloads, likes
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try container.decode(String.self, forKey: .id),
+            name: try container.decode(String.self, forKey: .name),
+            publisher: try container.decode(String.self, forKey: .publisher),
+            family: try container.decodeIfPresent(String.self, forKey: .family),
+            parameterCount: try container.decodeIfPresent(Int64.self, forKey: .parameterCount),
+            tasks: try container.decodeIfPresent(Set<ArchonModelTask>.self, forKey: .tasks) ?? [.textGeneration],
+            architecture: try container.decodeIfPresent(String.self, forKey: .architecture),
+            description: try container.decodeIfPresent(String.self, forKey: .description),
+            logoURL: try container.decodeIfPresent(URL.self, forKey: .logoURL),
+            source: try container.decode(ArchonModelSource.self, forKey: .source),
+            sourceURL: try container.decodeIfPresent(URL.self, forKey: .sourceURL),
+            revision: try container.decodeIfPresent(String.self, forKey: .revision),
+            license: try container.decodeIfPresent(ModelLicenseMetadata.self, forKey: .license),
+            gated: try container.decodeIfPresent(Bool.self, forKey: .gated) ?? false,
+            supportedLanguages: try container.decodeIfPresent([String].self, forKey: .supportedLanguages) ?? [],
+            variants: try container.decodeIfPresent([ModelVariant].self, forKey: .variants) ?? [],
+            createdAt: Self.decodeDate(forKey: .createdAt, from: container),
+            lastModifiedAt: Self.decodeDate(forKey: .lastModifiedAt, from: container),
+            downloads: try container.decodeIfPresent(Int.self, forKey: .downloads),
+            likes: try container.decodeIfPresent(Int.self, forKey: .likes)
+        )
+    }
+
+    private static func decodeDate(
+        forKey key: CodingKeys,
+        from container: KeyedDecodingContainer<CodingKeys>
+    ) -> Date? {
+        if let date = try? container.decode(Date.self, forKey: key) {
+            return date
+        }
+        guard let value = try? container.decode(String.self, forKey: key) else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: value) ?? {
+            formatter.formatOptions = [.withInternetDateTime]
+            return formatter.date(from: value)
+        }()
     }
 }
 
@@ -567,7 +633,11 @@ public struct MLXModelCatalog: PaginatedModelCatalogProvider, Sendable {
             license: model.license,
             gated: model.gated,
             supportedLanguages: model.supportedLanguages,
-            variants: includeVariants ? variants : []
+            variants: includeVariants ? variants : [],
+            createdAt: model.createdAt,
+            lastModifiedAt: model.lastModifiedAt,
+            downloads: model.downloads,
+            likes: model.likes
         )
     }
 
@@ -799,7 +869,11 @@ public struct OfficialModelCatalog: PaginatedModelCatalogProvider, Sendable {
             license: model.license,
             gated: model.gated,
             supportedLanguages: model.supportedLanguages,
-            variants: includeVariants ? variants : []
+            variants: includeVariants ? variants : [],
+            createdAt: model.createdAt,
+            lastModifiedAt: model.lastModifiedAt,
+            downloads: model.downloads,
+            likes: model.likes
         )
     }
 
@@ -1088,7 +1162,11 @@ public struct StaticModelCatalog: PaginatedModelCatalogProvider, Sendable {
                     license: model.license,
                     gated: model.gated,
                     supportedLanguages: model.supportedLanguages,
-                    variants: request.includeVariants ? variants : []
+                    variants: request.includeVariants ? variants : [],
+                    createdAt: model.createdAt,
+                    lastModifiedAt: model.lastModifiedAt,
+                    downloads: model.downloads,
+                    likes: model.likes
                 )
             }
 
