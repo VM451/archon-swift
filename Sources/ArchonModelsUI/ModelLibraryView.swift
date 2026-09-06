@@ -539,7 +539,7 @@ public struct ModelBrowserView: View {
     }
 
     private var displayedResults: [ModelDescriptor] {
-        results.compactMap { model in
+        let filteredModels: [ModelDescriptor] = results.compactMap { model -> ModelDescriptor? in
             let variants = model.variants.filter { variant in
                 guard variant.runtime == .mlx, variant.format == .mlx else { return false }
                 if let task = selectedTask, !variant.capabilities.tasks.contains(task) { return false }
@@ -575,8 +575,85 @@ public struct ModelBrowserView: View {
                 license: model.license,
                 gated: model.gated,
                 supportedLanguages: model.supportedLanguages,
-                variants: variants
+                variants: variants.sorted(by: isPreferredVariant)
             )
+        }
+
+        return filteredModels.sorted(by: isPreferredModel)
+    }
+
+    private func isPreferredModel(_ lhs: ModelDescriptor, _ rhs: ModelDescriptor) -> Bool {
+        guard let leftVariant = preferredVariant(in: lhs) else { return false }
+        guard let rightVariant = preferredVariant(in: rhs) else { return true }
+
+        let leftCompatibility = compatibility(for: leftVariant)
+        let rightCompatibility = compatibility(for: rightVariant)
+        let leftRank = recommendationRank(for: leftCompatibility)
+        let rightRank = recommendationRank(for: rightCompatibility)
+        if leftRank != rightRank { return leftRank < rightRank }
+
+        let leftMemory = ModelCompatibilityAnalyzer.estimatedPeakMemoryBytes(for: leftVariant) ?? UInt64.max
+        let rightMemory = ModelCompatibilityAnalyzer.estimatedPeakMemoryBytes(for: rightVariant) ?? UInt64.max
+        if leftMemory != rightMemory { return leftMemory < rightMemory }
+
+        let leftName = lhs.name.localizedLowercase
+        let rightName = rhs.name.localizedLowercase
+        if leftName != rightName { return leftName < rightName }
+        return lhs.id < rhs.id
+    }
+
+    private func preferredVariant(in model: ModelDescriptor) -> ModelVariant? {
+        model.variants.min(by: isPreferredVariant)
+    }
+
+    private func isPreferredVariant(_ lhs: ModelVariant, _ rhs: ModelVariant) -> Bool {
+        let leftCompatibility = compatibility(for: lhs)
+        let rightCompatibility = compatibility(for: rhs)
+        let leftRank = recommendationRank(for: leftCompatibility)
+        let rightRank = recommendationRank(for: rightCompatibility)
+        if leftRank != rightRank { return leftRank < rightRank }
+
+        let leftMemory = ModelCompatibilityAnalyzer.estimatedPeakMemoryBytes(for: lhs) ?? UInt64.max
+        let rightMemory = ModelCompatibilityAnalyzer.estimatedPeakMemoryBytes(for: rhs) ?? UInt64.max
+        if leftMemory != rightMemory { return leftMemory < rightMemory }
+        return lhs.id < rhs.id
+    }
+
+    private func compatibility(for variant: ModelVariant) -> ModelCompatibility {
+        ModelCompatibilityAnalyzer.analyze(
+            variant: variant,
+            device: device,
+            isInstalled: isInstalled(variant)
+        )
+    }
+
+    private func recommendationRank(for compatibility: ModelCompatibility) -> Int {
+        switch compatibility.status {
+        case .ready:
+            return 0
+        case .compatible:
+            switch compatibility.fit {
+            case .excellentFit: return 0
+            case .goodFit: return 1
+            case .mayBeSlow: return 2
+            case .memoryConstrained: return 3
+            case .notRecommended, .cannotRun: return 4
+            }
+        case .thermalConstrained:
+            return 5
+        case .memoryEstimateUnavailable:
+            return 6
+        case .conversionRequired,
+             .unsupportedFormat,
+             .unsupportedArchitecture,
+             .unsupportedOnDevice,
+             .insufficientMemory,
+             .macOSOnly,
+             .requiresNewerOS,
+             .requiresAuthentication,
+             .experimental,
+             .iOSCompatible:
+            return 7
         }
     }
 
