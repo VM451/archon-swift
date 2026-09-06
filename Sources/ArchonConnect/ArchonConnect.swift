@@ -7,6 +7,9 @@ public struct MCPTool: Codable, Equatable, Sendable, Identifiable {
     public let description: String
     public let inputSchema: [String: JSONValue]
     public let risk: MCPRisk
+    /// Provenance of the risk classification. Remote annotations are never
+    /// treated as host authorization.
+    public let trust: MCPToolTrust
     public let title: String?
     public let outputSchema: [String: JSONValue]?
 
@@ -16,6 +19,7 @@ public struct MCPTool: Codable, Equatable, Sendable, Identifiable {
         description: String = "",
         inputSchema: [String: JSONValue] = [:],
         risk: MCPRisk = .read,
+        trust: MCPToolTrust = .hostApproved,
         title: String? = nil,
         outputSchema: [String: JSONValue]? = nil
     ) {
@@ -24,6 +28,7 @@ public struct MCPTool: Codable, Equatable, Sendable, Identifiable {
         self.description = description
         self.inputSchema = inputSchema
         self.risk = risk
+        self.trust = trust
         self.title = title
         self.outputSchema = outputSchema
     }
@@ -37,6 +42,7 @@ public struct MCPTool: Codable, Equatable, Sendable, Identifiable {
             description: try container.decodeIfPresent(String.self, forKey: .description) ?? "",
             inputSchema: try container.decodeIfPresent([String: JSONValue].self, forKey: .inputSchema) ?? [:],
             risk: try container.decodeIfPresent(MCPRisk.self, forKey: .risk) ?? .read,
+            trust: .remoteUnverified,
             title: try container.decodeIfPresent(String.self, forKey: .title),
             outputSchema: try container.decodeIfPresent([String: JSONValue].self, forKey: .outputSchema)
         )
@@ -55,6 +61,11 @@ public struct MCPTool: Codable, Equatable, Sendable, Identifiable {
             path: name
         )
     }
+}
+
+public enum MCPToolTrust: String, Codable, Equatable, Sendable {
+    case hostApproved
+    case remoteUnverified
 }
 
 public enum MCPRisk: String, Codable, CaseIterable, Sendable {
@@ -247,6 +258,9 @@ public protocol MCPTransport: Sendable {
     func readResource(uri: String) async throws -> [MCPResourceContent]
     func listPrompts() async throws -> [MCPPrompt]
     func getPrompt(name: String, arguments: [String: String]) async throws -> MCPPromptResult
+    /// Installs the host-approved tool capability set. A transport must deny
+    /// direct tool calls until this set is explicitly supplied.
+    func setAuthorizedToolNames(_ names: Set<String>) async
 }
 
 public extension MCPTransport {
@@ -275,6 +289,8 @@ public extension MCPTransport {
     func getPrompt(name: String, arguments: [String: String]) async throws -> MCPPromptResult {
         throw MCPTransportError.unsupported("prompts/get")
     }
+
+    func setAuthorizedToolNames(_ names: Set<String>) async {}
 }
 
 public protocol MCPPermissionPolicy: Sendable {
@@ -289,6 +305,7 @@ public enum MCPTransportError: Error, LocalizedError, Equatable, Sendable {
     case unsupported(String)
     case timeout(TimeInterval)
     case invalidArguments(String)
+    case responseTooLarge(maximumBytes: Int)
     case sdkFailure(String)
 
     public var errorDescription: String? {
@@ -300,6 +317,7 @@ public enum MCPTransportError: Error, LocalizedError, Equatable, Sendable {
         case .unsupported(let operation): "This MCP transport does not support \(operation)."
         case .timeout(let seconds): "MCP request timed out after \(seconds) seconds."
         case .invalidArguments(let reason): "MCP tool arguments are invalid: \(reason)"
+        case .responseTooLarge(let maximumBytes): "MCP response exceeds the \(maximumBytes)-byte safety limit."
         case .sdkFailure(let reason): "The official MCP Swift SDK failed: \(reason)"
         }
     }
@@ -316,6 +334,10 @@ public enum MCPTransportError: Error, LocalizedError, Equatable, Sendable {
 /// package never persists, prints, or discovers credentials. A consuming app
 /// can obtain a bearer token from its own Keychain-backed credential service.
 public actor MCPHTTPTransport: MCPTransport {
+    private static let maximumResponseBytes = 8 * 1024 * 1024
+    private static let maximumSSELineBytes = 64 * 1024
+    private static let maximumSSEEventBytes = 1 * 1024 * 1024
+
     public let endpoint: URL
     private let session: URLSession
     private let headers: [String: String]
@@ -326,6 +348,7 @@ public actor MCPHTTPTransport: MCPTransport {
     private var nextRequestID = 1
     private var sessionID: String?
     private var connected = false
+    private var authorizedToolNames: Set<String> = []
     private var streamTasks: [UUID: Task<Void, Never>] = [:]
 
     public init(
@@ -365,6 +388,7 @@ public actor MCPHTTPTransport: MCPTransport {
         streamTasks.removeAll()
         connected = false
         sessionID = nil
+        authorizedToolNames.removeAll()
     }
 
     public func listTools() async throws -> [MCPTool] {
@@ -382,6 +406,9 @@ public actor MCPHTTPTransport: MCPTransport {
 
     public func callTool(name: String, arguments: [String: JSONValue]) async throws -> MCPToolResult {
         guard connected else { throw MCPTransportError.notConnected }
+        guard authorizedToolNames.contains(name) else {
+            throw ArchonCoreError.invalidConfiguration("MCP tool \(name) has not been approved by the host.")
+        }
         let params: JSONValue = .object([
             "name": .string(name),
             "arguments": .object(arguments)
@@ -411,6 +438,10 @@ public actor MCPHTTPTransport: MCPTransport {
         let (stream, continuation) = AsyncThrowingStream<MCPStreamEvent, Error>.makeStream()
         guard connected else {
             continuation.finish(throwing: MCPTransportError.notConnected)
+            return stream
+        }
+        guard authorizedToolNames.contains(name) else {
+            continuation.finish(throwing: ArchonCoreError.invalidConfiguration("MCP tool \(name) has not been approved by the host."))
             return stream
         }
 
@@ -458,6 +489,9 @@ public actor MCPHTTPTransport: MCPTransport {
                                 var body = Data()
                                 for try await byte in bytes {
                                     try Task.checkCancellation()
+                                    guard body.count < Self.maximumResponseBytes else {
+                                        throw MCPTransportError.responseTooLarge(maximumBytes: Self.maximumResponseBytes)
+                                    }
                                     body.append(byte)
                                 }
                                 guard let event = try Self.decodeStreamEvent(body) else {
@@ -551,7 +585,7 @@ public actor MCPHTTPTransport: MCPTransport {
         if let timeout, timeout > 0 {
             (data, response) = try await withThrowingTaskGroup(of: (Data, URLResponse).self) { group in
                 group.addTask {
-                    try await session.data(for: requestForSend)
+                    try await Self.boundedData(for: requestForSend, session: session)
                 }
                 group.addTask {
                     try await Task.sleep(for: .seconds(timeout))
@@ -564,7 +598,7 @@ public actor MCPHTTPTransport: MCPTransport {
                 return first
             }
         } else {
-            (data, response) = try await session.data(for: requestForSend)
+            (data, response) = try await Self.boundedData(for: requestForSend, session: session)
         }
         guard let response = response as? HTTPURLResponse else { throw MCPTransportError.invalidResponse }
         guard (200...299).contains(response.statusCode) else {
@@ -599,6 +633,10 @@ public actor MCPHTTPTransport: MCPTransport {
         streamTasks[streamID] = nil
     }
 
+    public func setAuthorizedToolNames(_ names: Set<String>) {
+        authorizedToolNames = names
+    }
+
     private static func consumeSSE(
         bytes: URLSession.AsyncBytes,
         continuation: AsyncThrowingStream<MCPStreamEvent, Error>.Continuation
@@ -621,12 +659,14 @@ public actor MCPHTTPTransport: MCPTransport {
                 } else if text.hasPrefix("data:") {
                     let payload = String(text.dropFirst(5)).trimmingCharacters(in: .whitespaces)
                     if !payload.isEmpty {
-                        if !eventData.isEmpty { eventData.append(10) }
-                        eventData.append(contentsOf: Data(payload.utf8))
+                        try appendSSEPayload(Data(payload.utf8), to: &eventData)
                     }
                 }
                 line.removeAll(keepingCapacity: true)
             } else if byte != 13 {
+                guard line.count < maximumSSELineBytes else {
+                    throw MCPTransportError.responseTooLarge(maximumBytes: maximumSSELineBytes)
+                }
                 line.append(byte)
             }
         }
@@ -635,12 +675,46 @@ public actor MCPHTTPTransport: MCPTransport {
             let text = String(decoding: line, as: UTF8.self)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if text.hasPrefix("data:") {
-                eventData.append(contentsOf: Data(String(text.dropFirst(5)).trimmingCharacters(in: .whitespaces).utf8))
+                let payload = String(text.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+                if !payload.isEmpty {
+                    try appendSSEPayload(Data(payload.utf8), to: &eventData)
+                }
             }
         }
         if !eventData.isEmpty, let event = try decodeStreamEvent(eventData) {
             continuation.yield(event)
         }
+    }
+
+    private static func appendSSEPayload(_ payload: Data, to eventData: inout Data) throws {
+        let separatorBytes = eventData.isEmpty ? 0 : 1
+        guard payload.count <= maximumSSEEventBytes,
+              eventData.count <= maximumSSEEventBytes - separatorBytes - payload.count else {
+            throw MCPTransportError.responseTooLarge(maximumBytes: maximumSSEEventBytes)
+        }
+        if separatorBytes > 0 { eventData.append(10) }
+        eventData.append(payload)
+    }
+
+    private static func boundedData(
+        for request: URLRequest,
+        session: URLSession
+    ) async throws -> (Data, URLResponse) {
+        let (bytes, response) = try await session.bytes(for: request)
+        if let httpResponse = response as? HTTPURLResponse,
+           httpResponse.expectedContentLength > Int64(maximumResponseBytes) {
+            throw MCPTransportError.responseTooLarge(maximumBytes: maximumResponseBytes)
+        }
+
+        var data = Data()
+        for try await byte in bytes {
+            try Task.checkCancellation()
+            guard data.count < maximumResponseBytes else {
+                throw MCPTransportError.responseTooLarge(maximumBytes: maximumResponseBytes)
+            }
+            data.append(byte)
+        }
+        return (data, response)
     }
 
     private static func decodeStreamEvent(_ data: Data) throws -> MCPStreamEvent? {
@@ -788,7 +862,9 @@ private enum MCPJSONSchemaValidator {
 
 public struct AllowReadOnlyMCPPolicy: MCPPermissionPolicy, Sendable {
     public init() {}
-    public func allows(_ risk: MCPRisk, tool: MCPTool) async -> Bool { risk == .read }
+    public func allows(_ risk: MCPRisk, tool: MCPTool) async -> Bool {
+        risk == .read && tool.trust == .hostApproved
+    }
 }
 
 public actor MCPClient {
@@ -831,6 +907,13 @@ public actor MCPClient {
                 discoveredPrompts = []
             }
             toolsByName = Dictionary(discoveredTools.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+            var hostApprovedToolNames = Set<String>()
+            for tool in discoveredTools {
+                if await permissionPolicy.allows(tool.risk, tool: tool) {
+                    hostApprovedToolNames.insert(tool.name)
+                }
+            }
+            await transport.setAuthorizedToolNames(hostApprovedToolNames)
             resourcesByURI = Dictionary(discoveredResources.map { ($0.uri, $0) }, uniquingKeysWith: { first, _ in first })
             promptsByName = Dictionary(discoveredPrompts.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
             connected = true
