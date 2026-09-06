@@ -21,9 +21,10 @@ conversion-required and unsupported runtime/format pairs fail closed.
 `ModelRuntimeCapabilities` and `ModelCapabilityRequirements` negotiate task,
 streaming, tool-calling, and structured-output requirements before loading.
 The lifecycle retains lower-level runtime-neutral contracts, but the package's
-user-facing discovery is MLX-only. `ModelDescriptor.family` remains descriptive
-data, and a host can register any family whose variant has a truthful MLX
-format, resource, capability, license, platform, and memory contract. Core AI,
-Foundation Models, cloud, raw, and conversion-required variants are not
-returned by the discovery boundary. The bundled Gemma catalog is only a
-compatibility convenience; it is not the source of truth for MLX discovery.
+user-facing browsing is official-publisher MLX-only. `ModelDescriptor.family`
+remains descriptive data, and a host can register any family whose first-party
+variant has a truthful MLX format, resource, capability, license, platform, and
+memory contract. Core AI, Foundation Models, cloud, raw, conversion-required,
+and community-converted variants are not returned by the browsing boundary.
+The bundled Gemma catalog is only a compatibility convenience; it is not the
+source of truth for official discovery.

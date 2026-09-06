@@ -17,7 +17,7 @@ all-base-products re-export; optional adapters remain separate.
 | Language | Swift 6.4, strict-concurrency settings |
 | Platforms | iOS 27, macOS 27, visionOS 27 |
 | Package manager | Swift Package Manager |
-| Runtime posture | MLX Swift and Hugging Face/Transformers support is bundled with `ArchonAgent` for out-of-the-box local inference; user-facing discovery remains MLX-only |
+| Runtime posture | MLX Swift and Hugging Face/Transformers support is bundled with `ArchonAgent` for out-of-the-box local inference; user-facing browsing is official-publisher MLX-only |
 | Default safety posture | Typed errors, bounded operations, fail closed |
 | App boundary | The consuming app owns credentials, entitlements, permissions, and host adapters |
 
@@ -31,28 +31,33 @@ all-base-products re-export; optional adapters remain separate.
 - Permission-aware MCP, semantic host actions, and capability-restricted WebKit sandboxes.
 - No fabricated inference, extraction, search, telemetry, or platform records when a required capability is unavailable.
 
-## Supported model families
+## Supported official model families
 
-Archon's user-facing model discovery is **MLX-only**, not a generic AI-model
-browser. Qwen, Mistral, Llama, Phi, Gemma, and future families can appear when
-their validated MLX variants are catalogued. Core AI, Foundation Models, cloud
-providers, raw checkpoints, and conversion-required artifacts are not returned
-by the discovery UI.
+Archon's user-facing model discovery is **official-publisher MLX-only**, not a
+generic AI-model browser. Qwen, Mistral, Llama, Phi, Gemma, and future families
+can appear only when an allow-listed first-party namespace publishes a
+validated MLX variant. Community conversion namespaces such as `mlx-community`
+and `lmstudio-community`, Core AI, Foundation Models, cloud providers, raw
+checkpoints, and conversion-required artifacts are not returned by the
+discovery UI.
 
-`ModelBrowserView` and `ModelLibraryView` apply `MLXModelCatalog` automatically.
-When using catalog APIs directly for user-facing results, wrap the host
-provider explicitly:
+`ModelBrowserView` and `ModelLibraryView` apply `OfficialModelCatalog`
+automatically. When using catalog APIs directly for user-facing results, wrap
+the host provider explicitly:
 
 ```swift
-let catalog = MLXModelCatalog(provider: HuggingFaceCatalog())
+let catalog = OfficialModelCatalog(provider: HuggingFaceCatalog())
 ```
 
 For installed-model management, use `ModelLibrary.installedMLXModels()` and
 `ModelLibrary.mlxDiskUsageBytes()`; the package's model UI, storage views,
-App Intents, and adaptive agent catalog use this same MLX-only boundary.
+App Intents, and adaptive agent catalog use this same installed-MLX boundary;
+the remote browsing catalog is stricter and uses `OfficialModelCatalog`.
 
 The bundled Gemma entries remain compatibility conveniences only; they are not
-the MLX discovery allow-list.
+the official-model discovery allow-list. Hosts with an approved first-party
+namespace not included in the conservative default policy can pass a custom
+`OfficialModelCatalogPolicy`.
 
 The discovery browser is paginated: it loads one bounded page on entry, offers
 an explicit action for another page, and shows a loading indicator only during
@@ -258,14 +263,14 @@ func findCompatibleModels(in libraryURL: URL) async throws -> [ModelDescriptor] 
 }
 ```
 
-For network-backed Hugging Face discovery, use the MLX-only wrapper and let the
-host app decide whether network access is permitted.
+For network-backed Hugging Face discovery, use the official-publisher wrapper
+and let the host app decide whether network access is permitted.
 
 ```swift
 import ArchonModels
 
 func searchHuggingFace() async throws -> [ModelDescriptor] {
-    let catalog = MLXModelCatalog(
+    let catalog = OfficialModelCatalog(
         provider: HuggingFaceCatalog(tokenStore: KeychainModelTokenStore())
     )
     return try await catalog.search(
@@ -276,12 +281,12 @@ func searchHuggingFace() async throws -> [ModelDescriptor] {
 }
 ```
 
-For Hugging Face, `MLXModelCatalog` asks the Hub for MLX-tagged repositories
-and removes any non-MLX result before returning it. Catalog results can be
-empty, and a compatible model can still require a model-family text adapter
-supplied by the consuming app. Never assume the first result is runnable;
-inspect the returned variant and run `ModelCompatibilityAnalyzer` before
-presenting an install or load action.
+For Hugging Face, `OfficialModelCatalog` first applies the MLX runtime/format
+gate and then requires the descriptor and variant to share an allow-listed
+first-party namespace. Catalog results can be empty, and a compatible model
+can still require a model-family text adapter supplied by the consuming app.
+Never assume the first result is runnable; inspect the returned variant and
+run `ModelCompatibilityAnalyzer` before presenting an install or load action.
 
 The buildable example is a macOS SwiftPM executable:
 
@@ -311,7 +316,7 @@ The developer-only `archon-model` executable handles inspection, validation,
 packaging, conversion through Apple's `coreai-models` exporter, and local
 artifact preparation benchmarks.
 
-For the MLX-only discovery boundary and Gemma compatibility details, see the
+For the official-publisher MLX discovery boundary and Gemma compatibility details, see the
 [supported model policy](Documentation/reference/supported-models.md).
 
 ## Evidence status
@@ -367,7 +372,7 @@ or unavailable result. Test and preview code can inject deterministic mocks.
 - [`Documentation/tutorials/`](Documentation/tutorials/) — end-to-end local model tutorial.
 - [`Documentation/how-to/`](Documentation/how-to/) — integration, lifecycle, MCP, sandbox, semantic action, and release guides.
 - [`Documentation/reference/`](Documentation/reference/) — product, model, policy, and executable contracts.
-- [`Documentation/reference/supported-models.md`](Documentation/reference/supported-models.md) — MLX-only discovery, supported model families, catalog wiring, and the Gemma compatibility explanation.
+- [`Documentation/reference/supported-models.md`](Documentation/reference/supported-models.md) — official-publisher MLX discovery, supported model families, catalog wiring, and the Gemma compatibility explanation.
 - [`Documentation/reference/competitor-comparison.md`](Documentation/reference/competitor-comparison.md) — detailed competitor feature tables, scores, and Archon-fit decisions.
 - [`Documentation/explanation/`](Documentation/explanation/) — architecture, dependency, local-first, and recovery rationale.
 - [`Documentation/decisions/`](Documentation/decisions/) — migration and architectural decision records.

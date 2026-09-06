@@ -13,9 +13,11 @@ public protocol PaginatedModelCatalogProvider: ModelCatalogProvider {
 }
 ```
 
-Catalog discovery is data-driven. User-facing discovery is strict MLX-only:
-`MLXModelCatalog` filters every wrapped provider to `.mlx` runtime and format.
-The lower-level contracts remain family-neutral for host integrations, and
+Catalog discovery is data-driven. User-facing discovery is strict official
+publisher MLX-only: `OfficialModelCatalog` composes the `.mlx` runtime/format
+filter with a conservative first-party namespace allow-list. `MLXModelCatalog`
+remains the lower-level runtime/format boundary for developer workflows. The
+lower-level contracts remain family-neutral for host integrations, and
 `AdaptiveModelCatalog.builtIn` retains a small Gemma compatibility seed. For
 the complete support statement, read [Supported models and model-family
 policy](supported-models.md).
@@ -37,6 +39,7 @@ publisher-aware symbol fallback visible when artwork is missing or unavailable.
 | `HuggingFaceCatalog` | Hugging Face metadata and repository inventory | Yes |
 | `CompositeModelCatalog` | Ordered composition of other catalogs | Inherits its providers |
 | `MLXModelCatalog` | Strict MLX-only wrapper around another catalog | Inherits its provider |
+| `OfficialModelCatalog` | First-party namespace plus MLX-only wrapper for user-facing discovery | Inherits its provider |
 
 Local discovery reads manifests and does not create a download URL. A caller
 must import a local artifact through `ModelLibrary.importArtifact(at:manifest:)`
@@ -65,12 +68,12 @@ no more results. Search text is lightly debounced so typing does not start one
 network request per keystroke.
 
 `ModelBrowserView` and the catalog used for `ModelLibraryView` update checks
-automatically wrap their provider in `MLXModelCatalog`. If a host uses the
+automatically wrap their provider in `OfficialModelCatalog`. If a host uses the
 catalog APIs directly for user-facing discovery, it must apply the same
 wrapper:
 
 ```swift
-let catalog = MLXModelCatalog(provider: HuggingFaceCatalog())
+let catalog = OfficialModelCatalog(provider: HuggingFaceCatalog())
 ```
 
 `ModelLibrary.installedMLXModels()` and
@@ -84,11 +87,14 @@ management.
 therefore hide otherwise valid catalog entries on a constrained device; it is
 not a model-family filter.
 
-For `HuggingFaceCatalog`, the MLX wrapper also sends `runtime: .mlx` and
+For `HuggingFaceCatalog`, the official wrapper also sends `runtime: .mlx` and
 `format: .mlx`. That adds the Hub's `mlx` tag filter and prevents popular raw
 SafeTensors/Transformers repositories from crowding out directly runnable MLX
-results. A raw `HuggingFaceCatalog` can still be used for lower-level metadata
-or conversion inspection, but it is not a user-facing discovery catalog.
+results. A raw `HuggingFaceCatalog` or `MLXModelCatalog` can still be used for
+lower-level metadata or conversion inspection, but it is not a user-facing
+official discovery catalog. The default official policy requires the model
+descriptor and MLX variant to share a first-party namespace; community
+conversion namespaces are rejected.
 
 ## Authentication
 

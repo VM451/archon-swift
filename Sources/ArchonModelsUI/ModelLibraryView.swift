@@ -25,7 +25,7 @@ public struct ModelLibraryView: View {
         device: ArchonDeviceCapabilities? = nil
     ) {
         self.library = library
-        self.catalog = catalog.map { MLXModelCatalog(provider: $0) }
+        self.catalog = catalog.map { OfficialModelCatalog(provider: $0) }
         self.downloadManager = downloadManager
         self.deviceOverride = device
     }
@@ -268,9 +268,10 @@ public struct ModelLibraryView: View {
     }
 }
 
-/// A small, functional MLX catalog browser. The caller supplies the catalog
-/// and manager so network/auth policy remains in the host application; the
-/// browser applies the package's strict MLX-only user-facing policy.
+/// A small, functional official-model catalog browser. The caller supplies the
+/// catalog and manager so network/auth policy remains in the host application;
+/// the browser applies the package's strict official-publisher and MLX-only
+/// user-facing policy.
 @available(iOS 27.0, macOS 27.0, visionOS 27.0, *)
 public struct ModelBrowserView: View {
     private enum Collection: String, CaseIterable, Identifiable {
@@ -315,14 +316,14 @@ public struct ModelBrowserView: View {
     @State private var searchError: String?
 
     public init(
-        title: String = "MLX Models",
+        title: String = "Official MLX Models",
         catalog: any ModelCatalogProvider,
         library: ModelLibrary = .makeDefault(),
         downloadManager: ModelDownloadManager = ModelDownloadManager(),
         device: ArchonDeviceCapabilities? = nil
     ) {
         self.title = title
-        self.catalog = MLXModelCatalog(provider: catalog)
+        self.catalog = OfficialModelCatalog(provider: catalog)
         self.library = library
         self.downloadManager = downloadManager
         self.deviceOverride = device
@@ -332,7 +333,7 @@ public struct ModelBrowserView: View {
         List {
             if isInitialLoading, results.isEmpty {
                 Section {
-                    ProgressView("Loading MLX models…")
+                    ProgressView("Loading official MLX models…")
                         .frame(maxWidth: .infinity, alignment: .center)
                 }
             }
@@ -340,7 +341,7 @@ public struct ModelBrowserView: View {
             if !isInitialLoading, displayedResults.isEmpty, !hasMoreResults {
                 Section {
                     ContentUnavailableView(
-                        "No MLX Models Found",
+                        "No Official MLX Models Found",
                         systemImage: "shippingbox",
                         description: Text("Try changing the search or filters.")
                     )
@@ -385,10 +386,10 @@ public struct ModelBrowserView: View {
             if hasMoreResults {
                 Section {
                     if isLoadingMore {
-                        ProgressView("Loading more MLX models…")
+                        ProgressView("Loading more official MLX models…")
                             .frame(maxWidth: .infinity, alignment: .center)
                     } else {
-                        Button("Load more MLX models", systemImage: "arrow.down.circle") {
+                        Button("Load more official MLX models", systemImage: "arrow.down.circle") {
                             requestNextPage()
                         }
                         .frame(maxWidth: .infinity, alignment: .center)

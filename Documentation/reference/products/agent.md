@@ -65,13 +65,14 @@ and pass a new `AdaptiveModelCatalog` to `OnDeviceProvider` or
 SafeTensors, and Transformers weights remain
 conversion-required and are not made runnable by catalog metadata alone.
 
-For a dynamic Hugging Face local catalog, wrap it in `MLXModelCatalog` and
-request `runtime: .mlx`, `format: .mlx`, and a task such as `textGeneration`
-before constructing the adaptive catalog. This asks the Hub for MLX-tagged
-runnable packages instead of relying on its popular raw checkpoint list.
+For a dynamic Hugging Face catalog used for user-facing browsing, wrap it in
+`OfficialModelCatalog` and request `runtime: .mlx`, `format: .mlx`, and a task
+such as `textGeneration` before constructing the adaptive catalog. This asks
+the Hub for MLX-tagged first-party packages instead of relying on its popular
+raw checkpoint list.
 `AdaptiveModelCatalog.load(from:)` applies this MLX boundary automatically for
-AI-agent catalog loading, but explicit `MLXModelCatalog` wrapping remains the
-clearest choice when sharing the catalog with a UI.
+AI-agent catalog loading, but explicit `OfficialModelCatalog` wrapping remains
+the required choice when sharing the catalog with a user-facing UI.
 
 See [Supported models and model-family policy](../supported-models.md) for
 catalog wiring, runtime/artifact support, and the AI-agent guidance.

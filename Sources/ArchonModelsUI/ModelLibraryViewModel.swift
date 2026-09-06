@@ -42,9 +42,9 @@ public final class ModelLibraryViewModel: ObservableObject {
         device: ArchonDeviceCapabilities? = nil
     ) {
         self.library = library
-        // Keep every user-facing model-management operation on the MLX
-        // contract, even when the host passes a family-neutral provider.
-        self.catalog = catalog.map { MLXModelCatalog(provider: $0) }
+        // Keep every user-facing catalog operation on the official-publisher
+        // MLX contract, even when the host passes a family-neutral provider.
+        self.catalog = catalog.map { OfficialModelCatalog(provider: $0) }
         self.downloadManager = downloadManager
         self.deviceOverride = device
     }

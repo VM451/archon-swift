@@ -9,12 +9,15 @@ runtime adapters, or model policy. Register the configured library through
 `ModelLibraryIntentRegistry` and inject catalogs/download managers from the
 consuming app.
 
-`ModelBrowserView` is an MLX-only user-facing surface. It wraps the injected
-`ModelCatalogProvider` in `MLXModelCatalog`, so Core AI, Foundation Models,
-cloud, raw, and conversion-required variants are removed before rendering.
-The host can configure a `HuggingFaceCatalog`, local, static, app-owned,
-remote, or `CompositeModelCatalog`; the browser applies the MLX boundary to
-that provider as described in the [supported model policy](../supported-models.md).
+`ModelBrowserView` is an official-publisher MLX-only user-facing surface. It
+wraps the injected `ModelCatalogProvider` in `OfficialModelCatalog`, so Core
+AI, Foundation Models, cloud, raw, conversion-required, and community-
+converted variants are removed before rendering. The host can configure a
+`HuggingFaceCatalog`, static, app-owned, remote, or `CompositeModelCatalog`;
+the browser applies the official MLX boundary to that provider as described in
+the [supported model policy](../supported-models.md). Local imported artifacts
+remain a separate installed-library path and are still filtered to runnable
+MLX format.
 
 `ModelLibraryView` likewise lists only installed MLX artifacts and rejects
 non-MLX imports from its user-facing import flow. Lower-level

@@ -5,9 +5,10 @@ state, and lifecycle hooks. A runtime adapter owns the framework-specific load
 operation.
 
 The lifecycle keeps lower-level contracts model-family neutral, while
-user-facing discovery is MLX-only. See the [supported model and model-family
-policy](supported-models.md) for the difference between a catalog entry, a
-runnable MLX artifact, and an app-provided runtime adapter.
+user-facing browsing is restricted to official-publisher MLX packages. See the
+[supported model and model-family policy](supported-models.md) for the
+difference between a catalog entry, a runnable MLX artifact, and an app-
+provided runtime adapter.
 
 ## Main actors and boundaries
 
@@ -24,7 +25,8 @@ runnable MLX artifact, and an app-provided runtime adapter.
 
 The safe flow is:
 
-1. Search an `MLXModelCatalog` and inspect the selected MLX variant.
+1. Search an `OfficialModelCatalog` and inspect the selected first-party MLX
+   variant.
 2. Ask the library for a staging location or use the download manager.
 3. Stream bytes with cancellation and bounded retry for transient failures.
 4. Validate response status, size, checksum, manifest, resources, and license.

@@ -67,10 +67,10 @@ consuming application. Device, entitlement, permission, live UI, and
 model-specific runtime claims must be validated in the consuming app.
 
 The canonical model-support statement is [Supported models and model-family
-policy](reference/supported-models.md). It explains the MLX-only user-facing
-discovery boundary, why the built-in Gemma catalog is only a compatibility
-convenience, how discovery catalogs are injected, and which MLX artifacts can
-become runnable.
+policy](reference/supported-models.md). It explains the official-publisher
+official-publisher MLX-only user-facing browsing boundary, why the built-in
+Gemma catalog is only a compatibility convenience, how discovery catalogs are
+injected, and which MLX artifacts can become runnable.
 
 ## Documentation rules
 

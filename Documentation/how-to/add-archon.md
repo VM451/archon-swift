@@ -38,9 +38,9 @@ The application, not the package, provides:
 
 For model discovery, inject the catalog that the application intends users to
 browse. `ModelBrowserView` and `ModelLibraryView` apply the package's
-MLX-only discovery boundary automatically; wrap direct catalog calls in
-`MLXModelCatalog`. The bundled Gemma adaptive seed is only a compatibility
-convenience. See [Supported models and model-family policy](../reference/supported-models.md).
+official-publisher MLX discovery boundary automatically; wrap direct catalog
+calls in `OfficialModelCatalog`. The bundled Gemma adaptive seed is only a
+compatibility convenience. See [Supported models and model-family policy](../reference/supported-models.md).
 
 ## 4. Select a policy
 

@@ -2,12 +2,15 @@
 
 ## Short answer
 
-Archon's user-facing model discovery is **MLX-only**. A model family such as
-Qwen, Mistral, Llama, Phi, Gemma, or a future family may appear only when its
-catalogued variant is a runnable MLX package. The package's lower-level model
-contracts remain family-neutral for lifecycle and host integration, but users
-are never offered Core AI, Foundation Models, cloud providers, or raw
-conversion-required checkpoints by the discovery surface.
+Archon's user-facing model discovery is **official-publisher MLX-only**. A
+model family such as Qwen, Mistral, Llama, Phi, Gemma, or a future family may
+appear only when an allow-listed first-party namespace publishes a catalogued,
+runnable MLX package. Community conversion namespaces such as `mlx-community`
+and `lmstudio-community` are excluded by default. The package's lower-level
+model contracts remain family-neutral for lifecycle and host integration, but
+users are never offered Core AI, Foundation Models, cloud providers, raw
+conversion-required checkpoints, or unverified community conversions by the
+discovery surface.
 
 That does not mean that every checkpoint is automatically runnable. Archon
 separates four different questions:
@@ -25,16 +28,18 @@ name, repository name, file extension, or family label is never enough.
 ## What users see
 
 `ModelBrowserView` and the optional catalog used by `ModelLibraryView` wrap
-the host provider in `MLXModelCatalog`. That boundary forces `.mlx` runtime
-and format constraints, removes non-MLX variants from mixed descriptors, and
-keeps pagination opaque while it skips non-MLX pages. A Core AI, Foundation
-Models, remote-only, raw, or conversion-required entry therefore cannot reach
-the user through these package UI paths.
+the host provider in `OfficialModelCatalog`. That boundary composes the
+`.mlx` runtime/format gate with a first-party namespace policy, removes
+community and non-MLX variants from mixed descriptors, and keeps pagination
+opaque while it skips rejected pages. A Core AI, Foundation Models,
+remote-only, raw, conversion-required, or community-converted entry therefore
+cannot reach the user through these package UI paths.
 
 `GemmaModelCatalog` remains only as a compatibility convenience for existing
-provider APIs. It is not the discovery source and it does not restrict MLX
-discovery to Gemma. To offer Qwen, Mistral, Llama, Phi, or another family,
-catalogue its validated MLX variant and pass the catalog to the browser.
+provider APIs. It is not the discovery source and it does not restrict official
+MLX discovery to Gemma. To offer Qwen, Mistral, Llama, Phi, or another family,
+catalogue its validated first-party MLX variant and pass the catalog to the
+browser.
 
 ## Runtime and artifact support
 
@@ -58,8 +63,10 @@ boundary for user-facing discovery:
 - `StaticModelCatalog` for app-owned or release-pinned descriptors;
 - `LocalModelCatalog` for validated manifests already in the app's model
   library;
-- `HuggingFaceCatalog` for explicit Hugging Face metadata and runnable MLX
+- `HuggingFaceCatalog` for explicit Hugging Face metadata and lower-level MLX
   package discovery;
+- `OfficialModelCatalog` for user-facing first-party MLX discovery using the
+  conservative publisher namespace policy;
 - `AppleCoreAIModelCatalog`, `ArchonCompatibleModelCatalog`, or
   `RemoteModelCatalog` for lower-level explicit host integrations; and
 - `CompositeModelCatalog` for deterministic local, curated, and remote
@@ -68,7 +75,7 @@ boundary for user-facing discovery:
 For example:
 
 ```swift
-let browserCatalog = MLXModelCatalog(
+let browserCatalog = OfficialModelCatalog(
     provider: HuggingFaceCatalog(tokenStore: KeychainModelTokenStore())
 )
 let browser = ModelBrowserView(catalog: browserCatalog)
@@ -87,11 +94,11 @@ user reaches the bottom, and displays a loading state while the next page is
 being fetched. This keeps a large remote registry out of the initial view
 render and memory footprint.
 
-For direct catalog use, request the runtime and format explicitly as well as
-using `MLXModelCatalog`:
+For direct user-facing catalog use, request the runtime and format explicitly
+as well as using `OfficialModelCatalog`:
 
 ```swift
-let models = try await MLXModelCatalog(provider: HuggingFaceCatalog()).search(ModelSearchRequest(
+let models = try await OfficialModelCatalog(provider: HuggingFaceCatalog()).search(ModelSearchRequest(
     query: "Qwen",
     task: .textGeneration,
     runtime: .mlx,
@@ -101,11 +108,12 @@ let models = try await MLXModelCatalog(provider: HuggingFaceCatalog()).search(Mo
 ))
 ```
 
-The MLX request uses Hugging Face's `mlx` tag filter and examines the returned
+The request uses Hugging Face's `mlx` tag filter and examines returned
 repository inventories before applying the caller's result limit. Calling the
-strict wrapper is required for user-facing discovery; a raw
-`HuggingFaceCatalog` remains a lower-level metadata/conversion API and may
-surface non-MLX artifacts when used directly.
+official wrapper is required for user-facing discovery; a raw
+`HuggingFaceCatalog` or `MLXModelCatalog` remains a lower-level
+metadata/conversion API and may surface non-official or non-MLX artifacts when
+used directly.
 
 ## Example: discover more than Gemma
 
@@ -119,7 +127,7 @@ import ArchonModelsUI
 let qwenVariant = ModelVariant(
     id: "qwen3-0.6b-mlx",
     name: "Qwen3 0.6B 4-bit",
-    modelID: "mlx-community/Qwen3-0.6B-4bit",
+    modelID: "Qwen/Qwen3-0.6B",
     source: .huggingFace,
     format: .mlx,
     runtime: .mlx,
@@ -128,7 +136,7 @@ let qwenVariant = ModelVariant(
     estimatedMemoryBytes: 400 * 1024 * 1024
 )
 
-let catalog = MLXModelCatalog(provider: StaticModelCatalog(models: [
+let catalog = OfficialModelCatalog(provider: StaticModelCatalog(models: [
     ModelDescriptor(
         id: "qwen3-0.6b",
         name: "Qwen3 0.6B",
@@ -142,8 +150,8 @@ let catalog = MLXModelCatalog(provider: StaticModelCatalog(models: [
 let browser = ModelBrowserView(catalog: catalog)
 ```
 
-For a changing catalog, wrap `HuggingFaceCatalog`, an app-owned registry, or a
-`CompositeModelCatalog` in `MLXModelCatalog`. For adaptive local routing, use
+For a changing user-facing catalog, wrap `HuggingFaceCatalog`, an app-owned
+registry, or a `CompositeModelCatalog` in `OfficialModelCatalog`. For adaptive local routing, use
 the same descriptors:
 
 ```swift
@@ -168,21 +176,22 @@ missing a safe peak-memory estimate or does not fit the current device.
 
 When answering questions or changing an application that uses this package:
 
-1. Describe user-facing discovery as MLX-only. Gemma is only a bundled
-   compatibility convenience, not the discovery allow-list.
+1. Describe user-facing discovery as official-publisher MLX-only. Gemma is
+   only a bundled compatibility convenience, not the discovery allow-list.
 2. Treat `ModelDescriptor.family` as data. Never add a family switch merely to
    support a new model name.
-3. Ensure user-facing catalogs are wrapped in `MLXModelCatalog`; the UI cannot
-   show entries that the host catalog did not return, and the wrapper removes
-   every non-MLX variant.
+3. Ensure user-facing catalogs are wrapped in `OfficialModelCatalog`; the UI
+   cannot show entries that the host catalog did not return, and the wrapper
+   removes every non-official and non-MLX variant.
 4. Preserve paginated discovery. Do not replace a bounded page request with a
    large “load everything” query; pass provider continuation tokens through
    unchanged.
 5. Distinguish discoverable, conversion-required, device-compatible, and
    runnable states. Do not infer support from a model name or raw file format.
-6. For a new local family, register a validated MLX variant, then use
-   `AdaptiveModelCatalog(descriptors:)` or `AdaptiveModelCandidate` for
-   routing. Keep tokenizer/function adapters at the consuming-app boundary.
+6. For a new official local family, register a validated first-party MLX
+   variant, then use `AdaptiveModelCatalog(descriptors:)` or
+   `AdaptiveModelCandidate` for routing. Keep tokenizer/function adapters at
+   the consuming-app boundary.
 7. Read this page together with the [model contract](model-contract.md),
    [catalog reference](model-catalogs.md), [lifecycle reference](model-lifecycle.md),
    and [ArchonAgent product guide](products/agent.md).

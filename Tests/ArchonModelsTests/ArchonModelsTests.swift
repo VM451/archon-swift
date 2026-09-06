@@ -748,6 +748,95 @@ struct ArchonModelsTests {
         #expect(try await catalog.search(ModelSearchRequest(query: "", runtime: .coreAI)).isEmpty)
     }
 
+    @Test("Official catalog excludes community MLX conversions")
+    func officialCatalogOnlyReturnsFirstPartyNamespaces() async throws {
+        let officialVariant = ModelVariant(
+            id: "qwen-official-mlx",
+            name: "Qwen official MLX",
+            modelID: "Qwen/Qwen3-0.6B",
+            source: .huggingFace,
+            format: .mlx,
+            runtime: .mlx
+        )
+        let communityVariant = ModelVariant(
+            id: "qwen-community-mlx",
+            name: "Qwen community conversion",
+            modelID: "mlx-community/Qwen3-0.6B-4bit",
+            source: .huggingFace,
+            format: .mlx,
+            runtime: .mlx
+        )
+        let catalog = OfficialModelCatalog(provider: StaticModelCatalog(models: [
+            ModelDescriptor(
+                id: "mlx-community/Qwen3-0.6B-4bit",
+                name: "Qwen community conversion",
+                publisher: "mlx-community",
+                source: .huggingFace,
+                variants: [communityVariant]
+            ),
+            ModelDescriptor(
+                id: "Qwen/Qwen3-0.6B",
+                name: "Qwen official MLX",
+                publisher: "Qwen",
+                source: .huggingFace,
+                variants: [officialVariant]
+            ),
+            ModelDescriptor(
+                id: "Qwen/Qwen3-mixed",
+                name: "Qwen with community variant",
+                publisher: "Qwen",
+                source: .huggingFace,
+                variants: [communityVariant]
+            )
+        ]))
+
+        let models = try await catalog.search(ModelSearchRequest(query: "", limit: 10))
+
+        #expect(models.map(\.id) == ["Qwen/Qwen3-0.6B"])
+        #expect(models.first?.variants.map(\.modelID) == ["Qwen/Qwen3-0.6B"])
+    }
+
+    @Test("Official catalog keeps pagination while skipping non-official pages")
+    func officialCatalogSkipsCommunityPageWithoutStarvingResults() async throws {
+        let communityVariant = ModelVariant(
+            id: "community-mlx",
+            name: "Community MLX",
+            modelID: "mlx-community/Community-Model",
+            source: .huggingFace,
+            format: .mlx,
+            runtime: .mlx
+        )
+        let officialVariant = ModelVariant(
+            id: "mistral-mlx",
+            name: "Mistral MLX",
+            modelID: "mistralai/Mistral-7B",
+            source: .huggingFace,
+            format: .mlx,
+            runtime: .mlx
+        )
+        let catalog = OfficialModelCatalog(provider: StaticModelCatalog(models: [
+            ModelDescriptor(
+                id: "mlx-community/Community-Model",
+                name: "Community MLX",
+                publisher: "mlx-community",
+                source: .huggingFace,
+                variants: [communityVariant]
+            ),
+            ModelDescriptor(
+                id: "mistralai/Mistral-7B",
+                name: "Mistral MLX",
+                publisher: "mistralai",
+                source: .huggingFace,
+                variants: [officialVariant]
+            )
+        ]))
+
+        let page = try await catalog.searchPage(ModelSearchRequest(query: "", limit: 1))
+
+        #expect(page.models.map(\.id) == ["mistralai/Mistral-7B"])
+        #expect(!page.hasMore)
+    }
+
     @Test("Composite catalog pagination keeps each provider's cursor")
     func paginatesCompositeCatalog() async throws {
         func descriptor(_ id: String) -> ModelDescriptor {

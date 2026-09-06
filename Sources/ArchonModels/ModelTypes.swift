@@ -590,6 +590,214 @@ public struct MLXModelCatalog: PaginatedModelCatalogProvider, Sendable {
     }
 }
 
+/// Trust policy for user-facing official model discovery.
+///
+/// Officialness is based on the model publisher's namespace, not on a model
+/// name, family label, or a community conversion repository. Hugging Face
+/// entries must keep the same allow-listed namespace for both the descriptor
+/// and its MLX variant. Registry-backed descriptors use the publisher and
+/// variant namespace as the host-owned provenance contract.
+public struct OfficialModelCatalogPolicy: Sendable, Equatable {
+    public let allowedHuggingFaceOrganizations: Set<String>
+
+    /// A conservative first-party namespace set for openly published model
+    /// repositories. Community conversion namespaces such as
+    /// `mlx-community` are intentionally absent and can never pass the
+    /// default policy.
+    public static let defaultHuggingFaceOrganizations: Set<String> = [
+        "01-ai",
+        "ai21labs",
+        "allenai",
+        "apple",
+        "cohere",
+        "databricks",
+        "deepseek-ai",
+        "google",
+        "google-bert",
+        "ibm-granite",
+        "meta-llama",
+        "microsoft",
+        "mistralai",
+        "moonshotai",
+        "nvidia",
+        "openai",
+        "qwen",
+        "tiiuae"
+    ]
+
+    public init(
+        allowedHuggingFaceOrganizations: Set<String> = Self.defaultHuggingFaceOrganizations
+    ) {
+        self.allowedHuggingFaceOrganizations = Set(
+            allowedHuggingFaceOrganizations.map(Self.normalize)
+        )
+    }
+
+    /// Returns true only when the descriptor and its variant identify the
+    /// same allow-listed first-party namespace.
+    public func accepts(_ model: ModelDescriptor, variant: ModelVariant) -> Bool {
+        guard model.source == variant.source else { return false }
+
+        switch model.source {
+        case .huggingFace:
+            guard let modelOwner = Self.repositoryOwner(model.id),
+                  let variantOwner = Self.repositoryOwner(variant.modelID),
+                  modelOwner == variantOwner,
+                  allowedHuggingFaceOrganizations.contains(modelOwner) else {
+                return false
+            }
+            return true
+        case .archonRegistry, .appleCoreAI:
+            guard allowedHuggingFaceOrganizations.contains(Self.normalize(model.publisher)) else {
+                return false
+            }
+            guard let variantOwner = Self.repositoryOwner(variant.modelID) else {
+                return true
+            }
+            return allowedHuggingFaceOrganizations.contains(variantOwner)
+        case .developerRegistry, .directURL, .localImport:
+            return false
+        }
+    }
+
+    private static func repositoryOwner(_ identifier: String) -> String? {
+        let components = identifier.split(separator: "/", omittingEmptySubsequences: true)
+        guard components.count >= 2 else { return nil }
+        return normalize(String(components[0]))
+    }
+
+    private static func normalize(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+}
+
+/// A strict user-facing catalog boundary for official, locally runnable MLX
+/// models. It composes the MLX runtime/format gate with a publisher namespace
+/// gate, so community conversions and arbitrary developer entries cannot
+/// appear in the model browser.
+public struct OfficialModelCatalog: PaginatedModelCatalogProvider, Sendable {
+    public let id: String
+    public let policy: OfficialModelCatalogPolicy
+    private let catalog: MLXModelCatalog
+
+    public init(
+        provider: any ModelCatalogProvider,
+        policy: OfficialModelCatalogPolicy = OfficialModelCatalogPolicy()
+    ) {
+        let mlxCatalog = MLXModelCatalog(provider: provider)
+        self.id = "official.\(mlxCatalog.id)"
+        self.policy = policy
+        self.catalog = mlxCatalog
+    }
+
+    public func search(_ request: ModelSearchRequest) async throws -> [ModelDescriptor] {
+        try await searchPage(request).models
+    }
+
+    public func searchPage(_ request: ModelSearchRequest) async throws -> ModelCatalogPage {
+        guard request.runtime == nil || request.runtime == .mlx,
+              request.format == nil || request.format == .mlx else {
+            return ModelCatalogPage(models: [], hasMore: false)
+        }
+
+        var state = try ContinuationState.decode(request.continuationToken)
+        if request.continuationToken == nil {
+            state = ContinuationState(offset: request.offset, token: nil)
+        }
+
+        var models: [ModelDescriptor] = []
+        var hasMore = false
+        var lastState = state
+        var visitedStates = Set<ContinuationState>()
+
+        // A remote catalog can return many community entries before an
+        // official package. Keep skipping bounded and expose an opaque cursor
+        // so the caller can explicitly request another page.
+        for _ in 0..<8 where models.count < request.limit {
+            guard visitedStates.insert(lastState).inserted else { break }
+
+            var mlxRequest = request
+            mlxRequest.runtime = .mlx
+            mlxRequest.format = .mlx
+            mlxRequest.includeVariants = true
+            mlxRequest.offset = lastState.offset
+            mlxRequest.continuationToken = lastState.token
+
+            let page = try await catalog.searchPage(mlxRequest)
+            models.append(contentsOf: page.models.compactMap {
+                officialDescriptor($0, includeVariants: request.includeVariants)
+            })
+            if models.count > request.limit {
+                models = Array(models.prefix(request.limit))
+            }
+
+            let nextState = ContinuationState(
+                offset: lastState.offset + page.models.count,
+                token: page.nextContinuationToken
+            )
+            let madeProgress: Bool
+            if lastState.token != nil {
+                madeProgress = nextState.token != lastState.token
+            } else {
+                madeProgress = page.models.count > 0 || nextState.token != nil
+            }
+            hasMore = page.hasMore && madeProgress
+            lastState = nextState
+            guard hasMore else { break }
+        }
+
+        return ModelCatalogPage(
+            models: models,
+            hasMore: hasMore,
+            nextContinuationToken: hasMore ? try lastState.encoded() : nil
+        )
+    }
+
+    private func officialDescriptor(
+        _ model: ModelDescriptor,
+        includeVariants: Bool
+    ) -> ModelDescriptor? {
+        let variants = model.variants.filter { policy.accepts(model, variant: $0) }
+        guard !variants.isEmpty else { return nil }
+        return ModelDescriptor(
+            id: model.id,
+            name: model.name,
+            publisher: model.publisher,
+            family: model.family,
+            parameterCount: model.parameterCount,
+            tasks: model.tasks,
+            architecture: model.architecture,
+            description: model.description,
+            logoURL: model.logoURL,
+            source: model.source,
+            sourceURL: model.sourceURL,
+            revision: model.revision,
+            license: model.license,
+            gated: model.gated,
+            supportedLanguages: model.supportedLanguages,
+            variants: includeVariants ? variants : []
+        )
+    }
+
+    private struct ContinuationState: Codable, Equatable, Hashable, Sendable {
+        let offset: Int
+        let token: String?
+
+        static func decode(_ value: String?) throws -> ContinuationState {
+            guard let value else { return ContinuationState(offset: 0, token: nil) }
+            guard let data = Data(base64Encoded: value),
+                  let state = try? JSONDecoder().decode(ContinuationState.self, from: data) else {
+                throw ArchonModelsError.invalidResponse
+            }
+            return state
+        }
+
+        func encoded() throws -> String {
+            try JSONEncoder().encode(self).base64EncodedString()
+        }
+    }
+}
+
 public struct StaticModelCatalog: PaginatedModelCatalogProvider, Sendable {
     public let id: String
     public let models: [ModelDescriptor]

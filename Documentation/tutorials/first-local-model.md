@@ -10,7 +10,8 @@ The directory must contain one or more Archon model packages with a valid
 are source artifacts and require developer-side conversion before they can be
 installed as runnable models.
 
-This tutorial is MLX-only for user-facing discovery. The local catalog can
+This tutorial is an explicit local/import path rather than the official remote
+browsing catalog. It remains MLX-only so the local catalog can
 contain Gemma, Qwen, Mistral, Llama, or another family as long as each entry
 has a validated MLX manifest and runnable runtime contract. The bundled Gemma
 compatibility seed belongs to adaptive provider convenience APIs, not to
