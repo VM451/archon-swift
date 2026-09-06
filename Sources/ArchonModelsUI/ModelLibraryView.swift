@@ -588,8 +588,8 @@ public struct ModelBrowserView: View {
 
         let leftCompatibility = compatibility(for: leftVariant)
         let rightCompatibility = compatibility(for: rightVariant)
-        let leftRank = recommendationRank(for: leftCompatibility)
-        let rightRank = recommendationRank(for: rightCompatibility)
+        let leftRank = recommendationRank(for: leftVariant, compatibility: leftCompatibility)
+        let rightRank = recommendationRank(for: rightVariant, compatibility: rightCompatibility)
         if leftRank != rightRank { return leftRank < rightRank }
 
         let leftMemory = ModelCompatibilityAnalyzer.estimatedPeakMemoryBytes(for: leftVariant) ?? UInt64.max
@@ -609,8 +609,8 @@ public struct ModelBrowserView: View {
     private func isPreferredVariant(_ lhs: ModelVariant, _ rhs: ModelVariant) -> Bool {
         let leftCompatibility = compatibility(for: lhs)
         let rightCompatibility = compatibility(for: rhs)
-        let leftRank = recommendationRank(for: leftCompatibility)
-        let rightRank = recommendationRank(for: rightCompatibility)
+        let leftRank = recommendationRank(for: lhs, compatibility: leftCompatibility)
+        let rightRank = recommendationRank(for: rhs, compatibility: rightCompatibility)
         if leftRank != rightRank { return leftRank < rightRank }
 
         let leftMemory = ModelCompatibilityAnalyzer.estimatedPeakMemoryBytes(for: lhs) ?? UInt64.max
@@ -627,7 +627,15 @@ public struct ModelBrowserView: View {
         )
     }
 
-    private func recommendationRank(for compatibility: ModelCompatibility) -> Int {
+    private func recommendationRank(
+        for variant: ModelVariant,
+        compatibility: ModelCompatibility
+    ) -> Int {
+        if compatibility.status != .ready,
+           !hasInstallableArtifact(variant) {
+            return 7
+        }
+
         switch compatibility.status {
         case .ready:
             return 0
@@ -655,6 +663,12 @@ public struct ModelBrowserView: View {
              .iOSCompatible:
             return 7
         }
+    }
+
+    private func hasInstallableArtifact(_ variant: ModelVariant) -> Bool {
+        variant.downloadURL != nil ||
+            !variant.resources.isEmpty ||
+            !variant.tokenizerResources.isEmpty
     }
 
     private var selectedTask: ArchonModelTask? {
