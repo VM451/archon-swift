@@ -1077,6 +1077,15 @@ public struct ModelCompatibility: Codable, Equatable, Sendable {
     public var canLoad: Bool {
         status == .ready || status == .compatible
     }
+
+    /// Whether the artifact may be downloaded right now. Downloading is
+    /// cold network I/O; only loading/running heats the device, so a
+    /// thermally constrained device may still download (and run later
+    /// once cool). Every hard block (memory, OS, format, auth) still
+    /// refuses here because `canLoad` is false for those too.
+    public var canDownload: Bool {
+        canLoad || status == .thermalConstrained
+    }
 }
 
 /// A conservative peak-memory prediction for a directly runnable local model.

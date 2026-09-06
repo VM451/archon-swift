@@ -265,7 +265,7 @@ struct ModelBrowserRowView: View {
         default:
             if isInstalled || variant.source == .appleCoreAI || variant.runtime == .foundationModels {
                 readyBadge
-            } else if compatibility.canLoad {
+            } else if compatibility.canDownload {
                 let canDownload = variant.downloadURL != nil || !variant.resources.isEmpty || !variant.tokenizerResources.isEmpty
                 Button(action: onDownload) {
                     Text("Download")

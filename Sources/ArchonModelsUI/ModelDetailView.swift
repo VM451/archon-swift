@@ -178,13 +178,13 @@ public struct ModelDetailView: View {
             default:
                 if installed == nil {
                     Button(
-                        compatibility.canLoad ? "Download" :
+                        compatibility.canDownload ? "Download" :
                             compatibility.status == .conversionRequired ? "Conversion required" : "Unavailable"
                     ) {
                         beginDownload(variant)
                     }
                     .disabled(
-                        !compatibility.canLoad ||
+                        !compatibility.canDownload ||
                         (variant.downloadURL == nil && variant.resources.isEmpty && variant.tokenizerResources.isEmpty)
                     )
                 } else {
