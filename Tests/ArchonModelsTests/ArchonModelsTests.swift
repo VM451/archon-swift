@@ -90,6 +90,30 @@ private actor RecordingModelHTTPClient: ModelHTTPClient {
     }
 }
 
+private actor OfficialHuggingFaceHTTPClient: ModelHTTPClient {
+    let officialPayload: Data
+    private var requestedURLs: [URL] = []
+
+    init(officialPayload: Data) {
+        self.officialPayload = officialPayload
+    }
+
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        guard let url = request.url,
+              let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil) else {
+            throw ArchonModelsError.invalidResponse
+        }
+        requestedURLs.append(url)
+        let author = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+            .first(where: { $0.name == "author" })?.value
+        return (author?.lowercased() == "qwen" ? officialPayload : Data("[]".utf8), response)
+    }
+
+    func requestedURLsSnapshot() -> [URL] {
+        requestedURLs
+    }
+}
+
 private actor PagingModelHTTPClient: ModelHTTPClient {
     let responses: [Data]
     let nextPageURL: URL
@@ -835,6 +859,53 @@ struct ArchonModelsTests {
 
         #expect(page.models.map(\.id) == ["mistralai/Mistral-7B"])
         #expect(!page.hasMore)
+    }
+
+    @Test("Official Hugging Face discovery scopes requests to first-party namespaces")
+    func officialCatalogScopesHuggingFaceRequests() async throws {
+        let payload = Data(#"""
+        [{
+          "id": "Qwen/Qwen3-0.6B-MLX-4bit",
+          "author": "Qwen",
+          "pipeline_tag": "text-generation",
+          "tags": ["mlx", "0.6b"],
+          "siblings": [
+            {"rfilename": "model.safetensors", "size": 100},
+            {"rfilename": "config.json", "size": 20},
+            {"rfilename": "tokenizer.json", "size": 30}
+          ]
+        }]
+        """#.utf8)
+        let session = OfficialHuggingFaceHTTPClient(officialPayload: payload)
+        let catalog = OfficialModelCatalog(provider: HuggingFaceCatalog(
+            baseURL: URL(string: "https://example.com")!,
+            session: session,
+            tokenStore: nil
+        ))
+
+        let models = try await catalog.search(ModelSearchRequest(query: "Qwen", limit: 1))
+        #expect(models.map(\.id) == ["Qwen/Qwen3-0.6B-MLX-4bit"])
+
+        let urls = await session.requestedURLsSnapshot()
+        let authors = urls.compactMap { url in
+            URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+                .first(where: { $0.name == "author" })?.value
+        }
+        #expect(authors.contains("Qwen"))
+        #expect(authors.allSatisfy {
+            OfficialModelCatalogPolicy.defaultHuggingFaceOrganizations.contains($0.lowercased())
+        })
+    }
+
+    @Test("Wrapping an official catalog twice does not duplicate its provider boundary")
+    func officialCatalogWrappingIsIdempotent() async throws {
+        let provider = StaticModelCatalog(models: [])
+        let first = OfficialModelCatalog(provider: provider)
+        let second = OfficialModelCatalog(provider: first)
+
+        #expect(second.id == first.id)
+        #expect(second.policy == first.policy)
+        #expect(try await second.search(ModelSearchRequest(query: "")).isEmpty)
     }
 
     @Test("Composite catalog pagination keeps each provider's cursor")

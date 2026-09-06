@@ -600,6 +600,10 @@ public struct MLXModelCatalog: PaginatedModelCatalogProvider, Sendable {
 public struct OfficialModelCatalogPolicy: Sendable, Equatable {
     public let allowedHuggingFaceOrganizations: Set<String>
 
+    /// The original namespace spelling is retained for Hub's case-sensitive
+    /// `author` query. The trust comparison still uses normalized values.
+    private let queryOrganizationNames: [String: String]
+
     /// A conservative first-party namespace set for openly published model
     /// repositories. Community conversion namespaces such as
     /// `mlx-community` are intentionally absent and can never pass the
@@ -628,9 +632,19 @@ public struct OfficialModelCatalogPolicy: Sendable, Equatable {
     public init(
         allowedHuggingFaceOrganizations: Set<String> = Self.defaultHuggingFaceOrganizations
     ) {
-        self.allowedHuggingFaceOrganizations = Set(
-            allowedHuggingFaceOrganizations.map(Self.normalize)
-        )
+        var queryNames: [String: String] = [:]
+        for organization in allowedHuggingFaceOrganizations {
+            let trimmed = organization.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let normalized = Self.normalize(trimmed)
+            queryNames[normalized] = Self.queryNameOverrides[normalized] ?? trimmed
+        }
+        self.allowedHuggingFaceOrganizations = Set(queryNames.keys)
+        self.queryOrganizationNames = queryNames
+    }
+
+    fileprivate var orderedQueryOrganizations: [String] {
+        queryOrganizationNames.keys.sorted().compactMap { queryOrganizationNames[$0] }
     }
 
     /// Returns true only when the descriptor and its variant identify the
@@ -669,6 +683,10 @@ public struct OfficialModelCatalogPolicy: Sendable, Equatable {
     private static func normalize(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
+
+    private static let queryNameOverrides: [String: String] = [
+        "qwen": "Qwen"
+    ]
 }
 
 /// A strict user-facing catalog boundary for official, locally runnable MLX
@@ -684,7 +702,13 @@ public struct OfficialModelCatalog: PaginatedModelCatalogProvider, Sendable {
         provider: any ModelCatalogProvider,
         policy: OfficialModelCatalogPolicy = OfficialModelCatalogPolicy()
     ) {
-        let mlxCatalog = MLXModelCatalog(provider: provider)
+        if let existing = provider as? OfficialModelCatalog, existing.policy == policy {
+            self = existing
+            return
+        }
+
+        let scopedProvider = Self.scopedProvider(provider, policy: policy)
+        let mlxCatalog = MLXModelCatalog(provider: scopedProvider)
         self.id = "official.\(mlxCatalog.id)"
         self.policy = policy
         self.catalog = mlxCatalog
@@ -777,6 +801,46 @@ public struct OfficialModelCatalog: PaginatedModelCatalogProvider, Sendable {
             supportedLanguages: model.supportedLanguages,
             variants: includeVariants ? variants : []
         )
+    }
+
+    private static func scopedProvider(
+        _ provider: any ModelCatalogProvider,
+        policy: OfficialModelCatalogPolicy
+    ) -> any ModelCatalogProvider {
+        if let huggingFace = provider as? HuggingFaceCatalog {
+            let organizations: [String]
+            if let organization = huggingFace.organization {
+                let normalized = organization.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                organizations = policy.allowedHuggingFaceOrganizations.contains(normalized)
+                    ? [policy.orderedQueryOrganizations.first(where: {
+                        $0.lowercased() == normalized
+                    }) ?? organization]
+                    : []
+            } else {
+                organizations = policy.orderedQueryOrganizations
+            }
+
+            return CompositeModelCatalog(
+                id: "official.\(huggingFace.id)",
+                providers: organizations.map { organization in
+                    HuggingFaceCatalog(
+                        baseURL: huggingFace.baseURL,
+                        session: huggingFace.session,
+                        tokenStore: huggingFace.tokenStore,
+                        organization: organization
+                    )
+                }
+            )
+        }
+
+        if let composite = provider as? CompositeModelCatalog {
+            return CompositeModelCatalog(
+                id: composite.id,
+                providers: composite.providers.map { scopedProvider($0, policy: policy) }
+            )
+        }
+
+        return provider
     }
 
     private struct ContinuationState: Codable, Equatable, Hashable, Sendable {

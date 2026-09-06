@@ -68,15 +68,22 @@ public struct HuggingFaceCatalog: PaginatedModelCatalogProvider, Sendable {
     public let baseURL: URL
     public let session: any ModelHTTPClient
     public let tokenStore: (any ModelTokenStore)?
+    /// Optional first-party namespace used to narrow Hub searches before the
+    /// response is downloaded. Repository inspection remains available for an
+    /// explicit repository query and is still checked by the caller's policy.
+    public let organization: String?
 
     public init(
         baseURL: URL = URL(string: "https://huggingface.co")!,
         session: (any ModelHTTPClient)? = nil,
-        tokenStore: (any ModelTokenStore)? = KeychainModelTokenStore()
+        tokenStore: (any ModelTokenStore)? = KeychainModelTokenStore(),
+        organization: String? = nil
     ) {
         self.baseURL = baseURL
         self.session = session ?? ModelDownloadURLPolicy.makeSession()
         self.tokenStore = tokenStore
+        let normalizedOrganization = organization?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.organization = normalizedOrganization?.isEmpty == false ? normalizedOrganization : nil
     }
 
     /// Searches Hub metadata and repository inventories.
@@ -237,6 +244,9 @@ public struct HuggingFaceCatalog: PaginatedModelCatalogProvider, Sendable {
             URLQueryItem(name: "sort", value: "downloads"),
             URLQueryItem(name: "direction", value: "-1")
         ]
+        if let organization {
+            queryItems.append(URLQueryItem(name: "author", value: organization))
+        }
         if let filter {
             queryItems.append(URLQueryItem(name: "filter", value: filter))
         }
