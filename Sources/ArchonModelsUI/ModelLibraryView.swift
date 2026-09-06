@@ -431,7 +431,7 @@ public struct ModelBrowserView: View {
             }
             #endif
         }
-        .task(id: "\(query)|\(compatibleOnly)|\(selectedTaskRaw)|\(collection.rawValue)|\(maximumSizeGB)|\(maximumReleaseAgeDays)") {
+        .task(id: "\(query)|\(compatibleOnly)|\(selectedTaskRaw)") {
             do {
                 // Search fields can change several times while the user is
                 // typing. Debounce them so each keystroke does not start a
