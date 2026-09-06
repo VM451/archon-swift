@@ -52,7 +52,7 @@ struct ModelBrowserRowView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     metadataHeader
 
-                    Text(variant.name)
+                    Text(displayTitle)
                         .font(.headline)
                         .foregroundStyle(.primary)
                         .lineLimit(2)
@@ -95,6 +95,13 @@ struct ModelBrowserRowView: View {
             Text(variant.runtime.displayName)
                 .lineLimit(1)
 
+            if let quantization = variant.quantization ?? variant.precision {
+                Text("•")
+                    .foregroundStyle(.tertiary)
+                Text(quantization)
+                    .lineLimit(1)
+            }
+
             if let size = variant.sizeBytes {
                 Text("•")
                     .foregroundStyle(.tertiary)
@@ -105,6 +112,11 @@ struct ModelBrowserRowView: View {
         .font(.caption)
         .foregroundStyle(.secondary)
         .minimumScaleFactor(0.85)
+    }
+
+    private var displayTitle: String {
+        let trimmedName = model.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedName.isEmpty ? variant.name : trimmedName
     }
 
     private var displayPublisher: String {

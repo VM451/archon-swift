@@ -1061,6 +1061,9 @@ struct ArchonModelsTests {
         let requestURL = try #require(await recorder.lastRequestedURL())
         let queryItems = try #require(URLComponents(url: requestURL, resolvingAgainstBaseURL: false)?.queryItems)
 
+        #expect(model.name == "Qwen3.8-27B-MLX-4bit")
+        #expect(variant.name == "Qwen3.8-27B-MLX-4bit · 4-bit")
+        #expect(variant.quantization == "4-bit")
         #expect(model.family == "Qwen")
         #expect(model.parameterCount == 27_000_000_000)
         #expect(model.tasks.contains(.textGeneration))

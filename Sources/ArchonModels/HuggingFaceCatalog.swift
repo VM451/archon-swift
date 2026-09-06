@@ -365,9 +365,12 @@ public struct HuggingFaceCatalog: PaginatedModelCatalogProvider, Sendable {
                let primary = mlxResources.first(where: { $0.relativePath.lowercased().hasSuffix(".safetensors") }) {
                 let sizes = mlxResources.map(\.sizeBytes)
                 let totalSize = sizes.allSatisfy { $0 != nil } ? sizes.compactMap { $0 }.reduce(0, +) : nil
+                let mlxQuantization = quantization(from: primary.relativePath)
+                    ?? quantization(from: payload.id)
+                    ?? quantization(from: tags.joined(separator: " "))
                 variants.append(ModelVariant(
                     id: "\(payload.id)#mlx",
-                    name: "MLX package",
+                    name: makeMLXVariantName(repositoryID: payload.id, quantization: mlxQuantization),
                     modelID: payload.id,
                     source: .huggingFace,
                     downloadURL: primary.url,
@@ -378,8 +381,8 @@ public struct HuggingFaceCatalog: PaginatedModelCatalogProvider, Sendable {
                     supportedPlatforms: Set(ArchonPlatform.allCases),
                     parameterCount: parameterCount(from: tags, repositoryID: payload.id),
                     contextLength: contextLength(from: tags),
-                    precision: quantization(from: primary.relativePath),
-                    quantization: quantization(from: primary.relativePath),
+                    precision: mlxQuantization,
+                    quantization: mlxQuantization,
                     sizeBytes: totalSize,
                     estimatedMemoryBytes: totalSize.map { Int64(Double($0) * 1.15) },
                     resources: mlxResources,
@@ -435,6 +438,13 @@ public struct HuggingFaceCatalog: PaginatedModelCatalogProvider, Sendable {
             )
         })
         return variants
+    }
+
+    private func makeMLXVariantName(repositoryID: String, quantization: String?) -> String {
+        let repositoryName = repositoryID.split(separator: "/").last.map(String.init) ?? repositoryID
+        guard !repositoryName.isEmpty else { return "MLX artifact" }
+        guard let quantization, !quantization.isEmpty else { return repositoryName }
+        return "\(repositoryName) · \(quantization)"
     }
 
     private func filtered(_ model: ModelDescriptor, for request: ModelSearchRequest) -> ModelDescriptor? {
@@ -638,7 +648,14 @@ public struct HuggingFaceCatalog: PaginatedModelCatalogProvider, Sendable {
 
     private func quantization(from filename: String) -> String? {
         let lowercased = filename.lowercased()
-        for value in ["q2", "q3", "q4", "q5", "q6", "q8", "f16", "bf16", "fp16"] where lowercased.contains(value) {
+        for bits in [2, 3, 4, 5, 6, 8] {
+            if lowercased.contains("\(bits)bit") ||
+                lowercased.contains("\(bits)-bit") ||
+                lowercased.contains("q\(bits)") {
+                return "\(bits)-bit"
+            }
+        }
+        for value in ["bf16", "fp16", "f16"] where lowercased.contains(value) {
             return value.uppercased()
         }
         return nil
