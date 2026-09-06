@@ -73,12 +73,12 @@ struct ArchonCoreTests {
         )
 
         let budget = device.modelMemoryBudget
-        #expect(budget.predictedProcessLimitBytes == 3_221_225_472)
-        #expect(budget.currentProcessHeadroomBytes == 3_221_225_472)
+        #expect(budget.predictedProcessLimitBytes == 4_000_000_000)
+        #expect(budget.currentProcessHeadroomBytes == 4_000_000_000)
         #expect(budget.applicationGrowthReserveBytes == 800_000_000)
         #expect(budget.runtimeReserveBytes == 268_435_456)
-        #expect(budget.dynamicSafetyReserveBytes == 322_122_547)
-        #expect(budget.recommendedModelMemoryBytes == 1_830_667_469)
+        #expect(budget.dynamicSafetyReserveBytes == 400_000_000)
+        #expect(budget.recommendedModelMemoryBytes == 2_531_564_544)
         #expect(device.recommendedModelMemoryBytes == budget.recommendedModelMemoryBytes)
     }
 

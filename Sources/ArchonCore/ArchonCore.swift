@@ -636,19 +636,23 @@ private func archonPredictedProcessMemoryLimit(
         // Conservative foreground-app envelope based on the device RAM tier.
         // It intentionally stays below the maximums seen in field reports so
         // model selection does not optimize right up to a Jetsam boundary.
+        // The 8 GB tier (iPhone 15 Pro, iPhone 16 family) is sized for the
+        // agreed per-device table: ~4B parameters at 4-bit (~2.5-3 GB).
+        // All reserves below are unchanged, and the live dynamic budget
+        // still clamps to observed headroom under real memory pressure.
         let tierLimitGB: Double
         if physicalGB <= 4.0 {
             tierLimitGB = 1.5
         } else if physicalGB <= 6.0 {
             tierLimitGB = 2.25
         } else if physicalGB <= 8.0 {
-            tierLimitGB = 3.0
+            tierLimitGB = 4.0
         } else if physicalGB <= 12.0 {
             tierLimitGB = 4.0
         } else {
             tierLimitGB = 5.0
         }
-        return UInt64(min(Double(physicalMemoryBytes) * 0.45, tierLimitGB * gibibyte))
+        return UInt64(min(Double(physicalMemoryBytes) * 0.50, tierLimitGB * gibibyte))
     case .visionOS:
         // visionOS shares the mobile-style pressure/jettison model, with a
         // slightly tighter envelope for compositor and scene resources.
