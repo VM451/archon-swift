@@ -70,7 +70,7 @@ public struct DeviceHardwareProfile: Sendable, Equatable {
     /// permitted to allocate after app, runtime, and pressure reserves. This is
     /// a conservative prediction, not Apple's limit.
     public var safeModelMemoryBudgetBytes: UInt64 {
-        let processHeadroom = min(availableProcessMemoryBytes, appProcessMemoryLimitBytes)
+        let envelope = appProcessMemoryLimitBytes
         let applicationReserve = max(
             UInt64(applicationGrowthMinimumGB * 1_073_741_824.0),
             UInt64(Double(physicalMemoryBytes) * applicationGrowthFraction)
@@ -81,7 +81,7 @@ public struct DeviceHardwareProfile: Sendable, Equatable {
             UInt64(Double(appProcessMemoryLimitBytes) * safetyFraction)
         )
         let reservedEnvelope = subtract(
-            processHeadroom,
+            envelope,
             applicationReserve,
             runtimeReserve,
             safetyReserve
@@ -142,7 +142,7 @@ public struct DeviceHardwareProfile: Sendable, Equatable {
                 // from ArchonDeviceCapabilities remains the primary gate.
                 if gigabytes <= 4.0 {
                     processLimit = UInt64(1.5 * 1024.0 * 1024.0 * 1024.0) // ~1.5 GiB
-                } else if gigabytes < 7.9 {
+                } else if gigabytes < 7.0 {
                     processLimit = UInt64(2.25 * 1024.0 * 1024.0 * 1024.0) // ~2.25 GiB
                 } else {
                     processLimit = UInt64(3.0 * 1024.0 * 1024.0 * 1024.0) // ~3.0 GiB
@@ -154,7 +154,7 @@ public struct DeviceHardwareProfile: Sendable, Equatable {
 
         if gigabytes < 5.0 {
             self.memoryTier = .ultraLight
-        } else if gigabytes < 7.9 {
+        } else if gigabytes < 7.0 {
             self.memoryTier = .balanced
         } else {
             self.memoryTier = .performance
