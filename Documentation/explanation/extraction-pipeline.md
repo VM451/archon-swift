@@ -1,6 +1,7 @@
 # Extraction pipeline
 
-Why `ArchonSearch 2.0` implements a dual-engine extraction architecture, how
+Why `ArchonSearch 2.0` implements an on-device native-first extraction architecture,
+how `NativeReader` serves as the default in-process engine for user devices, how
 retrieval routing balances in-process efficiency with dynamic JavaScript
 rendering, and how untrusted web content is isolated to defend against prompt
 injection.
@@ -66,24 +67,27 @@ Static Fetch     ReadabilityWebKitBridge     │
    [CRITICAL NOTICE: Untrusted external web content...]
                            │
                            ▼
-              ContextBuilder / CitationGraph
-             (Token budget + Grounded LLM)
+               ContextBuilder / CitationGraph
+              (Token budget + Grounded LLM)
 ```
 
-- **Tier 1 (`NativeReader`):** An in-process, zero-external-dependency Swift
+- **Tier 1 (`NativeReader` — Primary On-Device Default):** An in-process, zero-external-dependency Swift
   pipeline combining fast static DOM parsing (`SwiftSoupArticleExtractor`) with
-  an in-process headless WebKit bridge (`ReadabilityWebKitBridge`).
-- **Tier 2 (`Crawl4AIClient`):** A companion headless crawler microservice running
-  locally (e.g., Docker container on port `11235`) for heavy single-page
+  an in-process headless WebKit bridge (`ReadabilityWebKitBridge`). This is the **default
+  in-process extraction engine for user devices** (iOS, macOS, visionOS), operating in the background
+  with zero external server, zero Docker container, and zero API key requirements.
+- **Tier 2 (`Crawl4AIClient` — Optional Companion):** An optional companion headless crawler microservice running
+  locally or on a server (e.g., Docker container on port `11235`) for heavy single-page
   applications, deep rendering, media extraction, and specialized Markdown
-  transformation.
+  transformation. Never required on end-user devices.
 
 ---
 
-## Tier 1: In-process NativeReader
+## Tier 1: In-process NativeReader (Default on User Devices)
 
 `NativeReader` is an actor that coordinates local two-stage extraction without
-invoking external processes or remote cloud services.
+invoking external processes or remote cloud services. It is the default extraction
+engine across all Apple user devices.
 
 ### Stage 1: Static fetch and SwiftSoupArticleExtractor
 
@@ -132,11 +136,13 @@ or fails to identify an article container, `NativeReader` escalates to Stage 2:
 
 ---
 
-## Tier 2: Companion crawler service (Crawl4AIClient)
+## Tier 2: Companion crawler service (Crawl4AIClient — Optional)
 
-For complex multi-layered SPAs, sites with anti-scraping defenses, or workflows
-requiring media extraction and specialized markdown structuring, ArchonSearch
-integrates `Crawl4AIClient`.
+For developer environments, self-hosted proxy servers, complex multi-layered SPAs,
+sites with anti-scraping defenses, or workflows requiring media extraction and specialized
+markdown structuring, ArchonSearch provides `Crawl4AIClient` as an optional companion.
+This microservice is strictly an optional companion and is never required on end-user
+Apple devices.
 
 - **Local container deployment:** `Crawl4AIClient` communicates over HTTP with a
   locally hosted Crawl4AI service (defaulting to `http://localhost:11235/crawl`).
@@ -167,11 +173,11 @@ based on application configuration and backend health.
 
 | Policy | Execution strategy | Fallback behavior |
 | --- | --- | --- |
+| `.nativeOnly` | Dispatches strictly to in-process `NativeReader`. **Default for `.onDevice()`.** | Never makes loopback or remote microservice calls. Throws if in-process extraction fails. |
+| `.preferNative` | Dispatches to `NativeReader` (Stage 1 + Stage 2). | Falls back to `Crawl4AIClient` if `NativeReader` fails and crawler is configured. |
 | `.automatic` | Probes `Crawl4AIClient.checkHealth()`. If healthy, dispatches to Crawl4AI; otherwise dispatches to `NativeReader`. | If Crawl4AI throws, automatically falls back to `NativeReader`. |
 | `.preferCrawler` | Dispatches to `Crawl4AIClient` if configured. | Falls back to `NativeReader` on crawler error or if client is unconfigured. |
-| `.preferNative` | Dispatches to `NativeReader` (Stage 1 + Stage 2). | Falls back to `Crawl4AIClient` if `NativeReader` fails and crawler is configured. |
 | `.crawlerOnly` | Dispatches strictly to `Crawl4AIClient`. | Fails closed: throws `SearchError.crawl4ai` if unconfigured or unreachable. No fallback. |
-| `.nativeOnly` | Dispatches strictly to in-process `NativeReader`. | Never makes loopback or remote microservice calls. Throws if in-process extraction fails. |
 
 ### Concurrency and cancellation
 

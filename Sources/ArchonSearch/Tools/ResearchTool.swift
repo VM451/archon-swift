@@ -41,33 +41,34 @@ public struct ResearchTool: Tool, Sendable {
     }
 
     public init(
-        searxngClient: SearXNGClient,
-        retrievalRouter: RetrievalRouter,
+        searchEngine: any SearchEngine = DuckDuckGoSearchEngine(),
+        retrievalRouter: RetrievalRouter = RetrievalRouter(),
         options: ResearchOptions = ResearchOptions()
     ) {
         self.coordinator = ResearchCoordinator(
-            searxngClient: searxngClient,
+            searchEngine: searchEngine,
             retrievalRouter: retrievalRouter,
             options: options
         )
+    }
+
+    public init(
+        searxngClient: SearXNGClient,
+        retrievalRouter: RetrievalRouter = RetrievalRouter(),
+        options: ResearchOptions = ResearchOptions()
+    ) {
+        self.init(searchEngine: searxngClient, retrievalRouter: retrievalRouter, options: options)
     }
 
     /// Primary structured execution entry point.
     public func execute(topic: String, maxRounds: Int? = nil, maxDocuments: Int? = nil) async throws -> String {
         let report = try await coordinator.research(topic: topic)
         var lines: [String] = [
-            "# Research Report: \(report.query)",
-            "",
-            "## Summary",
-            report.summary,
-            "",
-            "## Key Findings"
+            "# Research Report: \(report.query)", "", "## Summary", report.summary, "", "## Key Findings"
         ]
 
         for section in report.sections {
-            lines.append("### \(section.heading)")
-            lines.append(section.content)
-            lines.append("")
+            lines.append(contentsOf: ["### \(section.heading)", section.content, ""])
         }
 
         if !report.citations.isEmpty {
@@ -88,9 +89,7 @@ public struct ResearchTool: Tool, Sendable {
               let topic = json["topic"] as? String ?? json["query"] as? String else {
             throw SearchError.extraction(reason: "deep_research requires a 'topic' or 'query' string parameter.")
         }
-        let maxRounds = json["maxRounds"] as? Int
-        let maxDocuments = json["maxDocuments"] as? Int
-        return try await execute(topic: topic, maxRounds: maxRounds, maxDocuments: maxDocuments)
+        return try await execute(topic: topic, maxRounds: json["maxRounds"] as? Int, maxDocuments: json["maxDocuments"] as? Int)
     }
 }
 

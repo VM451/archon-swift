@@ -100,3 +100,9 @@ public actor SearXNGClient: Sendable {
         }
     }
 }
+
+extension SearXNGClient: SearchEngine {
+    public func search(_ query: String, categories: [String]?, page: Int) async throws -> [SearchResult] {
+        try await search(query, categories: categories, engines: nil, page: page)
+    }
+}

@@ -7,11 +7,25 @@ local-first, privacy-preserving pipeline that connects Apple-native applications
 in-process article extractors, headless microservices, prompt injection defenses,
 citation integrity verification, and Liquid Glass conversational UI.
 
-## Architecture & Companion Infrastructure
+## Architecture & On-Device Native Posture
 
-ArchonSearch is designed to operate locally without external third-party cloud
-dependencies. Meta-search queries and complex browser automation are handled
-via local companion containers configured in the root `docker-compose.yml`:
+ArchonSearch is designed to operate 100% on-device across Apple platforms (iOS 27+,
+macOS 27+, visionOS 27+) in the background with **zero external servers, zero Docker
+containers, and zero API keys**.
+
+- **Search Engine Discovery**: Queries run directly on-device via `DuckDuckGoSearchEngine`,
+  using native `URLSession` and `SwiftSoup` HTML parsing.
+- **Article Extraction**: Extracted in-process via `NativeReader`, combining fast
+  static `SwiftSoupArticleExtractor` DOM parsing with `@MainActor` `ReadabilityWebKitBridge`
+  in an offscreen `WKWebView` when dynamic JavaScript rendering is required.
+- **Structured Storage**: Persisted locally via `SearchDatabase` using GRDB SQLite.
+- **Safety & Grounding**: Untrusted web text is isolated in `<reference_data>` envelopes
+  via `ContextBuilder`, and model citations are verified via `CitationGraph`.
+
+### Optional Developer Companion Infrastructure (Docker)
+
+For developer workstations, self-hosted proxy environments, or enterprise headless
+crawling, an optional companion setup is provided via the root `docker-compose.yml`:
 
 ```bash
 docker compose up -d
@@ -19,12 +33,12 @@ docker compose up -d
 
 | Service | Image | Local Port | Protocol / Purpose |
 | --- | --- | --- | --- |
-| `searxng` | `searxng/searxng:latest` | `8080` | HTTP JSON meta-search (`/search?format=json`) aggregating multiple search providers. |
-| `crawl4ai` | `unclecode/crawl4ai:latest` | `11235` | REST microservice (`/crawl`) for headless Playwright/Chromium extraction and Markdown generation. |
+| `searxng` | `searxng/searxng:latest` | `8080` | Optional HTTP JSON meta-search (`/search?format=json`) aggregating multiple search providers. |
+| `crawl4ai` | `unclecode/crawl4ai:latest` | `11235` | Optional REST microservice (`/crawl`) for headless Playwright/Chromium extraction and Markdown generation. |
 
-If companion containers are unreachable or network access is restricted,
-ArchonSearch seamlessly falls back to native in-process extraction via
-`NativeReader`.
+This container environment is strictly optional. If companion containers are absent,
+unreachable, or unconfigured, ArchonSearch operates entirely on-device via
+`DuckDuckGoSearchEngine` and `NativeReader`.
 
 ---
 
@@ -32,14 +46,15 @@ ArchonSearch seamlessly falls back to native in-process extraction via
 
 ### 1. `ArchonSearchClient`
 The high-level public actor facade conforming to the §10 Facade pattern. It hides
-internal networking clients, parsers, and repositories behind a unified interface.
+internal search engines, parsers, and repositories behind a unified interface. By
+default, it operates 100% on-device without contacting any local or remote servers.
 
 ```swift
 public actor ArchonSearchClient: Sendable {
     public let configuration: ArchonSearchConfiguration
 
     public init(
-        configuration: ArchonSearchConfiguration = .localFirst(),
+        configuration: ArchonSearchConfiguration = .onDevice(),
         database: SearchDatabase? = nil
     )
 
@@ -52,11 +67,11 @@ public actor ArchonSearchClient: Sendable {
 }
 ```
 
-- `search(_:categories:page:)`: Dispatches queries to SearXNG and returns ranked `[SearchResult]`.
-- `read(url:options:)`: Extracts clean text and Markdown from a URL using `RetrievalRouter`.
+- `search(_:categories:page:)`: Dispatches queries to the configured `SearchEngine` (`DuckDuckGoSearchEngine` by default) and returns ranked `[SearchResult]`.
+- `read(url:options:)`: Extracts clean text and Markdown from a URL using `RetrievalRouter` (`NativeReader` by default).
 - `ask(query:)` / `ask(_:)`: Executes search, extracts source pages, encapsulates content inside `<reference_data>`, and verifies citations (returning tuple or `SearchAnswer`).
 - `research(topic:options:)`: Executes autonomous multi-round iterative research.
-- `checkHealth()`: Reports availability status of SearXNG and Crawl4AI endpoints.
+- `checkHealth()`: Reports availability status of companion SearXNG and Crawl4AI endpoints.
 
 ---
 
@@ -71,7 +86,17 @@ public struct ArchonSearchConfiguration: Sendable, Codable, Equatable {
     public var timeouts: TimeoutSettings
     public var limits: LimitSettings
 
+    /// Default 100% on-device configuration: native-only extraction, direct DuckDuckGo search.
+    public static func onDevice() -> ArchonSearchConfiguration
+
+    /// Optional local-first configuration targeting local Docker companion containers.
     public static func localFirst(
+        searxngURL: URL? = URL(string: "http://localhost:8080"),
+        crawl4aiURL: URL? = URL(string: "http://localhost:11235")
+    ) -> ArchonSearchConfiguration
+
+    /// Explicit alias for Docker companion configuration.
+    public static func dockerCompanion(
         searxngURL: URL? = URL(string: "http://localhost:8080"),
         crawl4aiURL: URL? = URL(string: "http://localhost:11235")
     ) -> ArchonSearchConfiguration
@@ -81,7 +106,7 @@ public struct ArchonSearchConfiguration: Sendable, Codable, Equatable {
 #### Settings Groups
 - `SearchEngineSettings`: `searxngURL`, `enabledEngines: [String]`, `categories: [String]`, `language: String`, `safeSearch: Int`.
 - `CrawlerSettings`: `crawl4aiURL`, `maxDepth: Int`, `maxConcurrentFetches: Int`, `userAgent: String?`, `respectRobotsTxt: Bool`, `renderJavaScript: Bool`.
-- `TimeoutSettings`: `searchTimeout: TimeInterval` (default `10.0s`), `fetchTimeout: TimeInterval` (default `15.0s`), `totalLatencyBudget: TimeInterval?`.
+- `TimeoutSettings`: `searchTimeout: TimeInterval` (default `8.0s` on-device, `10.0s` companion), `fetchTimeout: TimeInterval` (default `12.0s` on-device, `15.0s` companion), `totalLatencyBudget: TimeInterval?`.
 - `LimitSettings`: `maxResults: Int` (default `10`), `maxPagesToScrape: Int` (default `3`), `maxSnippetCharacters: Int` (default `300`), `maxHighlights: Int` (default `3`).
 
 ---
@@ -119,11 +144,66 @@ public struct ReaderOptions: Sendable, Codable, Hashable {
 
 ---
 
-### 4. `SearXNGClient`
-Actor managing HTTP JSON queries against a SearXNG instance without third-party trackers.
+### 4. `SearchEngine` Protocol & Implementations
+
+ArchonSearch abstracts search provider discovery behind the sendable `SearchEngine` protocol, enabling seamless on-device execution alongside optional proxy or companion backends:
 
 ```swift
-public actor SearXNGClient: Sendable {
+public protocol SearchEngine: Sendable {
+    func search(_ query: String, categories: [String]?, page: Int) async throws -> [SearchResult]
+    func checkHealth() async -> Bool
+}
+
+extension SearchEngine {
+    public func search(_ query: String) async throws -> [SearchResult]
+}
+```
+
+#### `DuckDuckGoSearchEngine` (Primary On-Device)
+An actor conforming to `SearchEngine` that queries DuckDuckGo HTML/Lite directly via native `URLSession` and extracts clean `[SearchResult]` items using `SwiftSoup` DOM parsing (with regex fallback). Operates 100% on-device in the background with **zero external servers, zero Docker containers, and zero API keys**.
+
+```swift
+public actor DuckDuckGoSearchEngine: SearchEngine {
+    public init(session: URLSession = .shared)
+
+    public func search(
+        _ query: String,
+        categories: [String]? = nil,
+        page: Int = 1
+    ) async throws -> [SearchResult]
+
+    public func checkHealth() async -> Bool
+}
+```
+
+#### `CompositeSearchEngine` (Adaptive Fallback)
+An actor conforming to `SearchEngine` that holds an optional primary engine (e.g., SearXNG or custom proxy) and a reliable fallback engine (defaulting to `DuckDuckGoSearchEngine`). If the primary engine is nil, fails health checks, or throws an error during search, it transparently executes against the on-device fallback.
+
+```swift
+public actor CompositeSearchEngine: SearchEngine {
+    public let primary: (any SearchEngine)?
+    public let fallback: any SearchEngine
+
+    public init(
+        primary: (any SearchEngine)? = nil,
+        fallback: any SearchEngine = DuckDuckGoSearchEngine()
+    )
+
+    public func search(
+        _ query: String,
+        categories: [String]? = nil,
+        page: Int = 1
+    ) async throws -> [SearchResult]
+
+    public func checkHealth() async -> Bool
+}
+```
+
+#### `SearXNGClient` (Optional Companion)
+Actor conforming to `SearchEngine` managing HTTP JSON queries against a self-hosted SearXNG instance without third-party trackers. Used in Docker companion or server proxy configurations.
+
+```swift
+public actor SearXNGClient: SearchEngine, Sendable {
     public let endpoint: URL
 
     public init(endpoint: URL? = nil, session: URLSession = .shared)
@@ -335,14 +415,21 @@ public struct ArchonChatView: View {
 ## Code Examples
 
 ### 1. Initializing the Client
+
 ```swift
 import ArchonSearch
 
-// Local-first configuration targeting local Docker microservices
-let client = ArchonSearchClient(configuration: .localFirst())
+// 100% on-device configuration (default): zero Docker, zero server, zero API keys
+let client = ArchonSearchClient() // or ArchonSearchClient(configuration: .onDevice())
+```
+
+#### Optional Docker Companion Initialization
+```swift
+// Explicitly opt into local companion Docker services (SearXNG :8080, Crawl4AI :11235)
+let companionClient = ArchonSearchClient(configuration: .localFirst())
 
 // Health check verifying local container connectivity
-let (searxngOk, crawlerOk) = await client.checkHealth()
+let (searxngOk, crawlerOk) = await companionClient.checkHealth()
 print("SearXNG: \(searxngOk), Crawl4AI: \(crawlerOk)")
 ```
 
@@ -360,7 +447,7 @@ for result in results {
 let url = URL(string: "https://developer.apple.com/documentation/swift")!
 let document = try await client.read(
     url: url,
-    options: ReaderOptions(mode: .automatic, timeout: 15.0)
+    options: ReaderOptions(mode: .nativeOnly, timeout: 15.0)
 )
 
 print("Title: \(document.title)")
@@ -400,7 +487,8 @@ import SwiftUI
 import ArchonSearch
 
 struct ContentView: View {
-    @State private var client = ArchonSearchClient(configuration: .localFirst())
+    // 100% on-device execution with zero server or container dependencies
+    @State private var client = ArchonSearchClient()
 
     var body: some View {
         ArchonChatView(client: client)

@@ -1,10 +1,13 @@
 # ArchonSearch — Architecture & Data Flow
 
-`ArchonSearch` 2.0 provides an offline-first, local-first web retrieval, grounding,
+`ArchonSearch` 2.0 provides a 100% on-device, local-first web retrieval, grounding,
 and autonomous research engine for Apple platforms (iOS 27+, macOS 27+, visionOS 27+).
-It integrates provider-neutral meta-search, two-stage native extraction, remote
-headless crawling, prompt-injection defense, citation verification, GRDB persistence,
-and Liquid Glass conversational UI.
+On user devices, it operates entirely in the background with zero external servers,
+zero Docker containers, and zero API keys required. It integrates provider-neutral
+on-device search engines (`DuckDuckGoSearchEngine`), two-stage native in-process extraction
+(`NativeReader`), prompt-injection defense, citation verification, GRDB persistence,
+and Liquid Glass conversational UI. Docker companion microservices (SearXNG, Crawl4AI)
+are supported as optional developer/proxy extensions.
 
 ## Architecture Diagram
 
@@ -16,28 +19,33 @@ flowchart TD
     end
 
     subgraph FacadeLayer ["Public Facade (§10)"]
-        Client["ArchonSearchClient Actor<br/>.localFirst() · search() · read() · ask() · research()"]
+        Client["ArchonSearchClient Actor<br/>.onDevice() (Default) · .localFirst()<br/>search() · read() · ask() · research()"]
     end
 
     UI --> Client
     Tools --> Client
 
-    subgraph DiscoveryLayer ["Meta-Search Discovery"]
-        SXClient["SearXNGClient Actor<br/>GET /search?format=json"]
-        DockerSX[("Docker: SearXNG<br/>:8080")]
-        SXClient --> DockerSX
-    end
-
-    subgraph RetrievalLayer ["Dual Retrieval Pipeline"]
-        Router{"RetrievalRouter Actor<br/>5 Routing Policies"}
-
-        subgraph RemotePath ["Remote Microservice"]
-            C4Client["Crawl4AIClient Actor<br/>POST /crawl (REST API)"]
-            DockerC4[("Docker: Crawl4AI<br/>:11235<br/>Headless JS & Markdown")]
-            C4Client --> DockerC4
+    subgraph DiscoveryLayer ["Search Engine Discovery (SearchEngine Protocol)"]
+        direction TB
+        subgraph PrimaryOnDeviceSearch ["Primary: 100% On-Device Engine"]
+            DDG["DuckDuckGoSearchEngine Actor<br/>Direct HTML/Lite · URLSession + SwiftSoup<br/>Zero Docker · Zero Server · Zero API Keys"]
         end
 
-        subgraph NativePath ["Native In-Process Extraction"]
+        subgraph OptionalDockerSearch ["Optional Companion: Developer / Proxy"]
+            SXClient["SearXNGClient Actor<br/>GET /search?format=json"]
+            DockerSX[("Docker: SearXNG<br/>:8080")]
+            SXClient --> DockerSX
+        end
+
+        Composite["CompositeSearchEngine Actor<br/>SearXNG with Transparent On-Device Fallback"]
+        Composite -.-> SXClient
+        Composite -.-> DDG
+    end
+
+    subgraph RetrievalLayer ["Content Extraction Pipeline (RetrievalRouter)"]
+        Router{"RetrievalRouter Actor<br/>.nativeOnly (Default) · .automatic · .preferNative"}
+
+        subgraph NativePath ["Primary: Native In-Process Extraction"]
             Native["NativeReader Actor"]
             Stage1["Stage 1: SwiftSoupArticleExtractor<br/>Static Fetch & HTML Boilerplate Stripping"]
             Threshold{"Body &ge; 400 chars?"}
@@ -50,15 +58,19 @@ flowchart TD
             Stage2 --> Doc
         end
 
-        Router -->|.crawlerOnly / .preferCrawler| C4Client
-        Router -->|.nativeOnly / .preferNative| Native
-        Router -->|.automatic (healthy)| C4Client
-        Router -->|.automatic (fallback)| Native
+        subgraph RemotePath ["Optional Companion: Microservice Crawler"]
+            C4Client["Crawl4AIClient Actor<br/>POST /crawl (REST API)"]
+            DockerC4[("Docker: Crawl4AI<br/>:11235<br/>Headless JS & Markdown")]
+            C4Client --> DockerC4
+        end
+
+        Router -->|Default: .nativeOnly / .preferNative| Native
+        Router -.->|Optional: .preferCrawler / .crawlerOnly| C4Client
         C4Client --> Doc
     end
 
     subgraph ResearchPipeline ["Autonomous Research"]
-        Coordinator["ResearchCoordinator Actor<br/>Multi-Round Query Formulation & Deduplication"]
+        Coordinator["ResearchCoordinator Actor<br/>Multi-Round Query Formulation & Deduplication<br/>Decoupled via any SearchEngine"]
     end
 
     subgraph GroundingSafety ["Grounding & Prompt Defense"]
@@ -72,13 +84,14 @@ flowchart TD
         DB --- Tables
     end
 
-    Client -->|search| SXClient
+    Client -->|search (default)| DDG
+    Client -->|search (companion/proxy)| Composite
     Client -->|read| Router
     Client -->|research| Coordinator
-    Client -->|ask| SXClient
+    Client -->|ask| DDG
     Client -->|persist / query| DB
 
-    Coordinator --> SXClient
+    Coordinator --> DDG
     Coordinator --> Router
     Coordinator --> CG
 
@@ -90,27 +103,30 @@ flowchart TD
 ## System Subsystems
 
 ### 1. Public Facade (§10)
-`ArchonSearchClient` is the solitary public actor entry point. Consumers interact
-only with this facade, which coordinates meta-search, content extraction, grounding,
-and persistence while keeping internal networking clients, parsers, and scrapers
-encapsulated behind `internal` access boundaries.
+`ArchonSearchClient` is the solitary public actor entry point conforming to §10 Facade.
+By default, it initializes with `.onDevice()`, coordinating native search discovery,
+in-process article extraction, injection defense, and SQLite storage with zero server dependencies.
 
-### 2. Meta-Search Engine
-`SearXNGClient` interfaces with a local or self-hosted SearXNG engine over HTTP JSON
-(`GET /search?format=json`). Default deployment runs locally via Docker on port `8080`.
-It normalizes diverse search providers into strongly typed `SearchResult` models without
-third-party tracker leakage.
+### 2. Search Engine Discovery
+The search discovery layer is unified behind the `SearchEngine` protocol:
+- **`DuckDuckGoSearchEngine` (Primary On-Device)**: Queries DuckDuckGo HTML/Lite directly via
+  `URLSession` and extracts search results using `SwiftSoup`. Operates 100% on-device with zero
+  external proxies, zero Docker containers, and zero API keys.
+- **`CompositeSearchEngine` (Adaptive Fallback)**: Transparently routes queries to a primary
+  engine (such as SearXNG or custom proxy) and seamlessly falls back to on-device
+  `DuckDuckGoSearchEngine` if the primary service is unreachable or errors.
+- **`SearXNGClient` (Optional Companion)**: Interfaces with a self-hosted SearXNG meta-search
+  instance over HTTP JSON (`GET /search?format=json`). Used in `.localFirst()` or server proxy setups.
 
-### 3. Dual Retrieval Router
-`RetrievalRouter` arbitrates between remote headless crawling and native in-process
-extraction across 5 operational policies:
-- `.automatic`: Prefers Crawl4AI when healthy; gracefully falls back to NativeReader.
-- `.preferCrawler`: Attempts Crawl4AI first; falls back to NativeReader on error.
-- `.preferNative`: Attempts NativeReader first; escalates to Crawl4AI on failure.
+### 3. Dual Retrieval Router & Native Extraction
+`RetrievalRouter` arbitrates between native in-process extraction and optional companion crawling:
+- `.nativeOnly` (Default for `.onDevice()`): Operates strictly in-process with zero network container dependencies.
+- `.automatic`: Prefers Crawl4AI when available and healthy; gracefully falls back to `NativeReader`.
+- `.preferNative`: Attempts `NativeReader` first; escalates to Crawl4AI on failure.
+- `.preferCrawler`: Attempts Crawl4AI first; falls back to `NativeReader` on error.
 - `.crawlerOnly`: Dispatches exclusively to Crawl4AI.
-- `.nativeOnly`: Operates strictly in-process with zero network container dependencies.
 
-#### Native Two-Stage Extraction
+#### Native Two-Stage Extraction (Primary)
 - **Stage 1 (`SwiftSoupArticleExtractor`)**: Performs lightweight, zero-overhead static HTML
   fetching and DOM parsing, stripping navigation, ads, cookies, and boilerplate.
 - **Stage 2 (`ReadabilityWebKitBridge`)**: If Stage 1 yields fewer than 400 characters,
@@ -137,7 +153,8 @@ schema migrations. It manages:
 ### 6. Apple FoundationModels Tool Conformance
 `WebSearchTool`, `ReadWebPageTool`, and `ResearchTool` conform to provider-neutral `Tool`
 and Apple's native `FoundationModels.Tool` protocol, declaring `@FoundationModels.Generable`
-typed arguments for seamless on-device agent invocation.
+typed arguments for seamless on-device agent invocation. Each tool defaults to on-device
+engines (`DuckDuckGoSearchEngine`, `NativeReader`).
 
 ### 7. Liquid Glass HIG User Interface
 `ArchonChatView` presents an Apple-native conversational search experience built according
@@ -146,7 +163,10 @@ to the Liquid Glass HIG:
 - Horizontal scrolling `CitationBadgeView` chips for rapid source inspection.
 - Full Light/Dark appearance parity with semantic system colors.
 
-### 8. Companion Docker Environment
-A bundled `docker-compose.yml` provides a turn-key local-first container setup:
+### 8. Optional Companion Docker Environment
+A bundled `docker-compose.yml` provides an optional developer/server container setup:
 - `searxng/searxng:latest` on port `8080` (JSON search enabled).
 - `unclecode/crawl4ai:latest` on port `11235` (headless Playwright/Chromium extraction).
+
+This environment is strictly an optional companion for developers testing self-hosted meta-search
+or heavy server crawling, and is never required on end-user Apple devices.

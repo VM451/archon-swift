@@ -3,18 +3,26 @@ import ArchonCore
 
 /// Actor coordinating bounded autonomous multi-round research workflows.
 public actor ResearchCoordinator: Sendable {
-    public let searxngClient: SearXNGClient
+    public let searchEngine: any SearchEngine
     public let retrievalRouter: RetrievalRouter
     public let options: ResearchOptions
+
+    public init(
+        searchEngine: any SearchEngine,
+        retrievalRouter: RetrievalRouter,
+        options: ResearchOptions = ResearchOptions()
+    ) {
+        self.searchEngine = searchEngine
+        self.retrievalRouter = retrievalRouter
+        self.options = options
+    }
 
     public init(
         searxngClient: SearXNGClient,
         retrievalRouter: RetrievalRouter,
         options: ResearchOptions = ResearchOptions()
     ) {
-        self.searxngClient = searxngClient
-        self.retrievalRouter = retrievalRouter
-        self.options = options
+        self.init(searchEngine: searxngClient, retrievalRouter: retrievalRouter, options: options)
     }
 
     public init(
@@ -22,9 +30,7 @@ public actor ResearchCoordinator: Sendable {
         router: RetrievalRouter,
         options: ResearchOptions = ResearchOptions()
     ) {
-        self.searxngClient = searchClient
-        self.retrievalRouter = router
-        self.options = options
+        self.init(searchEngine: searchClient, retrievalRouter: router, options: options)
     }
 
     /// Executes the full autonomous research pipeline for the given topic.
@@ -47,7 +53,7 @@ public actor ResearchCoordinator: Sendable {
             var foundResults: [SearchResult] = []
             for query in currentQueries {
                 do {
-                    let results = try await searxngClient.search(query)
+                    let results = try await searchEngine.search(query, categories: nil, page: 1)
                     diagnostics.engineResults[query] = results.count
                     foundResults.append(contentsOf: results)
                 } catch {

@@ -5,32 +5,39 @@ import ArchonCore
 /// Coordinates web meta-search, content extraction, grounding, and autonomous research.
 public actor ArchonSearchClient: Sendable {
     public let configuration: ArchonSearchConfiguration
-    private let searxng: SearXNGClient
+    private let searchEngine: any SearchEngine
     private let router: RetrievalRouter
     private let coordinator: ResearchCoordinator
     private let database: SearchDatabase?
 
     public init(
-        configuration: ArchonSearchConfiguration = .localFirst(),
+        configuration: ArchonSearchConfiguration = .onDevice(),
         database: SearchDatabase? = nil
     ) {
         self.configuration = configuration
         let searchURL = configuration.searchEngine.searxngURL
         let crawlerURL = configuration.crawler.crawl4aiURL
-        let sClient = SearXNGClient(endpoint: searchURL)
+
+        if let searchURL {
+            let primary = SearXNGClient(endpoint: searchURL)
+            let fallback = DuckDuckGoSearchEngine()
+            self.searchEngine = CompositeSearchEngine(primary: primary, fallback: fallback)
+        } else {
+            self.searchEngine = DuckDuckGoSearchEngine()
+        }
+
         let cClient = crawlerURL.map { Crawl4AIClient(endpoint: $0) }
         let nReader = NativeReader(timeout: configuration.timeouts.fetchTimeout)
         let rRouter = RetrievalRouter(crawlClient: cClient, nativeReader: nReader)
 
-        self.searxng = sClient
         self.router = rRouter
-        self.coordinator = ResearchCoordinator(searxngClient: sClient, retrievalRouter: rRouter)
+        self.coordinator = ResearchCoordinator(searchEngine: self.searchEngine, retrievalRouter: rRouter)
         self.database = database
     }
 
-    /// Searches the web via SearXNG meta-search.
+    /// Searches the web via the configured on-device or companion search engine.
     public func search(_ query: String, categories: [String]? = nil, page: Int = 1) async throws -> [SearchResult] {
-        try await searxng.search(query, categories: categories, page: page)
+        try await searchEngine.search(query, categories: categories, page: page)
     }
 
     /// Reads and extracts structured text and markdown from a webpage URL.
@@ -86,11 +93,11 @@ public actor ArchonSearchClient: Sendable {
         return SearchAnswer(text: res.context, context: res.context, sources: res.sources, citations: res.citations)
     }
 
-    /// Returns health check status across remote SearXNG and Crawl4AI instances.
+    /// Returns health check status across the search engine and Crawl4AI instances.
     public func checkHealth() async -> (searxngHealthy: Bool, crawlerHealthy: Bool) {
-        let searxngOk = await searxng.checkHealth()
+        let engineOk = await searchEngine.checkHealth()
         let routerHealth = await router.healthReport()
-        return (searxngOk, routerHealth.isCrawlerAvailable)
+        return (searxngHealthy: engineOk, crawlerHealthy: routerHealth.isCrawlerAvailable)
     }
 }
 

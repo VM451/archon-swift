@@ -29,15 +29,23 @@ public struct WebSearchArguments: Sendable, Codable {
 /// High-level web search tool providing structured query discovery across public sources.
 public struct WebSearchTool: Tool, Sendable {
     public let name = "web_search"
-    public let description = "Performs web searches via SearXNG returning ranked titles, URLs, and snippets."
-    public let client: SearXNGClient
+    public let description = "Performs web searches via SearXNG or native search engines returning ranked titles, URLs, and snippets."
+    public let client: any SearchEngine
 
-    public init(client: SearXNGClient) {
+    public init() {
+        self.client = DuckDuckGoSearchEngine()
+    }
+
+    public init(client: any SearchEngine) {
         self.client = client
     }
 
     public init(endpoint: URL? = nil) {
-        self.client = SearXNGClient(endpoint: endpoint)
+        if let endpoint {
+            self.client = SearXNGClient(endpoint: endpoint)
+        } else {
+            self.client = DuckDuckGoSearchEngine()
+        }
     }
 
     /// Primary structured execution entry point.

@@ -130,11 +130,14 @@ for the deeper design notes.
 
 ### ArchonSearch 2.0 subsystem
 
-`ArchonSearch` 2.0 provides an offline-first, local-first web retrieval, grounding,
-and autonomous research pipeline built around the reuse-first principle:
+`ArchonSearch` 2.0 provides a 100% on-device, local-first web retrieval, grounding,
+and autonomous research pipeline built around the native-first principle. On user
+devices (iOS, macOS, visionOS), ArchonSearch runs entirely in the background with
+zero external server, zero Docker, and zero API key requirements:
 
-- **Reused components:** SearXNG for multi-engine meta-search (`localhost:8080`), Crawl4AI for headless dynamic web crawling (`localhost:11235`), SwiftSoup and Mozilla Readability WebKit bridge for fast native in-process extraction, and GRDB for SQLite search persistence, session history, and TTL page caching.
-- **Archon-owned components:** `ArchonSearchClient` facade (§10), 5-mode `RetrievalRouter`, `ContextBuilder` (`<reference_data>` prompt-injection defense), `CitationGraph` (attribution integrity and hallucination elimination), `WebSearchTool`/`ReadWebPageTool`/`ResearchTool` (Apple FoundationModels tools), and `ArchonChatView` (Liquid Glass HIG SwiftUI chat interface). See [`Documentation/diagrams/archon-search.md`](Documentation/diagrams/archon-search.md) for data-flow details.
+- **100% on-device native components (primary):** `DuckDuckGoSearchEngine` for zero-server HTML/Lite search retrieval, `NativeReader` (combining `SwiftSoupArticleExtractor` and in-process `@MainActor` `ReadabilityWebKitBridge` in `WKWebView`) for in-process webpage extraction, and GRDB for SQLite search persistence, session history, and TTL page caching.
+- **Archon-owned safety & reasoning:** `ArchonSearchClient` facade (§10), `CompositeSearchEngine` with transparent fallback, 5-mode `RetrievalRouter`, `ContextBuilder` (`<reference_data>` prompt-injection defense), `CitationGraph` (attribution integrity and hallucination elimination), `WebSearchTool`/`ReadWebPageTool`/`ResearchTool` (Apple FoundationModels tools), and `ArchonChatView` (Liquid Glass HIG SwiftUI chat interface).
+- **Optional companion microservices:** Docker (`docker-compose.yml` with SearXNG on port `8080` and Crawl4AI on port `11235`) is strictly an optional developer/server companion for self-hosted proxy or heavy headless crawling workflows, never a requirement on user devices. See [`Documentation/diagrams/archon-search.md`](Documentation/diagrams/archon-search.md) for data-flow details.
 
 ## Product decision matrix
 
@@ -150,7 +153,7 @@ matrix is the concise product-by-product summary.
 | `ArchonContext` | BUILD | Audit [mem0ai/mem0](https://github.com/mem0ai/mem0), [letta-ai/letta](https://github.com/letta-ai/letta), [getzep/zep](https://github.com/getzep/zep), [crewAIInc/crewAI](https://github.com/crewAIInc/crewAI) for context ownership patterns | Ephemeral budgets and provenance |
 | `ArchonMemory` | BUILD | Audit [mem0ai/mem0](https://github.com/mem0ai/mem0), [supermemoryai/supermemory](https://github.com/supermemoryai/supermemory), [getzep/zep](https://github.com/getzep/zep), [letta-ai/letta](https://github.com/letta-ai/letta), [christopherkarani/Wax](https://github.com/christopherkarani/Wax), [vivekptnk/ProximaKit](https://github.com/vivekptnk/ProximaKit), [gregyoung14/RecallKit](https://github.com/gregyoung14/RecallKit) | Durable memory semantics and retrieval |
 | `ArchonMemoryProxima` | PARTIAL / ADAPT | Audit [vivekptnk/ProximaKit](https://github.com/vivekptnk/ProximaKit), [gregyoung14/RecallKit](https://github.com/gregyoung14/RecallKit), [christopherkarani/Wax](https://github.com/christopherkarani/Wax) and device fit first | Optional persistent dense-index adapter |
-| `ArchonSearch` | PARTIAL / ADAPT | Reuse SearXNG ([searxng/searxng](https://github.com/searxng/searxng)), Crawl4AI ([unclecode/crawl4ai](https://github.com/unclecode/crawl4ai)), SwiftSoup ([scinfu/SwiftSoup](https://github.com/scinfu/SwiftSoup)) + Mozilla Readability, GRDB ([groue/GRDB.swift](https://github.com/groue/GRDB.swift)); audit [tavily-ai/tavily-python](https://github.com/tavily-ai/tavily-python), [exa-labs/exa-py](https://github.com/exa-labs/exa-py), [mendableai/firecrawl](https://github.com/mendableai/firecrawl), [ItzCrazyKns/Perplexica](https://github.com/ItzCrazyKns/Perplexica), [brave/brave-browser](https://github.com/brave/brave-browser) | `ArchonSearchClient` facade, `RetrievalRouter`, `ContextBuilder` (`<reference_data>` injection defense), `CitationGraph` (attribution integrity), `WebSearchTool`/`ReadWebPageTool`/`ResearchTool` (FoundationModels tools), `ArchonChatView` (Liquid Glass HIG) |
+| `ArchonSearch` | PARTIAL / ADAPT | On-device native DuckDuckGo HTML/Lite engine, SwiftSoup ([scinfu/SwiftSoup](https://github.com/scinfu/SwiftSoup)) + Mozilla Readability WebKit bridge, GRDB ([groue/GRDB.swift](https://github.com/groue/GRDB.swift)); optional companion SearXNG ([searxng/searxng](https://github.com/searxng/searxng)) & Crawl4AI ([unclecode/crawl4ai](https://github.com/unclecode/crawl4ai)); audit [tavily-ai/tavily-python](https://github.com/tavily-ai/tavily-python), [exa-labs/exa-py](https://github.com/exa-labs/exa-py), [mendableai/firecrawl](https://github.com/mendableai/firecrawl), [ItzCrazyKns/Perplexica](https://github.com/ItzCrazyKns/Perplexica), [brave/brave-browser](https://github.com/brave/brave-browser) | `ArchonSearchClient` facade, `DuckDuckGoSearchEngine`, `CompositeSearchEngine`, `RetrievalRouter`, `ContextBuilder` (`<reference_data>` injection defense), `CitationGraph` (attribution integrity), `WebSearchTool`/`ReadWebPageTool`/`ResearchTool` (FoundationModels tools), `ArchonChatView` (Liquid Glass HIG) |
 | `ArchonSandbox` | BUILD | Reuse WebKit; audit [e2b-dev/e2b](https://github.com/e2b-dev/e2b), [modal-labs/modal-client](https://github.com/modal-labs/modal-client), [daytonaio/daytona](https://github.com/daytonaio/daytona), [denoland/deno](https://github.com/denoland/deno) for isolation and lifecycle patterns | Policy, bridge validation, quotas |
 | `ArchonConnect` | PARTIAL / ADAPT | Reuse [modelcontextprotocol/swift-sdk](https://github.com/modelcontextprotocol/swift-sdk); audit [modelcontextprotocol/servers](https://github.com/modelcontextprotocol/servers) and conformance | Archon policy, consent, lifecycle |
 | `ArchonComputerUse` | BUILD | Reuse Accessibility/DOM/App Intents; audit [browserbase/stagehand](https://github.com/browserbase/stagehand), [anthropics/anthropic-cookbook](https://github.com/anthropics/anthropic-cookbook), [openai/openai-agents-python](https://github.com/openai/openai-agents-python) for semantic and fallback action patterns | Semantic safety, approvals, postconditions |
@@ -179,7 +182,7 @@ for Archon's local-native core.
 | `ArchonContext` | Request-scoped context assembly; never persists or executes actions |
 | `ArchonMemory` | Application-owned memory, graph storage, vector search, RAG, and CloudKit sync |
 | `ArchonMemoryProxima` | Optional ProximaKit dense-index adapter behind `VectorIndex` |
-| `ArchonSearch` | Web search and crawl (SearXNG, Crawl4AI), native extraction (SwiftSoup, Readability), SQLite persistence (GRDB), injection-safe grounding (`ContextBuilder`), citation integrity (`CitationGraph`), FoundationModels tools, and Liquid Glass chat UI (`ArchonChatView`) |
+| `ArchonSearch` | 100% on-device native search (`DuckDuckGoSearchEngine`, `CompositeSearchEngine`), in-process extraction (`NativeReader`, `SwiftSoup`, `ReadabilityWebKitBridge`), SQLite persistence (GRDB), injection-safe grounding (`ContextBuilder`), citation integrity (`CitationGraph`), FoundationModels tools, Liquid Glass chat UI (`ArchonChatView`), and optional Docker companion (SearXNG, Crawl4AI) |
 | `ArchonSandbox` | Capability-restricted WebKit mini-apps, DOM/JS patches, events, and workspace sync |
 | `ArchonConnect` | MCP client, JSON-RPC HTTP transport, schema validation, and permission policy |
 | `ArchonComputerUse` | Semantic snapshots and host-defined actions with risk and postcondition checks |
@@ -299,20 +302,16 @@ run `ModelCompatibilityAnalyzer` before presenting an install or load action.
 ### Web-grounded search with ArchonSearch 2.0
 
 ArchonSearch 2.0 enables privacy-preserving, web-grounded AI search and
-autonomous research using local companion services:
+autonomous research that runs **100% on-device** across iOS, macOS, and visionOS
+in the background with **zero external servers, zero Docker containers, and zero API keys**.
 
-Start the local companion services (SearXNG on port 8080, Crawl4AI on port 11235):
-
-```bash
-docker compose up -d
-```
-
-Query grounded web intelligence in native Swift:
+Query grounded web intelligence directly on-device in native Swift:
 
 ```swift
 import ArchonSearch
 
-let client = ArchonSearchClient(configuration: .localFirst())
+// Runs 100% on-device: DuckDuckGoSearchEngine + NativeReader (SwiftSoup / WebKit)
+let client = ArchonSearchClient() // defaults to .onDevice()
 let answer = try await client.ask("How does Liquid Glass adapt between light and dark mode?")
 print(answer.text)
 for citation in answer.citations {
@@ -327,12 +326,29 @@ import SwiftUI
 import ArchonSearch
 
 struct ContentView: View {
-    @State private var client = ArchonSearchClient(configuration: .localFirst())
+    // 100% on-device execution with zero server or container dependencies
+    @State private var client = ArchonSearchClient(configuration: .onDevice())
 
     var body: some View {
         ArchonChatView(client: client)
     }
 }
+```
+
+#### Optional developer companion setup (Docker)
+
+For developer environments, self-hosted proxy servers, or enterprise Crawl4AI setups,
+an optional companion setup is provided via `docker-compose.yml` (SearXNG on port `8080`,
+Crawl4AI on port `11235`). This is strictly an optional developer companion, never
+a requirement on user devices:
+
+```bash
+docker compose up -d
+```
+
+```swift
+// Explicitly opt into local companion Docker services
+let client = ArchonSearchClient(configuration: .localFirst()) // or .dockerCompanion()
 ```
 
 The buildable example is a macOS SwiftPM executable:
