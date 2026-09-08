@@ -119,7 +119,10 @@ let package = Package(
         ),
         .target(
             name: "ArchonSearch",
-            dependencies: ["ArchonCore"],
+            dependencies: [
+                "ArchonCore",
+                .product(name: "GRDB", package: "GRDB.swift")
+            ],
             path: "Sources/ArchonSearch",
             swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]
         ),

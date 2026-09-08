@@ -1,0 +1,29 @@
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: archon-searxng
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8080/
+      - SEARXNG_SEARCH_FORMATS=html,json
+      - SEARXNG_SECRET=archon_companion_searxng_secret_key_32_bytes
+    networks:
+      - archon-bridge
+
+  crawl4ai:
+    image: unclecode/crawl4ai:latest
+    container_name: archon-crawl4ai
+    restart: unless-stopped
+    ports:
+      - "11235:11235"
+    environment:
+      - CRAWL4AI_API_TOKEN=
+      - MAX_CONCURRENT_TASKS=5
+    networks:
+      - archon-bridge
+
+networks:
+  archon-bridge:
+    driver: bridge

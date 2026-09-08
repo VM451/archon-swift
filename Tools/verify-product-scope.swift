@@ -40,7 +40,7 @@ private let expectedDependencies: [String: Set<String>] = [
     "ArchonContext": ["ArchonCore"],
     "ArchonMemory": ["ArchonCore", "GRDB@GRDB.swift"],
     "ArchonMemoryProxima": ["ArchonMemory", "ProximaKit@ProximaKit"],
-    "ArchonSearch": ["ArchonCore"],
+    "ArchonSearch": ["ArchonCore", "GRDB@GRDB.swift"],
     "ArchonSandbox": ["ArchonCore"],
     "ArchonConnect": ["ArchonCore", "MCP@swift-sdk"],
     "ArchonComputerUse": ["ArchonCore"],

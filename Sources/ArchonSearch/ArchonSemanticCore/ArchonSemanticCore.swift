@@ -4,8 +4,6 @@ import NaturalLanguage
 /// Protocol for structured data models that can be extracted by ArchonSearch.
 public protocol ArchonGenerable: Codable, Sendable {}
 
-public typealias Generable = ArchonGenerable
-
 public enum ArchonSemanticCoreError: Error, LocalizedError, Equatable, Sendable {
     case structuredExtractionUnavailable
 
@@ -141,29 +139,5 @@ public struct ArchonSemanticCore: Sendable {
             }
         }
         return citations
-    }
-}
-
-/// Helper data holder containing the URL and text of a scraped page for citation extraction.
-public struct ScrapedPageData: Sendable, Codable {
-    public let url: URL
-    public let text: String
-    
-    public init(url: URL, text: String) {
-        self.url = url
-        self.text = text
-    }
-}
-
-/// An extracted citation mapping a specific piece of information back to its source URL.
-public struct Citation: Sendable, Codable, Hashable {
-    public let index: Int
-    public let sourceURLString: String
-    public let snippet: String
-    
-    public init(index: Int, sourceURLString: String, snippet: String) {
-        self.index = index
-        self.sourceURLString = sourceURLString
-        self.snippet = snippet
     }
 }

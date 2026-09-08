@@ -10,6 +10,7 @@ organized using the Diátaxis model so each document has one job:
 | [Reference](reference/) | Exact contracts and boundaries | Check supported models, products, fields, states, or commands |
 | [Explanation](explanation/) | Architecture and design rationale | Understand why Archon is shaped this way |
 | [Decisions](decisions/) | Historical and migration records | Understand what was retained, replaced, or excluded |
+| [Diagrams](diagrams/) | One Mermaid diagram per product | See how a product works at a glance |
 
 The package's API reference remains in Swift documentation comments and the
 DocC catalog under `Sources/*/Documentation.docc`. Published competitive

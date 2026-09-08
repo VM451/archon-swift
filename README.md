@@ -128,6 +128,14 @@ Arrows show composition and service boundaries, not the complete SwiftPM
 dependency graph. Read [`Documentation/architecture.md`](Documentation/architecture.md)
 for the deeper design notes.
 
+### ArchonSearch 2.0 subsystem
+
+`ArchonSearch` 2.0 provides an offline-first, local-first web retrieval, grounding,
+and autonomous research pipeline built around the reuse-first principle:
+
+- **Reused components:** SearXNG for multi-engine meta-search (`localhost:8080`), Crawl4AI for headless dynamic web crawling (`localhost:11235`), SwiftSoup and Mozilla Readability WebKit bridge for fast native in-process extraction, and GRDB for SQLite search persistence, session history, and TTL page caching.
+- **Archon-owned components:** `ArchonSearchClient` facade (§10), 5-mode `RetrievalRouter`, `ContextBuilder` (`<reference_data>` prompt-injection defense), `CitationGraph` (attribution integrity and hallucination elimination), `WebSearchTool`/`ReadWebPageTool`/`ResearchTool` (Apple FoundationModels tools), and `ArchonChatView` (Liquid Glass HIG SwiftUI chat interface). See [`Documentation/diagrams/archon-search.md`](Documentation/diagrams/archon-search.md) for data-flow details.
+
 ## Product decision matrix
 
 The full decision vocabulary and dependency policy are documented in the
@@ -142,7 +150,7 @@ matrix is the concise product-by-product summary.
 | `ArchonContext` | BUILD | Audit [mem0ai/mem0](https://github.com/mem0ai/mem0), [letta-ai/letta](https://github.com/letta-ai/letta), [getzep/zep](https://github.com/getzep/zep), [crewAIInc/crewAI](https://github.com/crewAIInc/crewAI) for context ownership patterns | Ephemeral budgets and provenance |
 | `ArchonMemory` | BUILD | Audit [mem0ai/mem0](https://github.com/mem0ai/mem0), [supermemoryai/supermemory](https://github.com/supermemoryai/supermemory), [getzep/zep](https://github.com/getzep/zep), [letta-ai/letta](https://github.com/letta-ai/letta), [christopherkarani/Wax](https://github.com/christopherkarani/Wax), [vivekptnk/ProximaKit](https://github.com/vivekptnk/ProximaKit), [gregyoung14/RecallKit](https://github.com/gregyoung14/RecallKit) | Durable memory semantics and retrieval |
 | `ArchonMemoryProxima` | PARTIAL / ADAPT | Audit [vivekptnk/ProximaKit](https://github.com/vivekptnk/ProximaKit), [gregyoung14/RecallKit](https://github.com/gregyoung14/RecallKit), [christopherkarani/Wax](https://github.com/christopherkarani/Wax) and device fit first | Optional persistent dense-index adapter |
-| `ArchonSearch` | BUILD | Audit [tavily-ai/tavily-python](https://github.com/tavily-ai/tavily-python), [exa-labs/exa-py](https://github.com/exa-labs/exa-py), [mendableai/firecrawl](https://github.com/mendableai/firecrawl), [searxng/searxng](https://github.com/searxng/searxng), [ItzCrazyKns/Perplexica](https://github.com/ItzCrazyKns/Perplexica), [brave/brave-browser](https://github.com/brave/brave-browser); reuse local primitives | Offline corpus, orchestration, citations |
+| `ArchonSearch` | PARTIAL / ADAPT | Reuse SearXNG ([searxng/searxng](https://github.com/searxng/searxng)), Crawl4AI ([unclecode/crawl4ai](https://github.com/unclecode/crawl4ai)), SwiftSoup ([scinfu/SwiftSoup](https://github.com/scinfu/SwiftSoup)) + Mozilla Readability, GRDB ([groue/GRDB.swift](https://github.com/groue/GRDB.swift)); audit [tavily-ai/tavily-python](https://github.com/tavily-ai/tavily-python), [exa-labs/exa-py](https://github.com/exa-labs/exa-py), [mendableai/firecrawl](https://github.com/mendableai/firecrawl), [ItzCrazyKns/Perplexica](https://github.com/ItzCrazyKns/Perplexica), [brave/brave-browser](https://github.com/brave/brave-browser) | `ArchonSearchClient` facade, `RetrievalRouter`, `ContextBuilder` (`<reference_data>` injection defense), `CitationGraph` (attribution integrity), `WebSearchTool`/`ReadWebPageTool`/`ResearchTool` (FoundationModels tools), `ArchonChatView` (Liquid Glass HIG) |
 | `ArchonSandbox` | BUILD | Reuse WebKit; audit [e2b-dev/e2b](https://github.com/e2b-dev/e2b), [modal-labs/modal-client](https://github.com/modal-labs/modal-client), [daytonaio/daytona](https://github.com/daytonaio/daytona), [denoland/deno](https://github.com/denoland/deno) for isolation and lifecycle patterns | Policy, bridge validation, quotas |
 | `ArchonConnect` | PARTIAL / ADAPT | Reuse [modelcontextprotocol/swift-sdk](https://github.com/modelcontextprotocol/swift-sdk); audit [modelcontextprotocol/servers](https://github.com/modelcontextprotocol/servers) and conformance | Archon policy, consent, lifecycle |
 | `ArchonComputerUse` | BUILD | Reuse Accessibility/DOM/App Intents; audit [browserbase/stagehand](https://github.com/browserbase/stagehand), [anthropics/anthropic-cookbook](https://github.com/anthropics/anthropic-cookbook), [openai/openai-agents-python](https://github.com/openai/openai-agents-python) for semantic and fallback action patterns | Semantic safety, approvals, postconditions |
@@ -171,7 +179,7 @@ for Archon's local-native core.
 | `ArchonContext` | Request-scoped context assembly; never persists or executes actions |
 | `ArchonMemory` | Application-owned memory, graph storage, vector search, RAG, and CloudKit sync |
 | `ArchonMemoryProxima` | Optional ProximaKit dense-index adapter behind `VectorIndex` |
-| `ArchonSearch` | Search, scraping, deep research, structured extraction, citations, and monitoring |
+| `ArchonSearch` | Web search and crawl (SearXNG, Crawl4AI), native extraction (SwiftSoup, Readability), SQLite persistence (GRDB), injection-safe grounding (`ContextBuilder`), citation integrity (`CitationGraph`), FoundationModels tools, and Liquid Glass chat UI (`ArchonChatView`) |
 | `ArchonSandbox` | Capability-restricted WebKit mini-apps, DOM/JS patches, events, and workspace sync |
 | `ArchonConnect` | MCP client, JSON-RPC HTTP transport, schema validation, and permission policy |
 | `ArchonComputerUse` | Semantic snapshots and host-defined actions with risk and postcondition checks |
@@ -288,6 +296,45 @@ can still require a model-family text adapter supplied by the consuming app.
 Never assume the first result is runnable; inspect the returned variant and
 run `ModelCompatibilityAnalyzer` before presenting an install or load action.
 
+### Web-grounded search with ArchonSearch 2.0
+
+ArchonSearch 2.0 enables privacy-preserving, web-grounded AI search and
+autonomous research using local companion services:
+
+Start the local companion services (SearXNG on port 8080, Crawl4AI on port 11235):
+
+```bash
+docker compose up -d
+```
+
+Query grounded web intelligence in native Swift:
+
+```swift
+import ArchonSearch
+
+let client = ArchonSearchClient(configuration: .localFirst())
+let answer = try await client.ask("How does Liquid Glass adapt between light and dark mode?")
+print(answer.text)
+for citation in answer.citations {
+    print("[\(citation.index)] \(citation.title ?? ""): \(citation.url)")
+}
+```
+
+For SwiftUI applications, embed the native `ArchonChatView` styled with Liquid Glass HIG:
+
+```swift
+import SwiftUI
+import ArchonSearch
+
+struct ContentView: View {
+    @State private var client = ArchonSearchClient(configuration: .localFirst())
+
+    var body: some View {
+        ArchonChatView(client: client)
+    }
+}
+```
+
 The buildable example is a macOS SwiftPM executable:
 
 ```bash
@@ -376,7 +423,7 @@ or unavailable result. Test and preview code can inject deterministic mocks.
 - [`Documentation/reference/competitor-comparison.md`](Documentation/reference/competitor-comparison.md) — detailed competitor feature tables, scores, and Archon-fit decisions.
 - [`Documentation/explanation/`](Documentation/explanation/) — architecture, dependency, local-first, and recovery rationale.
 - [`Documentation/decisions/`](Documentation/decisions/) — migration and architectural decision records.
-- [`Documentation/reference/competitor-comparison.md`](Documentation/reference/competitor-comparison.md) — competitor features, decisions, scores, and evidence limits.
+- [`Documentation/diagrams/archon-search.md`](Documentation/diagrams/archon-search.md) — ArchonSearch 2.0 dual-retrieval and grounding architecture.
 - [`Documentation/how-to/validate-a-release.md`](Documentation/how-to/validate-a-release.md) — replacement gates for correctness, safety, performance, and migration.
 - [`Examples/README.md`](Examples/README.md) — buildable SwiftUI host.
 - [`Benchmarks/README.md`](Benchmarks/README.md) — opt-in performance checks.

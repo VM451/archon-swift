@@ -14,7 +14,7 @@ vendor APIs from leaking through default Archon contracts.
 | `ArchonContext` | `ArchonCore` | Request assembly is intentionally independent of durable storage |
 | `ArchonMemory` | `ArchonCore`, GRDB | SQLite-backed durable memory owns its persistence engine |
 | `ArchonMemoryProxima` | `ArchonMemory`, ProximaKit | Optional dense indexing stays replaceable and out of `ArchonFull` |
-| `ArchonSearch` | `ArchonCore` | Search uses Archon-owned contracts and host transports |
+| `ArchonSearch` | `ArchonCore`, `GRDB` | Search uses Archon-owned contracts, local-first SearXNG/Crawl4AI clients, in-process SwiftSoup/WebKit extraction, and GRDB SQLite persistence for caching and search sessions |
 | `ArchonSandbox` | `ArchonCore` | WebKit is an Apple platform boundary, not a remote runtime dependency |
 | `ArchonConnect` | `ArchonCore`, official MCP Swift SDK | MCP wire behavior is reused; Archon owns policy and error boundaries |
 | `ArchonComputerUse` | `ArchonCore` | Host observation and action closures remain app-owned |

@@ -67,9 +67,14 @@ extension ArchonSearch {
                 for (index, url) in targetURLs.enumerated() {
                     group.addTask {
                         do {
-                            let (title, text, _) = try await HTMLContentExtractor.fetchStaticPage(url: url)
-                            let snippet = try await core.extractRelevantContext(from: text, query: q, maxCharacters: boundedSnippetCharacters)
-                            let highlightContext = try await core.extractRelevantContext(from: text, query: q, maxCharacters: boundedHighlightCount * 300)
+                            let (title, text, html) = try await HTMLContentExtractor.fetchStaticPage(url: url)
+                            // Article-first snippet text: boilerplate-stripped body when
+                            // extraction succeeds, legacy plain text otherwise. No
+                            // rendered escalation here — snippets fan out over many
+                            // URLs and must stay on the cheap static path.
+                            let body = HeuristicArticleExtractor().extractArticle(from: html, url: url)?.text ?? text
+                            let snippet = try await core.extractRelevantContext(from: body, query: q, maxCharacters: boundedSnippetCharacters)
+                            let highlightContext = try await core.extractRelevantContext(from: body, query: q, maxCharacters: boundedHighlightCount * 300)
                             let highlights = HTMLContentExtractor.highlights(from: highlightContext, maxHighlights: boundedHighlightCount)
                             return .completed(IndexedSearchResult(index: index, result: SearchResult(url: url, title: title, snippet: snippet, highlights: highlights)))
                         } catch is CancellationError {

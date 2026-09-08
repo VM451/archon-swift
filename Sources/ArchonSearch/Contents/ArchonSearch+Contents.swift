@@ -66,16 +66,30 @@ extension ArchonSearch {
         
         switch livecrawl {
         case .fast:
+            // Two-stage extraction: static URLSession fetch first; pages whose
+            // static HTML yields too little article text escalate to a rendered
+            // WebKit scrape before giving up. The scraper is shared so at most
+            // one WebKit instance exists per escalation.
+            let scraper = await StealthScraper(localWorkspaceRoots: localWorkspaceRoots)
+            let extractor = HeuristicArticleExtractor()
             try await withThrowingTaskGroup(of: IndexedContentsEvent.self) { group in
                 for (index, url) in targetURLs.enumerated() {
                     group.addTask {
                         do {
                             let (title, text, html) = try await HTMLContentExtractor.fetchStaticPage(url: url)
-                            let highlights = try await core.extractRelevantContext(from: text, query: query, maxCharacters: boundedHighlightCharacters)
+                            let article = await Self.resolveArticle(
+                                url: url,
+                                staticTitle: title,
+                                staticText: text,
+                                staticHTML: html,
+                                extractor: extractor,
+                                scraper: scraper
+                            )
+                            let highlights = try await core.extractRelevantContext(from: article.text, query: query, maxCharacters: boundedHighlightCharacters)
                             return .completed(IndexedContentsResult(index: index, result: ContentsResult(
                                 url: url,
-                                title: title,
-                                markdown: text,
+                                title: article.title.isEmpty ? title : article.title,
+                                markdown: article.text,
                                 html: html,
                                 highlights: HTMLContentExtractor.highlights(from: highlights, maxHighlights: boundedHighlightCount)
                             )))
@@ -134,6 +148,46 @@ extension ArchonSearch {
         }
         
         return results.compactMap { $0 }
+    }
+
+    /// Two-stage article resolution: prefer the static-fetch extraction and
+    /// escalate to a rendered scrape only when the static body is thin.
+    /// Never throws: when rendering also fails, the legacy plain-text result
+    /// is preserved so previously succeeding pages keep succeeding.
+    private static func resolveArticle(
+        url: URL,
+        staticTitle: String,
+        staticText: String,
+        staticHTML: String,
+        extractor: HeuristicArticleExtractor,
+        scraper: StealthScraper
+    ) async -> CleanArticle {
+        if let article = extractor.extractArticle(from: staticHTML, url: url),
+           article.text.count >= CleanArticle.minimumBodyCharacters {
+            return article
+        }
+        do {
+            try Task.checkCancellation()
+            let scrape = try await scraper.scrape(url: url, configuration: ScrapeConfiguration())
+            if let rendered = extractor.extractArticle(from: scrape.html, url: url),
+               !rendered.text.isEmpty {
+                return CleanArticle(
+                    url: url,
+                    title: rendered.title.isEmpty ? scrape.title : rendered.title,
+                    author: rendered.author,
+                    publishedAt: rendered.publishedAt,
+                    text: rendered.text,
+                    headings: rendered.headings,
+                    method: .escalatedRender
+                )
+            }
+        } catch {
+            // Fall through to the static result below.
+        }
+        if let article = extractor.extractArticle(from: staticHTML, url: url) {
+            return article
+        }
+        return CleanArticle(url: url, title: staticTitle, text: staticText, method: .staticFetch)
     }
 }
 
