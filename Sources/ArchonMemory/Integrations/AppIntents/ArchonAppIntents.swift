@@ -12,17 +12,23 @@ public struct SearchMemoriesIntent: AppIntent {
     @Parameter(title: "User ID", description: "Optional User Identifier filter")
     public var userId: String?
 
+    @Parameter(title: "Workspace ID", description: "Optional ArchonMemory workspace namespace")
+    public var workspaceID: String?
+
     public init() {
         self.query = ""
+        self.userId = nil
+        self.workspaceID = nil
     }
 
-    public init(query: String, userId: String? = nil) {
+    public init(query: String, userId: String? = nil, workspaceID: String? = nil) {
         self.query = query
         self.userId = userId
+        self.workspaceID = workspaceID
     }
 
     public func perform() async throws -> some IntentResult & ReturnsValue<[String]> {
-        guard let client = await ArchonClientIntentRegistry.shared.current() else {
+        guard let client = await ArchonClientIntentRegistry.shared.current(for: workspaceID ?? "default") else {
             throw ArchonMemoryError.invalidConfiguration("ArchonClient shared instance is not initialized.")
         }
         
@@ -43,17 +49,23 @@ public struct AddMemoryIntent: AppIntent {
     @Parameter(title: "User ID", description: "Optional User Identifier")
     public var userId: String?
 
+    @Parameter(title: "Workspace ID", description: "Optional ArchonMemory workspace namespace")
+    public var workspaceID: String?
+
     public init() {
         self.memoryText = ""
+        self.userId = nil
+        self.workspaceID = nil
     }
 
-    public init(memoryText: String, userId: String? = nil) {
+    public init(memoryText: String, userId: String? = nil, workspaceID: String? = nil) {
         self.memoryText = memoryText
         self.userId = userId
+        self.workspaceID = workspaceID
     }
 
     public func perform() async throws -> some IntentResult & ReturnsValue<String> {
-        guard let client = await ArchonClientIntentRegistry.shared.current() else {
+        guard let client = await ArchonClientIntentRegistry.shared.current(for: workspaceID ?? "default") else {
             throw ArchonMemoryError.invalidConfiguration("ArchonClient shared instance is not initialized.")
         }
         

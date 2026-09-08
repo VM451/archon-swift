@@ -164,6 +164,18 @@ public actor LocalVectorStore: VectorStore {
                 """)
             try db.drop(table: "core_memory_blocks_legacy")
         }
+
+        migrator.registerMigration("v4_add_memory_feedback") { db in
+            try db.create(table: "memory_feedback") { t in
+                t.column("id", .text).primaryKey()
+                t.column("insightID", .text).notNull()
+                t.column("kind", .text).notNull()
+                t.column("userId", .text)
+                t.column("timestamp", .double).notNull()
+                t.column("metadataJson", .text)
+            }
+            try db.create(index: "memory_feedback_insight_timestamp", on: "memory_feedback", columns: ["insightID", "timestamp"])
+        }
         
         try migrator.migrate(dbQueue)
     }
@@ -250,7 +262,7 @@ public actor LocalVectorStore: VectorStore {
     }
 
     public func fetch(id: UUID) async throws -> MemoryItem? {
-        try await dbQueue.read { db in
+        return try await dbQueue.read { db in
             guard let row = try Row.fetchOne(db, sql: "SELECT * FROM memories WHERE id = ?", arguments: [id.uuidString]) else {
                 return nil
             }
@@ -259,6 +271,12 @@ public actor LocalVectorStore: VectorStore {
     }
 
     public func fetchAll(filters: MemoryFilter?, limit: Int? = nil, offset: Int? = nil) async throws -> [MemoryItem] {
+        if let limit, !(0...500).contains(limit) {
+            throw ArchonMemoryError.invalidSearchRequest("memory limit must be between 0 and 500")
+        }
+        if let offset, offset < 0 {
+            throw ArchonMemoryError.invalidSearchRequest("offset must be non-negative")
+        }
         let filtersMetadata = filters?.metadata?.isEmpty == false
         let items = try await dbQueue.read { db in
             var sql = "SELECT * FROM memories WHERE 1=1"
@@ -358,6 +376,7 @@ public actor LocalVectorStore: VectorStore {
             try db.execute(sql: "DELETE FROM documents")
             try db.execute(sql: "DELETE FROM recall_messages")
             try db.execute(sql: "DELETE FROM conversation_summaries")
+            try db.execute(sql: "DELETE FROM memory_feedback")
         }
     }
 
@@ -373,8 +392,8 @@ public actor LocalVectorStore: VectorStore {
         if let query, query.utf8.count > Self.maximumMetadataBytes {
             throw ArchonMemoryError.invalidSearchRequest("query is too large")
         }
-        if let vector, !vector.allSatisfy(\.isFinite) {
-            throw ArchonMemoryError.invalidSearchRequest("query vector contains a non-finite value")
+        if let vector {
+            try Self.validate(vector: vector, label: "query")
         }
         let candidates = try await fetchAll(filters: filters)
         guard !candidates.isEmpty else { return [] }
@@ -503,6 +522,20 @@ public actor LocalVectorStore: VectorStore {
         }
     }
 
+    public func fetchAllDocuments(userId: String? = nil) async throws -> [DocumentItem] {
+        try await dbQueue.read { db in
+            var sql = "SELECT * FROM documents WHERE isDeleted = 0"
+            var args: [DatabaseValueConvertible] = []
+            if let userId {
+                sql += " AND userId = ?"
+                args.append(userId)
+            }
+            sql += " ORDER BY updatedAt ASC, id ASC"
+            let rows = try Row.fetchAll(db, sql: sql, arguments: StatementArguments(args))
+            return try rows.map { try Self.rowToDocumentItem($0) }
+        }
+    }
+
     private static func validate(vector: [Float], label: String) throws {
         guard vector.count <= maximumVectorDimensions,
               vector.allSatisfy(\.isFinite) else {
@@ -513,56 +546,133 @@ public actor LocalVectorStore: VectorStore {
     }
 
     public func searchDocuments(query: String?, vector: [Float]?, limit: Int, userId: String?) async throws -> [DocumentItem] {
-        try await dbQueue.read { db in
-            var sql = "SELECT * FROM documents WHERE isDeleted = 0"
+        guard (0...500).contains(limit) else {
+            throw ArchonMemoryError.invalidSearchRequest("document limit must be between 0 and 500")
+        }
+        if let query, query.utf8.count > Self.maximumMetadataBytes {
+            throw ArchonMemoryError.invalidSearchRequest("document query is too large")
+        }
+        if let vector {
+            try Self.validate(vector: vector, label: "document query")
+        }
+        guard limit > 0 else { return [] }
+
+        let docs = try await fetchAllDocuments(userId: userId)
+        guard !docs.isEmpty else { return [] }
+
+        let terms = (query ?? "")
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { $0.count > 2 }
+
+        struct ScoredDocument {
+            let document: DocumentItem
+            let score: Float
+        }
+
+        let scored = docs.map { document in
+            let vectorScore: Float
+            if let vector, !vector.isEmpty, !document.vector.isEmpty {
+                vectorScore = VectorMath.cosineSimilarity(vector, document.vector)
+            } else {
+                vectorScore = 0
+            }
+
+            let searchableText = "\(document.title)\n\(document.content)".lowercased()
+            let matchingTerms = terms.reduce(into: 0) { count, term in
+                if searchableText.contains(term) { count += 1 }
+            }
+            let keywordScore = terms.isEmpty ? Float(0) : Float(matchingTerms) / Float(terms.count)
+            let hasQuery = vector != nil || !terms.isEmpty
+            let score = hasQuery ? alpha * vectorScore + beta * keywordScore : 0
+            return ScoredDocument(document: document, score: score)
+        }
+
+        return scored.sorted { lhs, rhs in
+            if lhs.score != rhs.score { return lhs.score > rhs.score }
+            if lhs.document.updatedAt != rhs.document.updatedAt {
+                return lhs.document.updatedAt > rhs.document.updatedAt
+            }
+            return lhs.document.id.uuidString < rhs.document.id.uuidString
+        }.prefix(limit).map(\.document)
+    }
+
+    public func saveFeedback(event: MemoryFeedbackEvent) async throws {
+        let metadataData = try JSONEncoder().encode(event.metadata)
+        guard metadataData.count <= Self.maximumMetadataBytes else {
+            throw ArchonMemoryError.inputTooLarge(maxBytes: Self.maximumMetadataBytes)
+        }
+        let metadataJSON = String(data: metadataData, encoding: .utf8) ?? "{}"
+        try await dbQueue.write { db in
+            try db.execute(
+                sql: """
+                INSERT INTO memory_feedback (id, insightID, kind, userId, timestamp, metadataJson)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    insightID = excluded.insightID,
+                    kind = excluded.kind,
+                    userId = excluded.userId,
+                    timestamp = excluded.timestamp,
+                    metadataJson = excluded.metadataJson
+                """,
+                arguments: [
+                    event.id.uuidString,
+                    event.insightID.uuidString,
+                    event.kind.rawValue,
+                    event.userId,
+                    event.timestamp.timeIntervalSince1970,
+                    metadataJSON
+                ]
+            )
+        }
+    }
+
+    public func fetchFeedback(insightID: UUID?, userId: String?, limit: Int? = nil) async throws -> [MemoryFeedbackEvent] {
+        if let limit, !(0...500).contains(limit) {
+            throw ArchonMemoryError.invalidSearchRequest("feedback limit must be between 0 and 500")
+        }
+        guard limit != 0 else { return [] }
+        return try await dbQueue.read { db in
+            var sql = "SELECT * FROM memory_feedback WHERE 1=1"
             var args: [DatabaseValueConvertible] = []
-            if let userId = userId {
+            if let insightID {
+                sql += " AND insightID = ?"
+                args.append(insightID.uuidString)
+            }
+            if let userId {
                 sql += " AND userId = ?"
                 args.append(userId)
             }
-            
+            sql += " ORDER BY timestamp DESC, id ASC"
+            if let limit { sql += " LIMIT \(limit)" }
+
             let rows = try Row.fetchAll(db, sql: sql, arguments: StatementArguments(args))
-            var docs: [DocumentItem] = []
-            for row in rows {
-                var docVector: [Float] = []
-                if let vectorBlob: Data = row["vectorData"] {
-                    docVector = vectorBlob.withUnsafeBytes { buffer in
-                        Array(buffer.bindMemory(to: Float.self))
+            return try rows.compactMap { row -> MemoryFeedbackEvent? in
+                guard let idString: String = row["id"],
+                      let id = UUID(uuidString: idString),
+                      let insightString: String = row["insightID"],
+                      let insightID = UUID(uuidString: insightString),
+                      let kindString: String = row["kind"],
+                      let kind = MemoryFeedbackKind(rawValue: kindString) else {
+                    return nil
+                }
+                var metadata: [String: String] = [:]
+                if let metadataString: String = row["metadataJson"],
+                   let data = metadataString.data(using: .utf8) {
+                    guard data.count <= Self.maximumMetadataBytes else {
+                        throw ArchonMemoryError.inputTooLarge(maxBytes: Self.maximumMetadataBytes)
                     }
+                    metadata = (try? JSONDecoder().decode([String: String].self, from: data)) ?? [:]
                 }
-                
-                var tags: [String] = []
-                if let tagsJson: String = row["tagsJson"], let data = tagsJson.data(using: .utf8) {
-                    tags = (try? JSONDecoder().decode([String].self, from: data)) ?? []
-                }
-
-                let item = DocumentItem(
-                    id: UUID(uuidString: row["id"]) ?? UUID(),
-                    title: row["title"],
-                    url: row["url"],
-                    content: row["content"],
-                    chunkIndex: row["chunkIndex"],
-                    totalChunks: row["totalChunks"],
-                    vector: docVector,
-                    tags: tags,
+                return MemoryFeedbackEvent(
+                    id: id,
+                    insightID: insightID,
+                    kind: kind,
                     userId: row["userId"],
-                    metadata: [:],
-                    createdAt: Date(timeIntervalSince1970: row["createdAt"]),
-                    updatedAt: Date(timeIntervalSince1970: row["updatedAt"]),
-                    isDeleted: row["isDeleted"]
+                    timestamp: Date(timeIntervalSince1970: row["timestamp"]),
+                    metadata: metadata
                 )
-                docs.append(item)
             }
-
-            if let queryVector = vector, !queryVector.isEmpty {
-                docs.sort { doc1, doc2 in
-                    let sim1 = VectorMath.cosineSimilarity(queryVector, doc1.vector)
-                    let sim2 = VectorMath.cosineSimilarity(queryVector, doc2.vector)
-                    return sim1 > sim2
-                }
-            }
-
-            return Array(docs.prefix(limit))
         }
     }
 
@@ -589,7 +699,10 @@ public actor LocalVectorStore: VectorStore {
     }
 
     public func fetchRecallMessages(userId: String?, agentId: String?, runId: String?, limit: Int? = nil) async throws -> [RecallMessage] {
-        try await dbQueue.read { db in
+        if let limit, !(0...500).contains(limit) {
+            throw ArchonMemoryError.invalidSearchRequest("recall limit must be between 0 and 500")
+        }
+        return try await dbQueue.read { db in
             var sql = "SELECT * FROM recall_messages WHERE 1=1"
             var args: [DatabaseValueConvertible] = []
             
@@ -826,6 +939,54 @@ public actor LocalVectorStore: VectorStore {
     }
 
     // MARK: - Helper Methods
+
+    private static func rowToDocumentItem(_ row: Row) throws -> DocumentItem {
+        let idString: String = row["id"]
+        let id = UUID(uuidString: idString) ?? UUID()
+
+        var vector: [Float] = []
+        if let vectorBlob: Data = row["vectorData"] {
+            guard vectorBlob.count % MemoryLayout<Float>.size == 0 else {
+                throw ArchonMemoryError.invalidConfiguration("Stored document vector has an invalid byte length.")
+            }
+            vector = vectorBlob.withUnsafeBytes { buffer in
+                Array(buffer.bindMemory(to: Float.self))
+            }
+            try validate(vector: vector, label: "stored document")
+        }
+
+        var tags: [String] = []
+        if let tagsJSON: String = row["tagsJson"], let data = tagsJSON.data(using: .utf8) {
+            guard data.count <= maximumMetadataBytes else {
+                throw ArchonMemoryError.inputTooLarge(maxBytes: maximumMetadataBytes)
+            }
+            tags = (try? JSONDecoder().decode([String].self, from: data)) ?? []
+        }
+
+        var metadata: [String: String] = [:]
+        if let metadataJSON: String = row["metadataJson"], let data = metadataJSON.data(using: .utf8) {
+            guard data.count <= maximumMetadataBytes else {
+                throw ArchonMemoryError.inputTooLarge(maxBytes: maximumMetadataBytes)
+            }
+            metadata = (try? JSONDecoder().decode([String: String].self, from: data)) ?? [:]
+        }
+
+        return DocumentItem(
+            id: id,
+            title: row["title"],
+            url: row["url"],
+            content: row["content"],
+            chunkIndex: row["chunkIndex"],
+            totalChunks: row["totalChunks"],
+            vector: vector,
+            tags: tags,
+            userId: row["userId"],
+            metadata: metadata,
+            createdAt: Date(timeIntervalSince1970: row["createdAt"]),
+            updatedAt: Date(timeIntervalSince1970: row["updatedAt"]),
+            isDeleted: row["isDeleted"]
+        )
+    }
 
     private static func rowToMemoryItem(_ row: Row) throws -> MemoryItem {
         let idStr: String = row["id"]

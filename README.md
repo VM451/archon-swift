@@ -27,6 +27,8 @@ all-base-products re-export; optional adapters remain separate.
 - Local model discovery, compatibility checks, downloads, validation, and installation.
 - Composable agent graphs with model routing, tools, interrupts, checkpoints, and evaluation.
 - Application-owned memory and RAG with optional CloudKit synchronization.
+- Source-linked competitive research snapshots with local profiles, filtered
+  insight recall, stale-refresh protection, and exportable provenance.
 - Search and research outputs with citations and an inspectable search path.
 - Permission-aware MCP, semantic host actions, and capability-restricted WebKit sandboxes.
 - No fabricated inference, extraction, search, telemetry, or platform records when a required capability is unavailable.
@@ -87,7 +89,7 @@ flowchart TB
     Models["ArchonModels<br/>catalog · artifacts · downloads"]
     Agent["ArchonAgent<br/>graphs · routing · tools"]
     Context["ArchonContext<br/>request-scoped context"]
-    Memory["ArchonMemory<br/>long-term memory · RAG"]
+    Memory["ArchonMemory<br/>long-term memory · RAG · research archive"]
     Search["ArchonSearch<br/>discovery · crawl · citations"]
     Connect["ArchonConnect<br/>MCP transport · permissions"]
     ComputerUse["ArchonComputerUse<br/>semantic host actions"]
@@ -151,7 +153,7 @@ matrix is the concise product-by-product summary.
 | `ArchonModels` | PARTIAL / ADAPT | Reuse Apple runtimes; audit [ml-explore/mlx-swift](https://github.com/ml-explore/mlx-swift), [ml-explore/mlx-swift-lm](https://github.com/ml-explore/mlx-swift-lm), [huggingface/swift-huggingface](https://github.com/huggingface/swift-huggingface), [huggingface/swift-transformers](https://github.com/huggingface/swift-transformers) | Catalog, lifecycle, validation |
 | `ArchonAgent` | BUILD | Audit [langchain-ai/langgraph](https://github.com/langchain-ai/langgraph), [crewAIInc/crewAI](https://github.com/crewAIInc/crewAI), [openai/openai-agents-python](https://github.com/openai/openai-agents-python), [Tom-Ryder/AgentRunKit](https://github.com/Tom-Ryder/AgentRunKit), [christopherkarani/Conduit](https://github.com/christopherkarani/Conduit) | Graph recovery, tools, effect receipts |
 | `ArchonContext` | BUILD | Audit [mem0ai/mem0](https://github.com/mem0ai/mem0), [letta-ai/letta](https://github.com/letta-ai/letta), [getzep/zep](https://github.com/getzep/zep), [crewAIInc/crewAI](https://github.com/crewAIInc/crewAI) for context ownership patterns | Ephemeral budgets and provenance |
-| `ArchonMemory` | BUILD | Audit [mem0ai/mem0](https://github.com/mem0ai/mem0), [supermemoryai/supermemory](https://github.com/supermemoryai/supermemory), [getzep/zep](https://github.com/getzep/zep), [letta-ai/letta](https://github.com/letta-ai/letta), [christopherkarani/Wax](https://github.com/christopherkarani/Wax), [vivekptnk/ProximaKit](https://github.com/vivekptnk/ProximaKit), [gregyoung14/RecallKit](https://github.com/gregyoung14/RecallKit) | Durable memory semantics and retrieval |
+| `ArchonMemory` | ADAPT + BUILD | Reuse GRDB, `DocumentItem`, `VectorStore`, `KnowledgeBaseIndex`, and existing temporal memory; adapt durability, filters, workspace routing, and cancellation; build source-linked research contracts and archive records. Audit [mem0ai/mem0](https://github.com/mem0ai/mem0), [supermemoryai/supermemory](https://github.com/supermemoryai/supermemory), [getzep/graphiti](https://github.com/getzep/graphiti), [letta-ai/letta](https://github.com/letta-ai/letta), [christopherkarani/Wax](https://github.com/christopherkarani/Wax), [vivekptnk/ProximaKit](https://github.com/vivekptnk/ProximaKit), [gregyoung14/RecallKit](https://github.com/gregyoung14/RecallKit) | Durable memory plus typed competitive research archive |
 | `ArchonMemoryProxima` | PARTIAL / ADAPT | Audit [vivekptnk/ProximaKit](https://github.com/vivekptnk/ProximaKit), [gregyoung14/RecallKit](https://github.com/gregyoung14/RecallKit), [christopherkarani/Wax](https://github.com/christopherkarani/Wax) and device fit first | Optional persistent dense-index adapter |
 | `ArchonSearch` | PARTIAL / ADAPT | On-device native DuckDuckGo HTML/Lite engine, SwiftSoup ([scinfu/SwiftSoup](https://github.com/scinfu/SwiftSoup)) + Mozilla Readability WebKit bridge, GRDB ([groue/GRDB.swift](https://github.com/groue/GRDB.swift)); optional companion SearXNG ([searxng/searxng](https://github.com/searxng/searxng)) & Crawl4AI ([unclecode/crawl4ai](https://github.com/unclecode/crawl4ai)); audit [tavily-ai/tavily-python](https://github.com/tavily-ai/tavily-python), [exa-labs/exa-py](https://github.com/exa-labs/exa-py), [mendableai/firecrawl](https://github.com/mendableai/firecrawl), [ItzCrazyKns/Perplexica](https://github.com/ItzCrazyKns/Perplexica), [brave/brave-browser](https://github.com/brave/brave-browser) | `ArchonSearchClient` facade, `DuckDuckGoSearchEngine`, `CompositeSearchEngine`, `RetrievalRouter`, `ContextBuilder` (`<reference_data>` injection defense), `CitationGraph` (attribution integrity), `WebSearchTool`/`ReadWebPageTool`/`ResearchTool` (FoundationModels tools), `ArchonChatView` (Liquid Glass HIG) |
 | `ArchonSandbox` | BUILD | Reuse WebKit; audit [e2b-dev/e2b](https://github.com/e2b-dev/e2b), [modal-labs/modal-client](https://github.com/modal-labs/modal-client), [daytonaio/daytona](https://github.com/daytonaio/daytona), [denoland/deno](https://github.com/denoland/deno) for isolation and lifecycle patterns | Policy, bridge validation, quotas |
@@ -180,7 +182,7 @@ for Archon's local-native core.
 | `ArchonModels` | Catalogs, model formats, compatibility, downloads, manifests, and lifecycle |
 | `ArchonAgent` | Stateful graphs, routing, providers, tools, interrupts, checkpoints, evaluation, and SwiftUI chat |
 | `ArchonContext` | Request-scoped context assembly; never persists or executes actions |
-| `ArchonMemory` | Application-owned memory, graph storage, vector search, RAG, and CloudKit sync |
+| `ArchonMemory` | Application-owned memory, graph storage, vector search, RAG, source-linked competitive research, local feedback, and optional CloudKit sync |
 | `ArchonMemoryProxima` | Optional ProximaKit dense-index adapter behind `VectorIndex` |
 | `ArchonSearch` | 100% on-device native search (`DuckDuckGoSearchEngine`, `CompositeSearchEngine`), in-process extraction (`NativeReader`, `SwiftSoup`, `ReadabilityWebKitBridge`), SQLite persistence (GRDB), injection-safe grounding (`ContextBuilder`), citation integrity (`CitationGraph`), FoundationModels tools, Liquid Glass chat UI (`ArchonChatView`), and optional Docker companion (SearXNG, Crawl4AI) |
 | `ArchonSandbox` | Capability-restricted WebKit mini-apps, DOM/JS patches, events, and workspace sync |
@@ -188,6 +190,18 @@ for Archon's local-native core.
 | `ArchonComputerUse` | Semantic snapshots and host-defined actions with risk and postcondition checks |
 | `ArchonModelsUI` | SwiftUI model discovery, installed-library, detail, storage, and download views |
 | `ArchonFull` | Convenience re-export of the base SDK products; excludes optional `ArchonMemoryProxima` |
+
+## ArchonMemory reuse, adaptation, and build map
+
+| Reuse | Adapt | Build from the ground up |
+| --- | --- | --- |
+| GRDB/SQLite durable documents, `DocumentItem`, `VectorStore`, `KnowledgeBaseIndex`, `RAGRetriever`, configured embedding providers, temporal memory fields, `CoreMemoryBlock`, recall, summaries, export, and the optional `VectorIndex` seam | Durable document rehydration, document metadata and filters, hybrid ranking, workspace-scoped App Intents, typed retrieval limits, private credentials, cancellation-aware CloudKit operations, and migration-safe exports | `CompetitiveResearchSnapshot`, `CompetitiveInsight`, `ProviderProfile`, `CompetitiveInsightFilter`, `MemoryFeedbackEvent`, 14-provider seed data, full snapshot archiving, stale-refresh protection, and competitive research tests |
+
+The package reuses outcomes and public APIs where they already fit. Competitor
+repositories are research references, not copied runtime code. The SDK does not
+fetch competitor sites: a consuming app or CLI owns web fetching, credentials,
+source normalization, and manual refresh, then passes a validated snapshot to
+`ArchonMemory`.
 
 ## Competitive comparison
 
@@ -421,6 +435,8 @@ host, not a signed Xcode application. A production app supplies its own:
 - provider credentials, network consent, and any app-specific non-MLX model adapters;
 - privacy usage descriptions, entitlements, and platform permissions;
 - MCP servers, search services, lifecycle forwarding, and host semantic observations;
+- web research fetching, competitor-site credentials, source normalization, and
+  the manual refresh policy for `CompetitiveResearchSnapshot` imports;
 - user-facing policy for side effects and data retention.
 
 When one of these boundaries is absent, the relevant API returns a typed error
@@ -437,9 +453,11 @@ or unavailable result. Test and preview code can inject deterministic mocks.
 - [`Documentation/reference/`](Documentation/reference/) — product, model, policy, and executable contracts.
 - [`Documentation/reference/supported-models.md`](Documentation/reference/supported-models.md) — official-publisher MLX discovery, supported model families, catalog wiring, and the Gemma compatibility explanation.
 - [`Documentation/reference/competitor-comparison.md`](Documentation/reference/competitor-comparison.md) — detailed competitor feature tables, scores, and Archon-fit decisions.
+- [`Documentation/reference/products/memory.md`](Documentation/reference/products/memory.md) — ArchonMemory contracts, durable research imports, and local feedback boundaries.
 - [`Documentation/explanation/`](Documentation/explanation/) — architecture, dependency, local-first, and recovery rationale.
 - [`Documentation/decisions/`](Documentation/decisions/) — migration and architectural decision records.
 - [`Documentation/diagrams/archon-search.md`](Documentation/diagrams/archon-search.md) — ArchonSearch 2.0 dual-retrieval and grounding architecture.
+- [`Documentation/diagrams/archon-memory.md`](Documentation/diagrams/archon-memory.md) — durable memory, RAG, competitive research, stale-refresh, and export flow.
 - [`Documentation/how-to/validate-a-release.md`](Documentation/how-to/validate-a-release.md) — replacement gates for correctness, safety, performance, and migration.
 - [`Examples/README.md`](Examples/README.md) — buildable SwiftUI host.
 - [`Benchmarks/README.md`](Benchmarks/README.md) — opt-in performance checks.

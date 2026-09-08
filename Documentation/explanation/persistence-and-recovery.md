@@ -10,6 +10,7 @@ active operation into a successful result.
 | --- | --- | --- |
 | Agent graph checkpoints | Configured `StateCheckpointer` | Resume, replay, and time-travel behavior depends on the chosen checkpointer |
 | Durable memory | `ArchonMemory` GRDB store | Reopen, update, delete, history, and migration are authoritative |
+| Documents and competitive research | `ArchonMemory` document rows plus typed snapshot metadata | Reopen rebuilds the knowledge-base index; source records, profiles, feedback, and snapshots remain exportable |
 | Vector index | `VectorIndex` adapter | IDs/vectors are replaceable; memory metadata remains in ArchonMemory |
 | Model installation | `ModelLibrary` | Staging is validated, then atomically committed |
 | Background model transfer | `ModelBackgroundTransferCoordinator` + persistent store | Reconnect with the same URLSession identifier and original request |
@@ -27,6 +28,8 @@ active operation into a successful result.
 4. Keep optional indexes and caches rebuildable from the authoritative store.
 5. Mark interrupted work as failed/resumable when the underlying task no longer
    exists; do not leave it permanently “active.”
+6. Treat competitive research snapshots as versioned imports: a stale refresh
+   must never replace a newer stored snapshot, insight, or provider profile.
 
 Detailed model-transfer behavior is in the [model lifecycle reference](../reference/model-lifecycle.md). Memory-specific workflows are in the
 [ArchonMemory DocC catalog](../../Sources/ArchonMemory/Documentation.docc/Articles/GettingStarted.md).

@@ -17,3 +17,20 @@ overview:
 
 The [documentation index](README.md) explains the documentation taxonomy and
 the recommended reading paths.
+
+## ArchonMemory research boundary
+
+`ArchonMemory` reuses its existing GRDB/SQLite document store, vector-store
+protocol, knowledge-base index, RAG retrieval, temporal memory fields, and
+export path. It adapts those boundaries for durable document rehydration,
+metadata-preserving filters, workspace-scoped App Intents, cancellation, and
+migration-safe exports. It builds the typed competitive-research archive:
+`CompetitiveResearchSnapshot`, `CompetitiveInsight`, `ProviderProfile`,
+`CompetitiveInsightFilter`, and `MemoryFeedbackEvent`.
+
+The consuming app or CLI owns web fetching, credentials, source normalization,
+and manual refresh. The package accepts only validated snapshots, persists their
+source metadata locally, refuses stale snapshots from replacing newer records,
+and rebuilds derived retrieval state after restart. Competitor repositories are
+references for outcomes and patterns; their server-side or non-native runtime
+code is not copied into the SwiftPM core.

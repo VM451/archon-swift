@@ -9,7 +9,7 @@ its entry points, internal flow, and boundaries with other products.
 | `ArchonModels` | [archon-models.md](archon-models.md) |
 | `ArchonAgent` | [archon-agent.md](archon-agent.md) |
 | `ArchonContext` | [archon-context.md](archon-context.md) |
-| `ArchonMemory` | [archon-memory.md](archon-memory.md) |
+| `ArchonMemory` | [archon-memory.md](archon-memory.md) — durable memory, RAG, and competitive research archive |
 | `ArchonMemoryProxima` | [archon-memory-proxima.md](archon-memory-proxima.md) |
 | `ArchonSearch` | [archon-search.md](archon-search.md) |
 | `ArchonSandbox` | [archon-sandbox.md](archon-sandbox.md) |
@@ -19,3 +19,5 @@ its entry points, internal flow, and boundaries with other products.
 
 Diagrams are rendered as Mermaid `flowchart` blocks. `ArchonFull` is
 intentionally excluded: it is a re-export facade with no behavior of its own.
+The ArchonMemory diagram also shows the consumer-owned research importer and
+the rebuildable archive/index boundary.

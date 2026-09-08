@@ -59,6 +59,12 @@ Use the product-specific DocC articles for detailed memory workflows:
 - [Custom model providers](../Sources/ArchonMemory/Documentation.docc/Articles/CustomLLMProvider.md)
 - [Competitive feature comparison](../Sources/ArchonMemory/Documentation.docc/Articles/CompetitorComparison.md)
 
+For the implemented competitive-research archive, also read the [ArchonMemory
+product reference](reference/products/memory.md), the [competitor comparison
+and scorecard](reference/competitor-comparison.md), and the [ArchonMemory
+diagram](diagrams/archon-memory.md). Together they distinguish reused
+capabilities, adapted boundaries, and new native Swift contracts.
+
 ## Current package boundary
 
 Archon is a SwiftPM package family for iOS, iPadOS, macOS, and visionOS 27
@@ -66,6 +72,11 @@ where the underlying Apple capability is available. The repository includes a
 buildable macOS SwiftUI example and package-level tests, but not a signed
 consuming application. Device, entitlement, permission, live UI, and
 model-specific runtime claims must be validated in the consuming app.
+
+ArchonMemory accepts validated competitive-research snapshots from a
+consumer-owned app or CLI. That host performs web fetching, credential use,
+source normalization, and manual refresh; the package stores typed source
+metadata and rebuilds its derived retrieval index locally.
 
 The canonical model-support statement is [Supported models and model-family
 policy](reference/supported-models.md). It explains the official-publisher

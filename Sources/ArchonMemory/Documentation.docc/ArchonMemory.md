@@ -28,6 +28,10 @@ It automatically extracts structured user facts, preferences, and entity-relatio
 - ``Relation``
 - ``GraphTriple``
 - ``DocumentItem``
+- ``CompetitiveResearchSnapshot``
+- ``CompetitiveInsight``
+- ``ProviderProfile``
+- ``MemoryFeedbackEvent``
 - ``RecallMessage``
 - ``ConversationSummary``
 - ``MemoryTier``

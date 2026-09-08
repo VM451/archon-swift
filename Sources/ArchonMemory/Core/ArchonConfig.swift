@@ -14,6 +14,8 @@ public struct ArchonConfig: Sendable {
     public var enableAutoSync: Bool
     public var enableSpotlightIndexing: Bool
     public var databasePath: String?
+    /// Stable consumer-owned namespace used by App Intents and background work.
+    public var workspaceID: String
     public var customExtractionPrompt: String?
     public var extractionPolicy: MemoryExtractionPolicy
     public var retrievalPolicy: MemoryRetrievalPolicy
@@ -28,6 +30,7 @@ public struct ArchonConfig: Sendable {
         enableSpotlightIndexing: Bool = false,
         cloudKitChangeTokenPath: String? = nil,
         databasePath: String? = nil,
+        workspaceID: String = "default",
         customExtractionPrompt: String? = nil,
         extractionPolicy: MemoryExtractionPolicy = .standard,
         retrievalPolicy: MemoryRetrievalPolicy = .standard
@@ -41,6 +44,7 @@ public struct ArchonConfig: Sendable {
         self.enableAutoSync = enableAutoSync
         self.enableSpotlightIndexing = enableSpotlightIndexing
         self.databasePath = databasePath
+        self.workspaceID = workspaceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "default" : workspaceID
         self.customExtractionPrompt = customExtractionPrompt
         self.extractionPolicy = extractionPolicy
         self.retrievalPolicy = retrievalPolicy

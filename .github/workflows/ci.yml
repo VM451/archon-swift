@@ -14,7 +14,14 @@ concurrency:
 jobs:
   package:
     name: Build and test package
-    runs-on: macos-latest
+    # This package declares iOS/macOS/visionOS v27 platforms and
+    # swift-tools-version 6.4, so the runner must provide an Xcode 27+
+    # toolchain. The standard macos-latest image only ships Xcode 26.x
+    # (Swift 6.3.3), which fails `swift package resolve` immediately, so
+    # this job targets the `xcode-27` image (Xcode 27 beta default, v27
+    # SDKs). The preflight step below still verifies the toolchain and
+    # fails early with diagnostics if the image ever stops providing one.
+    runs-on: xcode-27
     timeout-minutes: 45
 
     steps:
@@ -25,29 +32,86 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          echo "Available Xcode installations:"
+          find /Applications -maxdepth 1 -type d -name 'Xcode*.app' -print | sort || true
+          echo "---"
+          xcodebuild -showsdks || true
+          echo "---"
+
           selected_developer_dir=""
+          selected_version="0"
           while IFS= read -r xcode_app; do
             developer_dir="$xcode_app/Contents/Developer"
-            if [[ -x "$developer_dir/usr/bin/xcodebuild" && -x "$developer_dir/Toolchains/XcodeDefault.xctoolchain/usr/bin/metal" ]]; then
-              selected_developer_dir="$developer_dir"
+            if [[ -x "$developer_dir/usr/bin/xcodebuild" ]]; then
+              version="$("$developer_dir/usr/bin/xcodebuild" -version 2>/dev/null | awk '/^Xcode /{print $2; exit}' || echo 0)"
+              [[ -n "$version" ]] || version="0"
+              if [[ "$(printf '%s\n%s\n' "$selected_version" "$version" | sort -V | tail -n 1)" == "$version" ]]; then
+                selected_version="$version"
+                selected_developer_dir="$developer_dir"
+              fi
             fi
           done < <(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' -print | sort)
 
           if [[ -z "$selected_developer_dir" ]]; then
-            echo "::error::No complete Xcode installation with a usable Metal compiler was found."
+            echo "::error::No Xcode installation was found. This job must run on the 'xcode-27' image."
             exit 1
           fi
 
+          # The package declares v27 Apple platforms, so an Xcode older
+          # than 27 cannot build it even if its Swift is new enough.
+          major="${selected_version%%.*}"
+          if [[ "$major" -lt 27 ]]; then
+            echo "::error::Selected Xcode $selected_version at $selected_developer_dir, but this package requires Xcode 27+ (v27 SDKs, Swift 6.4+). Use runs-on: xcode-27."
+            exit 1
+          fi
+
+          echo "Selected Xcode $selected_version at $selected_developer_dir"
           echo "DEVELOPER_DIR=$selected_developer_dir" >> "$GITHUB_ENV"
           sudo xcode-select --switch "$selected_developer_dir"
           xcodebuild -version
-          metal_path="$(xcrun --find metal)"
-          test -x "$metal_path"
+
+          # The MLX dependency needs the Metal compiler. Beta images have
+          # shipped without the Metal toolchain component installed, so
+          # download it on demand before failing.
+          if ! metal_path="$(xcrun --find metal 2>/dev/null)" || [[ ! -x "$metal_path" ]]; then
+            echo "Metal compiler not found; downloading the MetalToolchain component..."
+            sudo xcodebuild -downloadComponent MetalToolchain || true
+            metal_path="$(xcrun --find metal)"
+            test -x "$metal_path"
+          fi
+          echo "Metal compiler: $metal_path"
+
+          # The package requires Swift 6.4+ (swift-tools-version 6.4). Fail
+          # early with a clear message instead of an opaque resolve error.
+          swift_version="$(swift --version 2>&1 | head -n 1)"
+          echo "Swift toolchain: $swift_version"
+          if ! printf '%s\n' "$swift_version" | grep -Eq 'Swift version (6\.([4-9]|[1-9][0-9])|[7-9])'; then
+            echo "::error::Selected Xcode provides $swift_version but this package requires Swift 6.4+."
+            exit 1
+          fi
+
+          # The package declares v27 Apple platforms. Confirm the SDKs exist.
+          sdks="$(xcodebuild -showsdks 2>/dev/null || true)"
+          echo "$sdks"
+          for sdk in macosx27.0 iphoneos27.0 xros27.0; do
+            if ! printf '%s\n' "$sdks" | grep -q "$sdk"; then
+              echo "::error::Expected SDK $sdk not listed by xcodebuild -showsdks; the selected Xcode cannot build the v27 platform targets."
+              exit 1
+            fi
+          done
 
       - name: Show toolchain
         run: |
           swift --version
           xcrun --find metal
+
+      - name: Cache SwiftPM artifacts
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.swift', 'Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
 
       - name: Resolve dependencies
         run: swift package resolve

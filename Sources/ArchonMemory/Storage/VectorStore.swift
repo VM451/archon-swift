@@ -24,6 +24,8 @@ public protocol VectorStore: Sendable {
     // MARK: - Documents & Bookmarks (Supermemory)
     func saveDocument(doc: DocumentItem) async throws
     func searchDocuments(query: String?, vector: [Float]?, limit: Int, userId: String?) async throws -> [DocumentItem]
+    /// Returns durable documents so derived indexes can be rebuilt after restart.
+    func fetchAllDocuments(userId: String?) async throws -> [DocumentItem]
 
     // MARK: - Recall Memory (Letta/MemGPT)
     func logRecallMessage(message: RecallMessage) async throws
@@ -32,10 +34,24 @@ public protocol VectorStore: Sendable {
     // MARK: - Conversation Summaries (Zep)
     func saveSummary(summary: ConversationSummary) async throws
     func fetchSummary(userId: String?, agentId: String?, runId: String?) async throws -> ConversationSummary?
+
+    // MARK: - Local feedback
+    func saveFeedback(event: MemoryFeedbackEvent) async throws
+    func fetchFeedback(insightID: UUID?, userId: String?, limit: Int?) async throws -> [MemoryFeedbackEvent]
 }
 
 extension VectorStore {
     public func fetchAll(filters: MemoryFilter?) async throws -> [MemoryItem] {
         try await fetchAll(filters: filters, limit: nil, offset: nil)
+    }
+
+    public func fetchAllDocuments(userId: String?) async throws -> [DocumentItem] {
+        []
+    }
+
+    public func saveFeedback(event: MemoryFeedbackEvent) async throws {}
+
+    public func fetchFeedback(insightID: UUID?, userId: String?, limit: Int?) async throws -> [MemoryFeedbackEvent] {
+        []
     }
 }

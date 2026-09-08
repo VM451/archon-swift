@@ -63,3 +63,11 @@ The current dependency boundaries and published evidence live in the
 [product reference](../reference/products.md),
 [competitor comparison](../reference/competitor-comparison.md), and
 [release validation guide](../how-to/validate-a-release.md).
+
+Competitive research adds no package dependency. `ArchonMemory` owns the typed
+snapshot, insight, profile, filter, feedback, validation, and persistence
+contracts; a consuming app or CLI owns the web client, credentials, source
+normalization, and refresh schedule. Mem0, Letta, Graphiti/Zep, Supermemory,
+CrewAI, Cognee, Khoj, LangMem, Memobase, MemU, Hindsight, ProximaKit,
+RecallKit, and Wax remain reuse/audit references or optional adapters rather
+than hidden runtime dependencies.

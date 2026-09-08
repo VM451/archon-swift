@@ -106,17 +106,21 @@ public actor CloudKitSyncEngine {
         operation.savePolicy = .changedKeys
         operation.qualityOfService = .userInitiated
         
-        return try await withCheckedThrowingContinuation { continuation in
-            operation.modifyRecordsResultBlock = { result in
-                switch result {
-                case .success:
-                    continuation.resume()
-                case .failure(let error):
-                    continuation.resume(throwing: error)
+        return try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { continuation in
+                operation.modifyRecordsResultBlock = { result in
+                    switch result {
+                    case .success:
+                        continuation.resume()
+                    case .failure(let error):
+                        continuation.resume(throwing: error)
+                    }
                 }
+                self.privateDatabase.add(operation)
             }
-            self.privateDatabase.add(operation)
-        }
+        }, onCancel: {
+            operation.cancel()
+        })
     }
 
     /// Upload modified or deleted knowledge graph entities and relations to CloudKit.
@@ -132,17 +136,21 @@ public actor CloudKitSyncEngine {
         operation.savePolicy = .changedKeys
         operation.qualityOfService = .userInitiated
         
-        return try await withCheckedThrowingContinuation { continuation in
-            operation.modifyRecordsResultBlock = { result in
-                switch result {
-                case .success:
-                    continuation.resume()
-                case .failure(let error):
-                    continuation.resume(throwing: error)
+        return try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { continuation in
+                operation.modifyRecordsResultBlock = { result in
+                    switch result {
+                    case .success:
+                        continuation.resume()
+                    case .failure(let error):
+                        continuation.resume(throwing: error)
+                    }
                 }
+                self.privateDatabase.add(operation)
             }
-            self.privateDatabase.add(operation)
-        }
+        }, onCancel: {
+            operation.cancel()
+        })
     }
 
     /// Result structure for incremental sync fetches.
@@ -209,48 +217,52 @@ public actor CloudKitSyncEngine {
             configurationsByRecordZoneID: [customZone.zoneID: zoneConfig]
         )
 
-        return try await withCheckedThrowingContinuation { continuation in
-            operation.recordWasChangedBlock = { recordID, result in
-                if case .success(let record) = result {
-                    if record.recordType == "ArchonMemory", let memory = MemoryItem.fromCKRecord(record) {
-                        updatedMemories.append(memory)
-                    } else if record.recordType == "ArchonEntity", let entity = Entity.fromCKRecord(record) {
-                        updatedEntities.append(entity)
-                    } else if record.recordType == "ArchonRelation", let relation = Relation.fromCKRecord(record) {
-                        updatedRelations.append(relation)
+        return try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { continuation in
+                operation.recordWasChangedBlock = { recordID, result in
+                    if case .success(let record) = result {
+                        if record.recordType == "ArchonMemory", let memory = MemoryItem.fromCKRecord(record) {
+                            updatedMemories.append(memory)
+                        } else if record.recordType == "ArchonEntity", let entity = Entity.fromCKRecord(record) {
+                            updatedEntities.append(entity)
+                        } else if record.recordType == "ArchonRelation", let relation = Relation.fromCKRecord(record) {
+                            updatedRelations.append(relation)
+                        }
                     }
                 }
-            }
 
-            operation.recordWithIDWasDeletedBlock = { recordID, recordType in
-                if let uuid = UUID(uuidString: recordID.recordName) {
-                    deletedRecords.append(DeletedRecord(id: uuid, recordType: recordType))
+                operation.recordWithIDWasDeletedBlock = { recordID, recordType in
+                    if let uuid = UUID(uuidString: recordID.recordName) {
+                        deletedRecords.append(DeletedRecord(id: uuid, recordType: recordType))
+                    }
                 }
-            }
 
-            operation.recordZoneFetchResultBlock = { zoneID, result in
-                if case .success(let (token, _, _)) = result {
-                    newServerToken = token
+                operation.recordZoneFetchResultBlock = { zoneID, result in
+                    if case .success(let (token, _, _)) = result {
+                        newServerToken = token
+                    }
                 }
-            }
 
-            operation.fetchRecordZoneChangesResultBlock = { result in
-                switch result {
-                case .success:
-                    continuation.resume(returning: SyncFetchResult(
-                        updatedMemories: updatedMemories,
-                        updatedEntities: updatedEntities,
-                        updatedRelations: updatedRelations,
-                        deletedRecords: deletedRecords,
-                        newChangeToken: newServerToken
-                    ))
-                case .failure(let error):
-                    continuation.resume(throwing: error)
+                operation.fetchRecordZoneChangesResultBlock = { result in
+                    switch result {
+                    case .success:
+                        continuation.resume(returning: SyncFetchResult(
+                            updatedMemories: updatedMemories,
+                            updatedEntities: updatedEntities,
+                            updatedRelations: updatedRelations,
+                            deletedRecords: deletedRecords,
+                            newChangeToken: newServerToken
+                        ))
+                    case .failure(let error):
+                        continuation.resume(throwing: error)
+                    }
                 }
-            }
 
-            self.privateDatabase.add(operation)
-        }
+                self.privateDatabase.add(operation)
+            }
+        }, onCancel: {
+            operation.cancel()
+        })
     }
 
     /// Reconciles local items with incoming remote items using Last-Write-Wins (LWW) conflict resolution strategy.

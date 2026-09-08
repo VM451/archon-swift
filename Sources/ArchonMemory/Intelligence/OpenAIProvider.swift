@@ -3,7 +3,7 @@ import ArchonCore
 
 /// Remote OpenAI API provider for generating embeddings and structured LLM outputs.
 public final class OpenAIProvider: EmbeddingProvider, LLMProvider, @unchecked Sendable {
-    public let apiKey: String
+    private let apiKey: String
     public let modelName: String
     public let embeddingModelName: String
     public let vectorDimension: Int

@@ -1,5 +1,16 @@
 import Foundation
 
+enum DocumentMetadataKeys {
+    static let mimeType = "_archon.mimeType"
+    static let pageNumber = "_archon.pageNumber"
+    static let sectionHeading = "_archon.sectionHeading"
+    static let competitiveInsight = "_archon.competitiveInsight"
+    static let competitiveProfile = "_archon.competitiveProfile"
+    static let competitiveSnapshotID = "_archon.competitiveSnapshotID"
+    static let competitiveRetrievedAt = "_archon.competitiveRetrievedAt"
+    static let competitiveSnapshot = "_archon.competitiveSnapshot"
+}
+
 /// Filter criteria for querying the personal document knowledge base.
 public struct DocumentFilter: Sendable, Codable, Equatable {
     public let userId: String?
@@ -45,7 +56,15 @@ public struct RetrievalResult: Sendable, Identifiable, Equatable {
 
 /// Dedicated retrieval-optimized Knowledge Base Index for personal and enterprise documents.
 public actor KnowledgeBaseIndex {
-    private var storedChunks: [String: (chunk: DocumentChunk, vector: [Float], tags: [String], userId: String?)] = [:]
+    private struct StoredChunk: Sendable {
+        let chunk: DocumentChunk
+        let vector: [Float]
+        let tags: [String]
+        let userId: String?
+        let mimeType: String?
+    }
+
+    private var storedChunks: [String: StoredChunk] = [:]
     private let chunker: any DocumentChunker
     private let embeddingProvider: any EmbeddingProvider
 
@@ -66,9 +85,46 @@ public actor KnowledgeBaseIndex {
         let chunks = chunker.chunk(document: document)
         for chunk in chunks {
             let vector = try await embeddingProvider.embed(text: "\(chunk.documentTitle)\n\(chunk.text)")
-            storedChunks[chunk.id] = (chunk: chunk, vector: vector, tags: tags, userId: userId)
+            storedChunks[chunk.id] = StoredChunk(
+                chunk: chunk,
+                vector: vector,
+                tags: tags,
+                userId: userId,
+                mimeType: document.mimeType
+            )
         }
         return chunks
+    }
+
+    /// Rebuilds the derived index from durable document records after restart.
+    public func indexPersisted(documents: [DocumentItem]) {
+        for document in documents where !document.isDeleted {
+            let chunk = DocumentChunk(
+                id: document.id.uuidString,
+                documentTitle: document.title,
+                sourceURL: document.url,
+                text: document.content,
+                chunkIndex: document.chunkIndex,
+                totalChunks: document.totalChunks,
+                pageNumber: document.metadata[DocumentMetadataKeys.pageNumber].flatMap(Int.init),
+                sectionHeading: document.metadata[DocumentMetadataKeys.sectionHeading],
+                characterOffsetStart: 0,
+                characterOffsetEnd: document.content.count
+            )
+            storedChunks[chunk.id] = StoredChunk(
+                chunk: chunk,
+                vector: document.vector,
+                tags: document.tags,
+                userId: document.userId,
+                mimeType: document.metadata[DocumentMetadataKeys.mimeType]
+            )
+        }
+    }
+
+    /// Replaces the derived index with the current durable document snapshot.
+    public func rebuildPersisted(documents: [DocumentItem]) {
+        storedChunks.removeAll(keepingCapacity: true)
+        indexPersisted(documents: documents)
     }
 
     /// Queries the knowledge base index with hybrid semantic similarity and keyword rank fusion.
@@ -77,6 +133,13 @@ public actor KnowledgeBaseIndex {
         limit: Int = 5,
         filter: DocumentFilter? = nil
     ) async throws -> [RetrievalResult] {
+        guard (0...500).contains(limit) else {
+            throw ArchonMemoryError.invalidSearchRequest("knowledge-base limit must be between 0 and 500")
+        }
+        guard query.utf8.count <= DocumentInputLimits.maxBytes else {
+            throw ArchonMemoryError.invalidSearchRequest("knowledge-base query is too large")
+        }
+        guard limit > 0 else { return [] }
         guard !storedChunks.isEmpty else { return [] }
 
         let queryVector = try await embeddingProvider.embed(text: query)
@@ -91,6 +154,13 @@ public actor KnowledgeBaseIndex {
                 if !filter.tags.isEmpty {
                     let matchingTags = Set(filter.tags).intersection(Set(entry.tags))
                     if matchingTags.isEmpty { continue }
+                }
+                if let mimeType = filter.mimeType, entry.mimeType != mimeType {
+                    continue
+                }
+                if let prefix = filter.sourceURLPrefix,
+                   !(entry.chunk.sourceURL?.hasPrefix(prefix) ?? false) {
+                    continue
                 }
             }
 
@@ -111,7 +181,10 @@ public actor KnowledgeBaseIndex {
             scored.append((chunk: entry.chunk, score: finalScore))
         }
 
-        let sorted = scored.sorted { $0.score > $1.score }.prefix(limit)
+        let sorted = scored.sorted {
+            if $0.score != $1.score { return $0.score > $1.score }
+            return $0.chunk.id < $1.chunk.id
+        }.prefix(limit)
         return sorted.enumerated().map { index, match in
             RetrievalResult(chunk: match.chunk, score: match.score, citationIndex: index + 1)
         }

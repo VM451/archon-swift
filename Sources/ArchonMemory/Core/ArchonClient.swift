@@ -8,20 +8,20 @@ import OSLog
 public actor ArchonClientIntentRegistry {
     public static let shared = ArchonClientIntentRegistry()
 
-    private var client: ArchonClient?
+    private var clients: [String: ArchonClient] = [:]
 
     public init() {}
 
-    public func register(_ client: ArchonClient) {
-        self.client = client
+    public func register(_ client: ArchonClient, for workspaceID: String = "default") {
+        clients[workspaceID] = client
     }
 
-    public func unregister() {
-        client = nil
+    public func unregister(for workspaceID: String = "default") {
+        clients[workspaceID] = nil
     }
 
-    public func current() -> ArchonClient? {
-        client
+    public func current(for workspaceID: String = "default") -> ArchonClient? {
+        clients[workspaceID]
     }
 }
 
@@ -43,6 +43,9 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
     private let logger = Logger(subsystem: "com.archon.memory.swift", category: "ArchonClient")
     private var scheduledSyncTask: Task<Void, Never>?
     private var syncInProgress = false
+    private var competitiveInsights: [UUID: CompetitiveInsight] = [:]
+    private var providerProfiles: [String: ProviderProfile] = [:]
+    private var competitiveSnapshots: [UUID: CompetitiveResearchSnapshot] = [:]
 
     public init(config: ArchonConfig = ArchonConfig()) async throws {
         self.config = config
@@ -74,6 +77,12 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
         self.knowledgeBaseIndex = kbIndex
         self.ragRetriever = RAGRetriever(index: kbIndex)
 
+        let persistedDocuments = try await vectorStore.fetchAllDocuments(userId: nil)
+        await kbIndex.indexPersisted(documents: persistedDocuments)
+        self.competitiveInsights = Self.decodeCompetitiveInsights(from: persistedDocuments)
+        self.providerProfiles = Self.decodeProviderProfiles(from: persistedDocuments)
+        self.competitiveSnapshots = Self.decodeCompetitiveSnapshots(from: persistedDocuments)
+
         if config.enableAutoSync {
             guard let containerId = config.cloudKitContainerId,
                   !containerId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -88,7 +97,43 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
         
         self.spotlightIndexer = CoreSpotlightIndexer.shared
         
-        await ArchonClientIntentRegistry.shared.register(self)
+        await ArchonClientIntentRegistry.shared.register(self, for: config.workspaceID)
+    }
+
+    private static func decodeCompetitiveInsights(from documents: [DocumentItem]) -> [UUID: CompetitiveInsight] {
+        let decoder = JSONDecoder()
+        return documents.reduce(into: [UUID: CompetitiveInsight]()) { result, document in
+            guard let encoded = document.metadata[DocumentMetadataKeys.competitiveInsight],
+                  let data = Data(base64Encoded: encoded),
+                  let insight = try? decoder.decode(CompetitiveInsight.self, from: data) else {
+                return
+            }
+            result[insight.id] = insight
+        }
+    }
+
+    private static func decodeProviderProfiles(from documents: [DocumentItem]) -> [String: ProviderProfile] {
+        let decoder = JSONDecoder()
+        return documents.reduce(into: [String: ProviderProfile]()) { result, document in
+            guard let encoded = document.metadata[DocumentMetadataKeys.competitiveProfile],
+                  let data = Data(base64Encoded: encoded),
+                  let profile = try? decoder.decode(ProviderProfile.self, from: data) else {
+                return
+            }
+            result[profile.providerID] = profile
+        }
+    }
+
+    private static func decodeCompetitiveSnapshots(from documents: [DocumentItem]) -> [UUID: CompetitiveResearchSnapshot] {
+        let decoder = JSONDecoder()
+        return documents.reduce(into: [UUID: CompetitiveResearchSnapshot]()) { result, document in
+            guard let encoded = document.metadata[DocumentMetadataKeys.competitiveSnapshot],
+                  let data = Data(base64Encoded: encoded),
+                  let snapshot = try? decoder.decode(CompetitiveResearchSnapshot.self, from: data) else {
+                return
+            }
+            result[snapshot.id] = snapshot
+        }
     }
 
     private static func graphDatabasePath(for databasePath: String?) -> String? {
@@ -132,10 +177,7 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
 
         let affected = changeset.affectedItems
         if config.enableSpotlightIndexing, !affected.isEmpty {
-            let indexer = spotlightIndexer
-            Task {
-                try? await indexer.index(memories: affected)
-            }
+            try await spotlightIndexer.index(memories: affected)
         }
 
         if config.enableAutoSync, !affected.isEmpty {
@@ -174,10 +216,7 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
 
         let items = [item]
         if config.enableSpotlightIndexing {
-            let indexer = spotlightIndexer
-            Task {
-                try? await indexer.index(memories: items)
-            }
+            try await spotlightIndexer.index(memories: items)
         }
 
         if config.enableAutoSync {
@@ -222,10 +261,7 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
         
         let batchItems = items
         if config.enableSpotlightIndexing, !batchItems.isEmpty {
-            let indexer = spotlightIndexer
-            Task {
-                try? await indexer.index(memories: batchItems)
-            }
+            try await spotlightIndexer.index(memories: batchItems)
         }
 
         if config.enableAutoSync, !batchItems.isEmpty {
@@ -243,6 +279,7 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
         runId: String? = nil,
         limit: Int = 5
     ) async throws -> [SearchResult] {
+        try Self.validateLimit(limit, maximum: config.retrievalPolicy.maximumResults)
         let vector = try await config.embeddingProvider.embed(text: query)
         let filter = MemoryFilter(
             userId: userId,
@@ -250,7 +287,7 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
             runId: runId,
             includeDeleted: config.retrievalPolicy.includeDeleted
         )
-        let boundedLimit = min(max(limit, 0), config.retrievalPolicy.maximumResults)
+        let boundedLimit = min(limit, config.retrievalPolicy.maximumResults)
         return try await vectorStore.search(query: query, vector: vector, limit: boundedLimit, filters: filter)
     }
 
@@ -267,6 +304,10 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
         limit: Int? = nil,
         offset: Int? = nil
     ) async throws -> [MemoryItem] {
+        if let limit { try Self.validateLimit(limit, maximum: config.retrievalPolicy.maximumResults) }
+        if let offset, offset < 0 {
+            throw ArchonMemoryError.invalidSearchRequest("offset must be non-negative")
+        }
         let filter = MemoryFilter(
             userId: userId,
             agentId: agentId,
@@ -274,7 +315,7 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
             includeDeleted: config.retrievalPolicy.includeDeleted
         )
         let requestedLimit = limit ?? config.retrievalPolicy.maximumResults
-        let boundedLimit = min(max(requestedLimit, 0), config.retrievalPolicy.maximumResults)
+        let boundedLimit = min(requestedLimit, config.retrievalPolicy.maximumResults)
         return try await vectorStore.fetchAll(filters: filter, limit: boundedLimit, offset: offset)
     }
 
@@ -305,10 +346,7 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
 
         let updatedItems = [existing]
         if config.enableSpotlightIndexing {
-            let indexer = spotlightIndexer
-            Task {
-                try? await indexer.index(memories: updatedItems)
-            }
+            try await spotlightIndexer.index(memories: updatedItems)
         }
 
         if config.enableAutoSync {
@@ -330,12 +368,8 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
             userId: existing.userId
         ))
 
-        let deleteId = id
         if config.enableSpotlightIndexing {
-            let indexer = spotlightIndexer
-            Task {
-                try? await indexer.deindex(ids: [deleteId])
-            }
+            try await spotlightIndexer.deindex(ids: [id])
         }
         if config.enableAutoSync {
             scheduleSync()
@@ -386,6 +420,10 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
         }
         try await vectorStore.reset()
         try await graphStore.deleteAll(userId: nil, agentId: nil, runId: nil)
+        await knowledgeBaseIndex.reset()
+        competitiveInsights.removeAll()
+        providerProfiles.removeAll()
+        competitiveSnapshots.removeAll()
     }
 
     /// Retrieve audit history logs.
@@ -414,11 +452,22 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
         let history = try await vectorStore.fetchHistory(memoryId: nil, userId: userId)
         let entities = try await graphStore.fetchEntities(userId: userId)
         let relations = try await graphStore.fetchTriples(userId: userId)
+        let documents = try await vectorStore.fetchAllDocuments(userId: userId)
+        let feedback = try await vectorStore.fetchFeedback(insightID: nil, userId: userId, limit: nil)
+        let competitiveResearchSnapshots = self.competitiveSnapshots.values
+            .filter { $0.userId == userId || userId == nil }
+            .sorted { lhs, rhs in
+                if lhs.retrievedAt != rhs.retrievedAt { return lhs.retrievedAt > rhs.retrievedAt }
+                return lhs.id.uuidString < rhs.id.uuidString
+            }
         return try JSONEncoder().encode(ArchonMemoryExport(
             memories: memories,
             history: history,
             entities: entities,
-            relations: relations
+            relations: relations,
+            documents: documents,
+            feedback: feedback,
+            competitiveResearchSnapshots: competitiveResearchSnapshots
         ))
     }
 
@@ -458,6 +507,8 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
             documents.append(doc)
         }
 
+        await knowledgeBaseIndex.indexPersisted(documents: documents)
+
         return documents
     }
 
@@ -467,6 +518,7 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
         userId: String? = nil,
         limit: Int = 5
     ) async throws -> [DocumentItem] {
+        try Self.validateLimit(limit)
         let vector = try await config.embeddingProvider.embed(text: query)
         return try await vectorStore.searchDocuments(query: query, vector: vector, limit: limit, userId: userId)
     }
@@ -490,22 +542,34 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
             allChunks.append(contentsOf: chunks)
 
             // Also mirror to persistent vectorStore for backwards compatibility
-            for (idx, chunk) in chunks.enumerated() {
+            for chunk in chunks {
                 let vector = try await config.embeddingProvider.embed(text: "\(loaded.title)\n\(chunk.text)")
+                var documentMetadata = loaded.metadata
+                for (key, value) in metadata { documentMetadata[key] = value }
+                documentMetadata[DocumentMetadataKeys.mimeType] = loaded.mimeType
+                if let pageNumber = chunk.pageNumber {
+                    documentMetadata[DocumentMetadataKeys.pageNumber] = String(pageNumber)
+                }
+                if let sectionHeading = chunk.sectionHeading {
+                    documentMetadata[DocumentMetadataKeys.sectionHeading] = sectionHeading
+                }
                 let doc = DocumentItem(
+                    id: UUID(uuidString: chunk.id) ?? UUID(),
                     title: loaded.title,
-                    url: fileURL.absoluteString,
+                    url: loaded.sourceURL ?? fileURL.absoluteString,
                     content: chunk.text,
-                    chunkIndex: idx,
+                    chunkIndex: chunk.chunkIndex,
                     totalChunks: chunks.count,
                     vector: vector,
                     tags: tags,
                     userId: userId,
-                    metadata: metadata
+                    metadata: documentMetadata
                 )
                 try await vectorStore.saveDocument(doc: doc)
             }
         }
+
+        await knowledgeBaseIndex.rebuildPersisted(documents: try await vectorStore.fetchAllDocuments(userId: nil))
 
         return allChunks
     }
@@ -530,7 +594,35 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
         for loaded in loadedDocs {
             let chunks = try await knowledgeBaseIndex.index(document: loaded, tags: tags, userId: userId)
             allChunks.append(contentsOf: chunks)
+
+            for chunk in chunks {
+                let vector = try await config.embeddingProvider.embed(text: "\(loaded.title)\n\(chunk.text)")
+                var documentMetadata = loaded.metadata
+                for (key, value) in metadata { documentMetadata[key] = value }
+                documentMetadata[DocumentMetadataKeys.mimeType] = loaded.mimeType
+                if let pageNumber = chunk.pageNumber {
+                    documentMetadata[DocumentMetadataKeys.pageNumber] = String(pageNumber)
+                }
+                if let sectionHeading = chunk.sectionHeading {
+                    documentMetadata[DocumentMetadataKeys.sectionHeading] = sectionHeading
+                }
+                let doc = DocumentItem(
+                    id: UUID(uuidString: chunk.id) ?? UUID(),
+                    title: loaded.title,
+                    url: loaded.sourceURL,
+                    content: chunk.text,
+                    chunkIndex: chunk.chunkIndex,
+                    totalChunks: chunks.count,
+                    vector: vector,
+                    tags: tags,
+                    userId: userId,
+                    metadata: documentMetadata
+                )
+                try await vectorStore.saveDocument(doc: doc)
+            }
         }
+
+        await knowledgeBaseIndex.indexPersisted(documents: try await vectorStore.fetchAllDocuments(userId: userId))
 
         return allChunks
     }
@@ -541,6 +633,7 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
         limit: Int = 5,
         filter: DocumentFilter? = nil
     ) async throws -> RAGContext {
+        try Self.validateLimit(limit)
         return try await ragRetriever.retrieveContext(query: query, limit: limit, filter: filter)
     }
 
@@ -550,7 +643,196 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
         limit: Int = 5,
         filter: DocumentFilter? = nil
     ) async throws -> [RetrievalResult] {
+        try Self.validateLimit(limit)
         return try await knowledgeBaseIndex.retrieve(query: query, limit: limit, filter: filter)
+    }
+
+    // MARK: - Competitive Research Memory
+
+    /// Stores a source-linked research snapshot as durable documents and keeps
+    /// typed insight/profile records available for structured recall.
+    @discardableResult
+    public func ingestCompetitiveResearch(
+        _ snapshot: CompetitiveResearchSnapshot
+    ) async throws -> CompetitiveResearchIngestionReport {
+        try snapshot.validate()
+        let encoder = JSONEncoder()
+        var persistedDocuments: [DocumentItem] = []
+        let existingDocuments = try await vectorStore.fetchAllDocuments(userId: snapshot.userId)
+        let existingRetrievalDates = existingDocuments.reduce(into: [UUID: TimeInterval]()) { result, document in
+            guard let value = document.metadata[DocumentMetadataKeys.competitiveRetrievedAt],
+                  let timestamp = TimeInterval(value) else { return }
+            result[document.id] = timestamp
+        }
+        let incomingTimestamp = snapshot.retrievedAt.timeIntervalSince1970
+        let snapshotDocumentID = CompetitiveResearchIdentity.stableUUID("snapshot:\(snapshot.id.uuidString)")
+
+        if existingRetrievalDates[snapshotDocumentID].map({ $0 <= incomingTimestamp }) ?? true {
+            let snapshotData = try encoder.encode(snapshot)
+            let snapshotDocument = DocumentItem(
+                id: snapshotDocumentID,
+                title: "\(snapshot.providerName) — research snapshot",
+                url: snapshot.sources.first?.url,
+                content: snapshot.searchableText,
+                vector: try await config.embeddingProvider.embed(text: snapshot.searchableText),
+                tags: ["competitive-research", "competitive-snapshot", "provider:\(snapshot.providerID)"],
+                userId: snapshot.userId,
+                metadata: [
+                    DocumentMetadataKeys.competitiveSnapshot: snapshotData.base64EncodedString(),
+                    DocumentMetadataKeys.competitiveSnapshotID: snapshot.id.uuidString,
+                    DocumentMetadataKeys.competitiveRetrievedAt: String(incomingTimestamp),
+                    DocumentMetadataKeys.mimeType: "application/json+competitive-research"
+                ]
+            )
+            try await vectorStore.saveDocument(doc: snapshotDocument)
+            competitiveSnapshots[snapshot.id] = snapshot
+            persistedDocuments.append(snapshotDocument)
+        }
+
+        for insight in snapshot.insights {
+            if let storedTimestamp = existingRetrievalDates[insight.id], storedTimestamp > incomingTimestamp {
+                continue
+            }
+            let data = try encoder.encode(insight)
+            let encodedInsight = data.base64EncodedString()
+            let sourceURL = insight.sourceURLs.first ?? snapshot.sources.first?.url
+            var metadata: [String: String] = [
+                DocumentMetadataKeys.competitiveInsight: encodedInsight,
+                DocumentMetadataKeys.competitiveSnapshotID: snapshot.id.uuidString,
+                DocumentMetadataKeys.competitiveRetrievedAt: String(incomingTimestamp),
+                DocumentMetadataKeys.mimeType: "text/competitive-research"
+            ]
+            if !insight.sourceURLs.isEmpty {
+                metadata["_archon.sourceURLs"] = insight.sourceURLs.joined(separator: "\n")
+            }
+
+            let vector = try await config.embeddingProvider.embed(text: insight.searchableText)
+            let document = DocumentItem(
+                id: insight.id,
+                title: "\(snapshot.providerName) — \(insight.kind.rawValue)",
+                url: sourceURL,
+                content: insight.searchableText,
+                chunkIndex: 0,
+                totalChunks: 1,
+                vector: vector,
+                tags: Array(Set(["competitive-research", "provider:\(snapshot.providerID)", "kind:\(insight.kind.rawValue)"] + insight.tags)).sorted(),
+                userId: snapshot.userId,
+                metadata: metadata
+            )
+            try await vectorStore.saveDocument(doc: document)
+            competitiveInsights[insight.id] = insight
+            persistedDocuments.append(document)
+        }
+
+        if let profile = snapshot.profile {
+            let profileID = CompetitiveResearchIdentity.stableUUID("\(profile.providerID):profile")
+            let isStale = existingRetrievalDates[profileID].map { $0 > incomingTimestamp } ?? false
+            if !isStale {
+                let data = try encoder.encode(profile)
+                let document = DocumentItem(
+                    id: profileID,
+                    title: "\(profile.providerName) — profile",
+                    url: snapshot.sources.first?.url,
+                    content: profile.searchableText,
+                    chunkIndex: 0,
+                    totalChunks: 1,
+                    vector: try await config.embeddingProvider.embed(text: profile.searchableText),
+                    tags: ["competitive-research", "provider:\(profile.providerID)", "provider-profile"],
+                    userId: snapshot.userId,
+                    metadata: [
+                        DocumentMetadataKeys.competitiveProfile: data.base64EncodedString(),
+                        DocumentMetadataKeys.competitiveSnapshotID: snapshot.id.uuidString,
+                        DocumentMetadataKeys.competitiveRetrievedAt: String(incomingTimestamp),
+                        DocumentMetadataKeys.mimeType: "text/competitive-research-profile"
+                    ]
+                )
+                try await vectorStore.saveDocument(doc: document)
+                providerProfiles[profile.providerID] = profile
+                persistedDocuments.append(document)
+            }
+        }
+
+        await knowledgeBaseIndex.indexPersisted(documents: persistedDocuments)
+        return CompetitiveResearchIngestionReport(
+            snapshotID: snapshot.id,
+            providerID: snapshot.providerID,
+            insightCount: persistedDocuments.filter { $0.metadata[DocumentMetadataKeys.competitiveInsight] != nil }.count,
+            profileStored: persistedDocuments.contains { $0.metadata[DocumentMetadataKeys.competitiveProfile] != nil }
+        )
+    }
+
+    /// Imports the deterministic first-pass competitor landscape bundled with
+    /// ArchonMemory. No network request is performed by this method.
+    @discardableResult
+    public func ingestInitialCompetitiveResearch() async throws -> [CompetitiveResearchIngestionReport] {
+        var reports: [CompetitiveResearchIngestionReport] = []
+        for snapshot in CompetitiveResearchSeed.initialSnapshots() {
+            reports.append(try await ingestCompetitiveResearch(snapshot))
+        }
+        return reports
+    }
+
+    /// Searches typed competitive insights using hybrid retrieval and filters.
+    public func searchCompetitiveInsights(
+        query: String,
+        limit: Int = 5,
+        filter: CompetitiveInsightFilter = CompetitiveInsightFilter()
+    ) async throws -> [CompetitiveInsightMatch] {
+        try Self.validateLimit(limit)
+        guard limit > 0 else { return [] }
+        let overfetchLimit = min(500, max(limit, 1) * 4)
+        let results = try await knowledgeBaseIndex.retrieve(
+            query: query,
+            limit: overfetchLimit,
+            filter: DocumentFilter(userId: filter.userId, tags: ["competitive-research"])
+        )
+
+        let matches = results.compactMap { result -> CompetitiveInsightMatch? in
+            guard let insightID = UUID(uuidString: result.chunk.id),
+                  let insight = competitiveInsights[insightID] else {
+                return nil
+            }
+            if let providerID = filter.providerID, insight.providerID != providerID { return nil }
+            if !filter.kinds.isEmpty, !filter.kinds.contains(insight.kind) { return nil }
+            if let minimumConfidence = filter.minimumConfidence, insight.confidence < minimumConfidence { return nil }
+            if let asOf = filter.asOf,
+               insight.validFrom > asOf || (insight.validTo != nil && insight.validTo! <= asOf) {
+                return nil
+            }
+            return CompetitiveInsightMatch(insight: insight, score: result.score)
+        }
+        return Array(matches.prefix(limit))
+    }
+
+    public func providerProfile(for providerID: String) -> ProviderProfile? {
+        providerProfiles[providerID]
+    }
+
+    /// Returns durable source metadata and normalized claims in retrieval-date order.
+    public func competitiveResearchSnapshots(userId: String? = nil) -> [CompetitiveResearchSnapshot] {
+        competitiveSnapshots.values
+            .filter { $0.userId == userId || userId == nil }
+            .sorted { lhs, rhs in
+                if lhs.retrievedAt != rhs.retrievedAt { return lhs.retrievedAt > rhs.retrievedAt }
+                return lhs.id.uuidString < rhs.id.uuidString
+            }
+    }
+
+    /// Records local usefulness feedback without uploading memory content.
+    public func recordFeedback(_ event: MemoryFeedbackEvent) async throws {
+        guard competitiveInsights[event.insightID] != nil else {
+            throw ArchonMemoryError.invalidCompetitiveResearch("Feedback references an unknown competitive insight.")
+        }
+        try await vectorStore.saveFeedback(event: event)
+    }
+
+    public func feedback(
+        insightID: UUID? = nil,
+        userId: String? = nil,
+        limit: Int? = 50
+    ) async throws -> [MemoryFeedbackEvent] {
+        if let limit { try Self.validateLimit(limit) }
+        return try await vectorStore.fetchFeedback(insightID: insightID, userId: userId, limit: limit)
     }
 
     // MARK: - Letta/MemGPT Hierarchical Recall Memory
@@ -562,6 +844,7 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
         runId: String? = nil,
         limit: Int? = 50
     ) async throws -> [RecallMessage] {
+        if let limit { try Self.validateLimit(limit) }
         return try await vectorStore.fetchRecallMessages(userId: userId, agentId: agentId, runId: runId, limit: limit)
     }
 
@@ -741,6 +1024,15 @@ public actor ArchonClient: CoreMemoryManager, MemoryAgentTool {
         }
         if !deletedEntityIDs.isEmpty || !deletedRelationIDs.isEmpty {
             try await graphStore.markGraphSynced(entityIds: deletedEntityIDs, relationIds: deletedRelationIDs)
+        }
+    }
+
+    private static func validateLimit(_ limit: Int, maximum: Int = 500) throws {
+        guard limit >= 0 else {
+            throw ArchonMemoryError.invalidSearchRequest("limit must be non-negative")
+        }
+        guard limit <= maximum else {
+            throw ArchonMemoryError.invalidSearchRequest("limit must be at most \(maximum)")
         }
     }
 

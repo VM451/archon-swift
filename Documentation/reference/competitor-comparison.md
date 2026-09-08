@@ -4,7 +4,7 @@ This document is the readable comparison view for Archon's living competitor
 registry. It explains what each reference product is strong at, scores the
 relevant aspects, and translates the result into a local-first Archon decision.
 
-**Review snapshot:** 2026-09-05<br>
+**Review snapshot:** 2026-09-08<br>
 **Canonical evidence:** this comparison and its linked official sources<br>
 **Canonical quality gates:** [`validate a release`](../how-to/validate-a-release.md)
 
@@ -144,6 +144,53 @@ Source records: the memory comparison in this document.
 | Working-memory blocks | `CoreMemoryBlock` and `CoreMemoryManager` | Scope isolation, limits, consent, and reopen behavior |
 | Hybrid retrieval | FTS5, dense vectors, filters, recency, and importance | Recall@10 ≥ 0.99, p95, memory ceiling, update/delete |
 | Profile synthesis and provenance | Document ingestion plus `ArchonContext` contributors | Export, audit, source provenance, and deletion correctness |
+
+### Implemented ArchonMemory research archive (2026-09-08)
+
+| Reused | Adapted | Built from the ground up |
+| --- | --- | --- |
+| GRDB/SQLite document rows, `DocumentItem`, `VectorStore`, `KnowledgeBaseIndex`, `RAGRetriever`, configured embeddings, temporal memory fields, `CoreMemoryBlock`, recall, summaries, export, and the `VectorIndex` seam | Durable rehydration, MIME/source/tag/scope filters, hybrid document ranking, workspace-scoped App Intents, bounded limits, private credential boundary, cancellable CloudKit, and migration-safe export | `CompetitiveResearchSnapshot`, `CompetitiveInsight`, `ProviderProfile`, `CompetitiveInsightFilter`, `MemoryFeedbackEvent`, deterministic 14-provider seed, full snapshot archive, stale-refresh protection, and local feedback ledger |
+
+The SDK does not fetch competitor sites. A consuming app or CLI owns web
+fetching, credentials, source normalization, and manual refresh, then imports a
+validated snapshot. Competitor repositories remain research references or
+optional adapters; no AGPL/server implementation is copied into the SwiftPM
+core.
+
+| Planning factor | Current | After implementation target |
+| --- | ---: | ---: |
+| User pull | 8/10 | 9/10 |
+| Differentiation | 6/10 | 8/10 |
+| Local feasibility | 8/10 | 8/10 |
+| Quality and safety | 5/10 | 9/10 |
+| Maintainability | 7/10 | 8/10 |
+| Strategic fit | 9/10 | 9/10 |
+| **Weighted total** | **72/100** | **85/100** |
+
+This planning score is separate from the older category engineering score
+above. Package tests cannot prove signed-app, live UI, device-scale,
+real-model, or independent user-pull evidence.
+
+### 14-provider seed landscape
+
+These are source-linked directional hypotheses, not verified churn statistics.
+
+| Provider | Source / license treatment | Switch hypothesis | Stay reason |
+| --- | --- | --- | --- |
+| [Mem0](https://github.com/mem0ai/mem0) | Apache-2.0 repository | Automatic extraction and updates reduce pipeline work | Hybrid retrieval, deduplication, and simple memory operations |
+| [Letta](https://docs.letta.com/) | Open-source project; verify current repository license before reuse | Editable working memory is needed | Core blocks, archival memory, and local/git-backed workflows |
+| [Graphiti / Zep](https://github.com/getzep/graphiti) | Graphiti open source; Zep managed engine is separate | Temporal relationships are needed beyond flat vectors | Provenance, incremental graph updates, and history-aware retrieval |
+| [Supermemory](https://github.com/supermemoryai/supermemory) | MIT repository with hosted product surface | One system is wanted for memory, RAG, profiles, and connectors | Broad integrations and unified recall |
+| [CrewAI Memory](https://github.com/crewAIInc/crewAI/blob/main/docs/v1.15.12/en/concepts/memory.mdx) | Open-source framework; verify release license before reuse | A workflow-integrated memory API is needed | Scoped semantic, recency, and importance ranking |
+| [Cognee](https://github.com/topoteretes/cognee) | Apache-2.0 | Ingestion, graph, vectors, and cited retrieval are wanted together | Graph-aware retrieval and provenance |
+| [Khoj](https://github.com/khoj-ai/khoj) | AGPL-3.0; reference only for the SDK | A ready-made personal second brain is needed | Documents, local/cloud choices, and multiple clients |
+| [LangMem](https://langchain-ai.github.io/langmem/) | Open-source utilities; verify current license before reuse | A lightweight memory manager is preferred | Semantic, episodic, and procedural distinctions |
+| [Memobase](https://github.com/memodb-io/memobase) | Apache-2.0 | Structured user profiles are the primary need | Controllable profiles and time-aware events |
+| [MemU](https://github.com/NevaMind-AI/memU) | Apache-2.0 | Proactive memory must reduce context cost | Hierarchical organization and cross-agent memory |
+| [Hindsight](https://aclanthology.org/2026.acl-demo.27.pdf) | Research reference; verify current repository license before reuse | Long-horizon retain/recall/reflect is needed | Reflection can improve memory over time |
+| [ProximaKit](https://github.com/vivekptnk/ProximaKit) | MIT in the resolved adapter review; recheck before adoption | On-device semantic search is needed without a server | Durable local HNSW/vector storage |
+| [RecallKit](https://github.com/gregyoung14/RecallKit) | MIT | Fast sparse local search is needed | Actor-based indexing, compaction, and data protection |
+| [Wax](https://github.com/christopherkarani/Wax) | Public project; verify current license before reuse | The lowest-friction shared local memory is wanted | No server/API and a simple local file model |
 
 ## 2. Agent orchestration
 
