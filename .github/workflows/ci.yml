@@ -29,6 +29,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Select a complete Xcode toolchain
+        id: toolchain
         shell: bash
         run: |
           set -euo pipefail
@@ -65,20 +66,35 @@ jobs:
             exit 1
           fi
 
-          echo "Selected Xcode $selected_version at $selected_developer_dir"
+          xcode_build="$($selected_developer_dir/usr/bin/xcodebuild -version 2>/dev/null | awk '/^Build version /{print $3; exit}' || echo unknown)"
+          [[ -n "$xcode_build" ]] || xcode_build="unknown"
+
+          echo "Selected Xcode $selected_version ($xcode_build) at $selected_developer_dir"
           echo "DEVELOPER_DIR=$selected_developer_dir" >> "$GITHUB_ENV"
+          echo "xcode_build=$xcode_build" >> "$GITHUB_OUTPUT"
           sudo xcode-select --switch "$selected_developer_dir"
           xcodebuild -version
 
-          # The MLX dependency needs the Metal compiler. Beta images have
-          # shipped without the Metal toolchain component installed, so
-          # download it on demand before failing.
-          if ! metal_path="$(xcrun --find metal 2>/dev/null)" || [[ ! -x "$metal_path" ]]; then
-            echo "Metal compiler not found; downloading the MetalToolchain component..."
-            sudo xcodebuild -downloadComponent MetalToolchain || true
-            metal_path="$(xcrun --find metal)"
-            test -x "$metal_path"
+          # MLX compiles generated Metal kernels. xcode-27 images can expose
+          # Xcode's fallback metal executable even when the MetalToolchain
+          # component is not installed; that fallback fails later with an
+          # opaque CompileMetalFile error. Verify the component itself and
+          # install it before SwiftPM starts compiling MLX.
+          component_json="$(xcodebuild -showComponent MetalToolchain -json 2>/dev/null || true)"
+          echo "MetalToolchain component status:"
+          echo "$component_json"
+          if ! printf '%s\n' "$component_json" | grep -q '"status"[[:space:]]*:[[:space:]]*"installed"'; then
+            echo "MetalToolchain is not installed; downloading it now..."
+            sudo xcodebuild -downloadComponent MetalToolchain
+            component_json="$(xcodebuild -showComponent MetalToolchain -json 2>/dev/null || true)"
+            echo "$component_json"
           fi
+          if ! printf '%s\n' "$component_json" | grep -q '"status"[[:space:]]*:[[:space:]]*"installed"'; then
+            echo "::error::MetalToolchain is unavailable after download; MLX Metal kernels cannot be compiled on this runner."
+            exit 1
+          fi
+          metal_path="$(xcrun --find metal)"
+          test -x "$metal_path"
           echo "Metal compiler: $metal_path"
 
           # The package requires Swift 6.4+ (swift-tools-version 6.4). Fail
@@ -109,9 +125,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .build
-          key: ${{ runner.os }}-spm-${{ hashFiles('Package.swift', 'Package.resolved') }}
+          key: ${{ runner.os }}-xcode-${{ steps.toolchain.outputs.xcode_build }}-spm-${{ hashFiles('Package.swift', 'Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-spm-
+            ${{ runner.os }}-xcode-${{ steps.toolchain.outputs.xcode_build }}-spm-
 
       - name: Resolve dependencies
         run: swift package resolve
