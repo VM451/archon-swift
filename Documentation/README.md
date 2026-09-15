@@ -102,4 +102,4 @@ and [release validation guide](how-to/validate-a-release.md) for the evidence
 required before a capability or replacement becomes a default.
 
 The concise product-by-product matrix is in the repository
-[README](../README.md#product-decision-matrix).
+[README](../README.md#products).

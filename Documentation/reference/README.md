@@ -28,5 +28,6 @@ doc comments and DocC catalogs.
 See the [full comparison](competitor-comparison.md) for product mappings,
 competitor evidence, scores, and qualification gates.
 
-For the concise product verdict, first-action, and release-gate table, see the
-repository [product decision matrix](../../README.md#product-decision-matrix).
+For the concise product verdict and first-action table, see the
+repository [products](../../README.md#products) and
+[position summary](../../README.md#where-archon-stands).

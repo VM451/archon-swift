@@ -84,86 +84,61 @@ Arrows show composition and service boundaries, not the complete SwiftPM
 dependency graph. Read [`Documentation/architecture.md`](Documentation/architecture.md)
 for the deeper design notes.
 
-## Product decision matrix
-
-The full decision vocabulary and dependency policy are documented in the
-[decision framework](Documentation/reference/decision-framework.md); this
-matrix is the concise product-by-product summary.
-
-| Product | Verdict | Reuse or audit first / GitHub repositories | Archon-owned work |
-| --- | --- | --- | --- |
-| `ArchonCore` | PARTIAL / ADAPT | Reuse Apple facts; audit [apple/swift-foundation](https://github.com/apple/swift-foundation), [apple/swift-system](https://github.com/apple/swift-system), [apple/swift-log](https://github.com/apple/swift-log), [apple/swift-crypto](https://github.com/apple/swift-crypto) | Capability policy, audit, redaction |
-| `ArchonModels` | PARTIAL / ADAPT | Reuse Apple runtimes; audit [ml-explore/mlx-swift](https://github.com/ml-explore/mlx-swift), [ml-explore/mlx-swift-lm](https://github.com/ml-explore/mlx-swift-lm), [huggingface/swift-huggingface](https://github.com/huggingface/swift-huggingface), [huggingface/swift-transformers](https://github.com/huggingface/swift-transformers) | Catalog, lifecycle, validation |
-| `ArchonAgent` | BUILD | Audit [langchain-ai/langgraph](https://github.com/langchain-ai/langgraph), [crewAIInc/crewAI](https://github.com/crewAIInc/crewAI), [openai/openai-agents-python](https://github.com/openai/openai-agents-python), [Tom-Ryder/AgentRunKit](https://github.com/Tom-Ryder/AgentRunKit), [christopherkarani/Conduit](https://github.com/christopherkarani/Conduit) | Graph recovery, tools, effect receipts |
-| `ArchonContext` | BUILD | Audit [mem0ai/mem0](https://github.com/mem0ai/mem0), [letta-ai/letta](https://github.com/letta-ai/letta), [getzep/zep](https://github.com/getzep/zep), [crewAIInc/crewAI](https://github.com/crewAIInc/crewAI) for context ownership patterns | Ephemeral budgets and provenance |
-| `ArchonMemory` | ADAPT + BUILD | Reuse GRDB, `DocumentItem`, `VectorStore`, `KnowledgeBaseIndex`, and existing temporal memory; adapt durability, filters, workspace routing, and cancellation; build source-linked research contracts and archive records. Audit [mem0ai/mem0](https://github.com/mem0ai/mem0), [supermemoryai/supermemory](https://github.com/supermemoryai/supermemory), [getzep/graphiti](https://github.com/getzep/graphiti), [letta-ai/letta](https://github.com/letta-ai/letta), [christopherkarani/Wax](https://github.com/christopherkarani/Wax), [vivekptnk/ProximaKit](https://github.com/vivekptnk/ProximaKit), [gregyoung14/RecallKit](https://github.com/gregyoung14/RecallKit) | Durable memory plus typed competitive research archive |
-| `ArchonMemoryProxima` | PARTIAL / ADAPT | Audit [vivekptnk/ProximaKit](https://github.com/vivekptnk/ProximaKit), [gregyoung14/RecallKit](https://github.com/gregyoung14/RecallKit), [christopherkarani/Wax](https://github.com/christopherkarani/Wax) and device fit first | Optional persistent dense-index adapter |
-| `ArchonSearch` | PARTIAL / ADAPT | On-device native DuckDuckGo HTML/Lite engine, SwiftSoup ([scinfu/SwiftSoup](https://github.com/scinfu/SwiftSoup)) + Mozilla Readability WebKit bridge, GRDB ([groue/GRDB.swift](https://github.com/groue/GRDB.swift)); optional companion SearXNG ([searxng/searxng](https://github.com/searxng/searxng)) & Crawl4AI ([unclecode/crawl4ai](https://github.com/unclecode/crawl4ai)); audit [tavily-ai/tavily-python](https://github.com/tavily-ai/tavily-python), [exa-labs/exa-py](https://github.com/exa-labs/exa-py), [mendableai/firecrawl](https://github.com/mendableai/firecrawl), [ItzCrazyKns/Perplexica](https://github.com/ItzCrazyKns/Perplexica), [brave/brave-browser](https://github.com/brave/brave-browser) | `ArchonSearchClient` facade, `DuckDuckGoSearchEngine`, `CompositeSearchEngine`, `RetrievalRouter`, `ContextBuilder` (`<reference_data>` injection defense), `CitationGraph` (attribution integrity), `WebSearchTool`/`ReadWebPageTool`/`ResearchTool` (FoundationModels tools), `ArchonChatView` (Liquid Glass HIG) |
-| `ArchonSandbox` | BUILD | Reuse WebKit; audit [e2b-dev/e2b](https://github.com/e2b-dev/e2b), [modal-labs/modal-client](https://github.com/modal-labs/modal-client), [daytonaio/daytona](https://github.com/daytonaio/daytona), [denoland/deno](https://github.com/denoland/deno) for isolation and lifecycle patterns | Policy, bridge validation, quotas |
-| `ArchonConnect` | PARTIAL / ADAPT | Reuse [modelcontextprotocol/swift-sdk](https://github.com/modelcontextprotocol/swift-sdk); audit [modelcontextprotocol/servers](https://github.com/modelcontextprotocol/servers) and conformance | Archon policy, consent, lifecycle |
-| `ArchonComputerUse` | BUILD | Reuse Accessibility/DOM/App Intents; audit [browserbase/stagehand](https://github.com/browserbase/stagehand), [anthropics/anthropic-cookbook](https://github.com/anthropics/anthropic-cookbook), [openai/openai-agents-python](https://github.com/openai/openai-agents-python) for semantic and fallback action patterns | Semantic safety, approvals, postconditions |
-| `ArchonModelsUI` | BUILD | Reuse SwiftUI; audit [apple/swift-book](https://github.com/apple/swift-book), [pointfreeco/swift-navigation](https://github.com/pointfreeco/swift-navigation) and host state | Main-actor model-management surfaces |
-| `ArchonFull` | REUSE | Audit [VM451/archon-swift](https://github.com/VM451/archon-swift) and [swiftlang/swift-package-manager](https://github.com/swiftlang/swift-package-manager) dependency scope first | Re-export facade only |
-| `archon-model` | BUILD | Reuse [apple/swift-argument-parser](https://github.com/apple/swift-argument-parser) and [swiftlang/swift-package-manager](https://github.com/swiftlang/swift-package-manager); audit reproducibility | Offline/JSON model workflows |
-| `archon-example-app` | BUILD | Audit real host paths in [VM451/archon-swift](https://github.com/VM451/archon-swift) and [apple/swift-book](https://github.com/apple/swift-book) | Golden consuming-host example |
-
-`Reuse or audit first` is the first engineering action, not a claim that the
-product is complete. A `BUILD` verdict means Archon owns the missing local
-behavior after the reuse audit; it does not mean Apple APIs are ignored.
-
-The GitHub links in the third column are direct repository references. Multiple
-links are intentionally grouped in one cell so each product's reuse and audit
-surface is visible without adding another wide comparison table. A link is an
-audit target, not an adoption decision or proof that the repository qualifies
-for Archon's local-native core.
-
 ## Products
 
-| Product | Responsibility |
-| --- | --- |
-| `ArchonCore` | Shared capabilities, device facts, policy, logging, and errors |
-| `ArchonModels` | Catalogs, model formats, compatibility, downloads, manifests, and lifecycle |
-| `ArchonAgent` | Stateful graphs, routing, providers, tools, interrupts, checkpoints, evaluation, and SwiftUI chat |
-| `ArchonContext` | Request-scoped context assembly; never persists or executes actions |
-| `ArchonMemory` | Application-owned memory, graph storage, vector search, RAG, source-linked competitive research, local feedback, and optional CloudKit sync |
-| `ArchonMemoryProxima` | Optional ProximaKit dense-index adapter behind `VectorIndex` |
-| `ArchonSearch` | 100% on-device native search (`DuckDuckGoSearchEngine`, `CompositeSearchEngine`), in-process extraction (`NativeReader`, `SwiftSoup`, `ReadabilityWebKitBridge`), SQLite persistence (GRDB), injection-safe grounding (`ContextBuilder`), citation integrity (`CitationGraph`), FoundationModels tools, Liquid Glass chat UI (`ArchonChatView`), and optional Docker companion (SearXNG, Crawl4AI) |
-| `ArchonSandbox` | Capability-restricted WebKit mini-apps, DOM/JS patches, events, and workspace sync |
-| `ArchonConnect` | MCP client, JSON-RPC HTTP transport, schema validation, and permission policy |
-| `ArchonComputerUse` | Semantic snapshots and host-defined actions with risk and postcondition checks |
-| `ArchonModelsUI` | SwiftUI model discovery, installed-library, detail, storage, and download views |
-| `ArchonFull` | Convenience re-export of the base SDK products; excludes optional `ArchonMemoryProxima` |
+One table per product: what it does, the build decision, and the reuse-or-audit
+first action. The full decision vocabulary and dependency policy live in the
+[decision framework](Documentation/reference/decision-framework.md). A link is
+an audit target, not an adoption decision — `BUILD` means Archon owns the
+missing local behavior after the audit; it never means Apple APIs are ignored.
 
-## Competitive comparison
+| Product | What it does | Decision | Reuse or audit first |
+| --- | --- | --- | --- |
+| `ArchonCore` | Capabilities, device facts, policy, logging, errors | PARTIAL / ADAPT | Apple facts; [swift-foundation](https://github.com/apple/swift-foundation), [swift-system](https://github.com/apple/swift-system), [swift-log](https://github.com/apple/swift-log), [swift-crypto](https://github.com/apple/swift-crypto) |
+| `ArchonModels` | Catalogs, formats, compatibility, downloads, manifests, lifecycle | PARTIAL / ADAPT | Apple runtimes; [mlx-swift](https://github.com/ml-explore/mlx-swift), [mlx-swift-lm](https://github.com/ml-explore/mlx-swift-lm), [swift-huggingface](https://github.com/huggingface/swift-huggingface), [swift-transformers](https://github.com/huggingface/swift-transformers) |
+| `ArchonAgent` | Graphs, routing, tools, interrupts, checkpoints, evaluation, chat | BUILD | [langgraph](https://github.com/langchain-ai/langgraph), [crewAI](https://github.com/crewAIInc/crewAI), [openai-agents-python](https://github.com/openai/openai-agents-python), [AgentRunKit](https://github.com/Tom-Ryder/AgentRunKit), [Conduit](https://github.com/christopherkarani/Conduit) |
+| `ArchonContext` | Request-scoped assembly; never persists or executes | BUILD | [mem0](https://github.com/mem0ai/mem0), [letta](https://github.com/letta-ai/letta), [zep](https://github.com/getzep/zep) |
+| `ArchonMemory` | Durable memory, graph/vector search, RAG, source-linked research, CloudKit sync | ADAPT + BUILD | GRDB + existing stores; [mem0](https://github.com/mem0ai/mem0), [supermemory](https://github.com/supermemoryai/supermemory), [graphiti](https://github.com/getzep/graphiti), [letta](https://github.com/letta-ai/letta), [Wax](https://github.com/christopherkarani/Wax), [ProximaKit](https://github.com/vivekptnk/ProximaKit), [RecallKit](https://github.com/gregyoung14/RecallKit) |
+| `ArchonMemoryProxima` | Optional dense-index adapter behind `VectorIndex` | PARTIAL / ADAPT | [ProximaKit](https://github.com/vivekptnk/ProximaKit), [RecallKit](https://github.com/gregyoung14/RecallKit), [Wax](https://github.com/christopherkarani/Wax); device fit first |
+| `ArchonSearch` | On-device search, extraction, grounding, citations, chat UI | PARTIAL / ADAPT | DuckDuckGo engine, [SwiftSoup](https://github.com/scinfu/SwiftSoup) + Readability bridge, [GRDB](https://github.com/groue/GRDB.swift); companions [searxng](https://github.com/searxng/searxng), [crawl4ai](https://github.com/unclecode/crawl4ai); audit [tavily-python](https://github.com/tavily-ai/tavily-python), [exa-py](https://github.com/exa-labs/exa-py), [firecrawl](https://github.com/mendableai/firecrawl), [Perplexica](https://github.com/ItzCrazyKns/Perplexica) |
+| `ArchonSandbox` | Capability-restricted WebKit mini-apps and workspace sync | BUILD | WebKit; [e2b](https://github.com/e2b-dev/e2b), [modal-client](https://github.com/modal-labs/modal-client), [daytona](https://github.com/daytonaio/daytona), [deno](https://github.com/denoland/deno) |
+| `ArchonConnect` | MCP client, JSON-RPC transport, schema validation, permissions | PARTIAL / ADAPT | [swift-sdk](https://github.com/modelcontextprotocol/swift-sdk); audit [servers](https://github.com/modelcontextprotocol/servers) |
+| `ArchonComputerUse` | Semantic snapshots, approvals, host actions, postconditions | BUILD | Accessibility/DOM/App Intents; [stagehand](https://github.com/browserbase/stagehand), [anthropic-cookbook](https://github.com/anthropics/anthropic-cookbook) |
+| `ArchonModelsUI` | Model discovery, library, detail, storage, download views | BUILD | SwiftUI; [swift-book](https://github.com/apple/swift-book), [swift-navigation](https://github.com/pointfreeco/swift-navigation) |
+| `ArchonFull` | Re-export of the base products; excludes `ArchonMemoryProxima` | REUSE | Dependency scope only |
 
-This matrix is intentionally concise. Each competitor column names the
-reference set being compared; it does not imply identical scope or market
-share. The `Native Swift / local in-process core` row is the strict local
-qualification gate. Detailed evidence, user-pull signals, decisions, and
-quality gates live in the [competitor comparison](Documentation/reference/competitor-comparison.md)
-and [release validation guide](Documentation/how-to/validate-a-release.md).
+Developer tools: `archon-model` (offline model workflows via
+[swift-argument-parser](https://github.com/apple/swift-argument-parser)) and
+`archon-example-app` (golden SwiftUI host) are both BUILD, reusing the
+patterns above.
 
-| Capability | Archon | Apple<br>Foundation Models<br>Core ML<br>WebKit<br>CloudKit<br>SwiftUI<br>App Intents | Memory<br>Mem0<br>Supermemory<br>Zep<br>Letta<br>CrewAI Memory | Agents<br>LangGraph<br>CrewAI<br>OpenAI Agents SDK<br>LlamaIndex<br>PydanticAI | Search/research<br>Tavily<br>Exa<br>Firecrawl<br>Brave Search<br>Perplexity<br>ChatGPT Search<br>SerpAPI<br>SearXNG<br>Perplexica | Sandbox/browser<br>E2B<br>Modal<br>Daytona<br>Deno Sandbox<br>Browserbase<br>Stagehand<br>TinyFish<br>OpenAI Computer Use<br>Anthropic Computer Use | Models/runtimes<br>MLX Swift<br>Hugging Face Swift<br>AnyLanguageModel<br>Conduit<br>SwiftAgent<br>AgentRunKit<br>Swarm | Protocols<br>MCP Swift SDK<br>A2A<br>AG-UI |
-| --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| Native Swift / local in-process core | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ | ⚠️ |
-| On-device model runtime | ✅ | ✅ | ❌ | ⚠️ | ❌ | ❌ | ✅ | ❌ |
-| Model catalog and lifecycle | ✅ | ⚠️ | ❌ | ❌ | ❌ | ❌ | ⚠️ | ❌ |
-| Agent graphs | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ | ⚠️ | ❌ |
-| Durable checkpoints and replay | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ | ⚠️ | ❌ |
-| Tools and handoffs | ✅ | ✅ | ⚠️ | ✅ | ⚠️ | ✅ | ⚠️ | ✅ |
-| Durable memory and RAG | ✅ | ❌ | ✅ | ⚠️ | ⚠️ | ❌ | ⚠️ | ❌ |
-| Web research and citations | ✅ | ⚠️ | ❌ | ⚠️ | ✅ | ⚠️ | ❌ | ❌ |
-| Offline local-corpus search | ✅ | ⚠️ | ❌ | ❌ | ⚠️ | ❌ | ❌ | ❌ |
-| Secure execution boundary | ⚠️ | ⚠️ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
-| Semantic host actions | ⚠️ | ✅ | ❌ | ⚠️ | ❌ | ✅ | ⚠️ | ❌ |
-| MCP tools, resources, and prompts | ✅ | ❌ | ❌ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ✅ |
-| CloudKit synchronization | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| SwiftUI and App Intents surfaces | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ⚠️ | ❌ |
-| Network and isolation disclosure | ✅ | ⚠️ | ❌ | ❌ | ⚠️ | ✅ | ⚠️ | ⚠️ |
+## Where Archon stands
 
-Legend: ✅ strong or qualifying support · ⚠️ mixed, partial, hosted, optional,
-adapter-owned, or host-dependent · ❌ no meaningful equivalent in the named
-reference set. For provider-by-provider evidence, use the linked registry.
+Archon's gate is strict: native Swift, local, in-process core. Cloud products
+can lead a capability and still fail that gate, in which case Archon adapts
+the pattern or builds the local boundary. Competitor columns name reference
+sets, not identical scope or market share.
+
+| Capability | Archon | Signal |
+| --- | :---: | --- |
+| Native Swift, local in-process core | ✅ | The qualifying gate |
+| On-device model runtime | ✅ | Apple + MLX adapters |
+| Model catalog and lifecycle | ✅ | Archon-owned lifecycle |
+| Agent graphs, checkpoints, replay | ✅ | Recovery + effect receipts |
+| Tools and handoffs | ✅ | Typed tools, MCP interop |
+| Durable memory and RAG | ✅ | Local store, optional CloudKit |
+| Web research and citations | ✅ | Grounded, cited, inspectable |
+| Offline local-corpus search | ✅ | Local workspace search |
+| Secure execution boundary | ⚠️ | Restricted WebKit, not a VM |
+| Semantic host actions | ⚠️ | Host-defined, approval-gated |
+| MCP tools, resources, prompts | ✅ | Official SDK + Archon policy |
+| SwiftUI and App Intents | ✅ | Native surfaces |
+| Network and isolation disclosure | ✅ | Explicit boundaries |
+
+Legend: ✅ strong · ⚠️ partial, host-dependent, or explicitly bounded.
+Per-vendor evidence, scores, and release gates live in the
+[competitor comparison](Documentation/reference/competitor-comparison.md) and
+[release validation guide](Documentation/how-to/validate-a-release.md).
 
 ## Quick start
 

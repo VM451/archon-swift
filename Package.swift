@@ -235,6 +235,18 @@ let package = Package(
             dependencies: ["ArchonSandbox"],
             path: "Tests/ArchonSandboxTests",
             swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]
+        ),
+        .testTarget(
+            name: "ArchonFullTests",
+            dependencies: ["ArchonFull", "ArchonContext", "ArchonComputerUse", "ArchonConnect"],
+            path: "Tests/ArchonFullTests",
+            swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]
+        ),
+        .testTarget(
+            name: "ArchonModelsUITests",
+            dependencies: ["ArchonModelsUI", "ArchonModels"],
+            path: "Tests/ArchonModelsUITests",
+            swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]
         )
     ],
     swiftLanguageModes: [.v6]
