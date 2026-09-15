@@ -33,52 +33,6 @@ all-base-products re-export; optional adapters remain separate.
 - Permission-aware MCP, semantic host actions, and capability-restricted WebKit sandboxes.
 - No fabricated inference, extraction, search, telemetry, or platform records when a required capability is unavailable.
 
-## Supported official model families
-
-Archon's user-facing model discovery is **official-publisher MLX-only**, not a
-generic AI-model browser. Qwen, Mistral, Llama, Phi, Gemma, and future families
-can appear only when an allow-listed first-party namespace publishes a
-validated MLX variant. Community conversion namespaces such as `mlx-community`
-and `lmstudio-community`, Core AI, Foundation Models, cloud providers, raw
-checkpoints, and conversion-required artifacts are not returned by the
-discovery UI.
-
-`ModelBrowserView` and `ModelLibraryView` apply `OfficialModelCatalog`
-automatically. When using catalog APIs directly for user-facing results, wrap
-the host provider explicitly:
-
-```swift
-let catalog = OfficialModelCatalog(provider: HuggingFaceCatalog())
-```
-
-For installed-model management, use `ModelLibrary.installedMLXModels()` and
-`ModelLibrary.mlxDiskUsageBytes()`; the package's model UI, storage views,
-App Intents, and adaptive agent catalog use this same installed-MLX boundary;
-the remote browsing catalog is stricter and uses `OfficialModelCatalog`.
-
-The bundled Gemma entries remain compatibility conveniences only; they are not
-the official-model discovery allow-list. Hosts with an approved first-party
-namespace not included in the conservative default policy can pass a custom
-`OfficialModelCatalogPolicy`.
-
-The discovery browser is paginated: it loads one bounded page on entry, offers
-an explicit action for another page, and shows a loading indicator only during
-that request. Catalog requests are bounded so a stalled provider returns an
-actionable failure instead of an indefinite spinner. Search input is lightly
-debounced, and cursor-capable catalogs use opaque continuation tokens rather
-than loading the entire registry into memory.
-
-MLX support is validated, not an automatic promise for every checkpoint:
-`.mlx` packages can be runnable after manifest, resource, runtime, device,
-memory, license, and model-adapter checks. Raw `GGUF`, `SafeTensors`, and
-Transformers files remain lower-level conversion inputs and are excluded from
-user-facing discovery.
-
-Read the canonical [supported models and model-family policy](Documentation/reference/supported-models.md),
-[model catalog reference](Documentation/reference/model-catalogs.md), and
-[model contract](Documentation/reference/model-contract.md) before wiring a
-discovery screen or adaptive provider.
-
 ## System design
 
 ```mermaid
@@ -129,17 +83,6 @@ flowchart TB
 Arrows show composition and service boundaries, not the complete SwiftPM
 dependency graph. Read [`Documentation/architecture.md`](Documentation/architecture.md)
 for the deeper design notes.
-
-### ArchonSearch 2.0 subsystem
-
-`ArchonSearch` 2.0 provides a 100% on-device, local-first web retrieval, grounding,
-and autonomous research pipeline built around the native-first principle. On user
-devices (iOS, macOS, visionOS), ArchonSearch runs entirely in the background with
-zero external server, zero Docker, and zero API key requirements:
-
-- **100% on-device native components (primary):** `DuckDuckGoSearchEngine` for zero-server HTML/Lite search retrieval, `NativeReader` (combining `SwiftSoupArticleExtractor` and in-process `@MainActor` `ReadabilityWebKitBridge` in `WKWebView`) for in-process webpage extraction, and GRDB for SQLite search persistence, session history, and TTL page caching.
-- **Archon-owned safety & reasoning:** `ArchonSearchClient` facade (§10), `CompositeSearchEngine` with transparent fallback, 5-mode `RetrievalRouter`, `ContextBuilder` (`<reference_data>` prompt-injection defense), `CitationGraph` (attribution integrity and hallucination elimination), `WebSearchTool`/`ReadWebPageTool`/`ResearchTool` (Apple FoundationModels tools), and `ArchonChatView` (Liquid Glass HIG SwiftUI chat interface).
-- **Optional companion microservices:** Docker (`docker-compose.yml` with SearXNG on port `8080` and Crawl4AI on port `11235`) is strictly an optional developer/server companion for self-hosted proxy or heavy headless crawling workflows, never a requirement on user devices. See [`Documentation/diagrams/archon-search.md`](Documentation/diagrams/archon-search.md) for data-flow details.
 
 ## Product decision matrix
 
@@ -234,30 +177,6 @@ Legend: ✅ strong or qualifying support · ⚠️ mixed, partial, hosted, optio
 adapter-owned, or host-dependent · ❌ no meaningful equivalent in the named
 reference set. For provider-by-provider evidence, use the linked registry.
 
-### What Archon promises
-
-| Dimension | Archon default | Cloud/remote extension |
-| --- | --- | --- |
-| Execution | Primarily on the user's Apple device, in-process, native Swift | Explicit opt-in adapters for hosted models, search, MCP, browsers, or sandboxes |
-| Privacy | `localOnly` never calls the network; credentials belong to the host app | Every cloud boundary is policy-controlled and observable |
-| Apple integration | Reuse Foundation Models, Core ML, WebKit, SwiftUI, CloudKit, App Intents, and Accessibility | Do not replace an Apple framework that already satisfies the requirement |
-| Data ownership | ArchonMemory and ArchonContext remain application-owned and auditable | Sync and hosted indexes are optional, explicit, and never silently authoritative |
-| Quality bar | Typed failures, strict concurrency, cancellation, bounded resources, recovery, and migration | Adapters disclose limitations and pass the same contract tests |
-| Isolation honesty | In-process WebKit is labelled WebKit, not a process/container/microVM | Remote isolation levels are represented explicitly by the adapter |
-
-## Local and network policy
-
-| Capability | Local-first behavior | Explicit network/remote behavior |
-| --- | --- | --- |
-| Model routing | `ModelPolicy.localOnly`, `appleOnly`, or `preferLocal` selects an on-device path when available | `cloudAllowed` or an explicit cloud provider may cross the host's network boundary |
-| Search | `SearchNetworkPolicy.localOnly` accepts a local workspace source and rejects network discovery | `SearchNetworkPolicy.networkAllowed` is required for web/cloud sources |
-| Sandbox | `InProcessWebKitExecutionProvider` reports `.inProcessWebKit` and defaults to denied capabilities | Remote container/microVM providers must report their isolation and network dependence |
-| Credentials | The consuming app supplies and stores credentials | No API key is embedded in package defaults or silently inferred |
-
-`localOnly` is a hard policy. If a local capability is unavailable, Archon
-returns a typed error or unavailable result; it does not silently fall back to
-the network.
-
 ## Quick start
 
 Add the package URL in Xcode or Swift Package Manager. Pin a release tag or
@@ -313,102 +232,6 @@ can still require a model-family text adapter supplied by the consuming app.
 Never assume the first result is runnable; inspect the returned variant and
 run `ModelCompatibilityAnalyzer` before presenting an install or load action.
 
-### Web-grounded search with ArchonSearch 2.0
-
-ArchonSearch 2.0 enables privacy-preserving, web-grounded AI search and
-autonomous research that runs **100% on-device** across iOS, macOS, and visionOS
-in the background with **zero external servers, zero Docker containers, and zero API keys**.
-
-Query grounded web intelligence directly on-device in native Swift:
-
-```swift
-import ArchonSearch
-
-// Runs 100% on-device: DuckDuckGoSearchEngine + NativeReader (SwiftSoup / WebKit)
-let client = ArchonSearchClient() // defaults to .onDevice()
-let answer = try await client.ask("How does Liquid Glass adapt between light and dark mode?")
-print(answer.text)
-for citation in answer.citations {
-    print("[\(citation.index)] \(citation.title ?? ""): \(citation.url)")
-}
-```
-
-For SwiftUI applications, embed the native `ArchonChatView` styled with Liquid Glass HIG:
-
-```swift
-import SwiftUI
-import ArchonSearch
-
-struct ContentView: View {
-    // 100% on-device execution with zero server or container dependencies
-    @State private var client = ArchonSearchClient(configuration: .onDevice())
-
-    var body: some View {
-        ArchonChatView(client: client)
-    }
-}
-```
-
-#### Optional developer companion setup (Docker)
-
-For developer environments, self-hosted proxy servers, or enterprise Crawl4AI setups,
-an optional companion setup is provided via `docker-compose.yml` (SearXNG on port `8080`,
-Crawl4AI on port `11235`). This is strictly an optional developer companion, never
-a requirement on user devices:
-
-```bash
-docker compose up -d
-```
-
-```swift
-// Explicitly opt into local companion Docker services
-let client = ArchonSearchClient(configuration: .localFirst()) // or .dockerCompanion()
-```
-
-The buildable example is a macOS SwiftPM executable:
-
-```bash
-swift run archon-example-app
-```
-
-iOS and visionOS validation requires a consuming Xcode application with the
-appropriate entitlements, usage descriptions, permissions, and host lifecycle
-forwarding. This package-only checkout does not provide a signed `.app`.
-
-## Model lifecycle
-
-`ArchonModels` supports MLX-filtered static, local-library, direct-URL, and
-HTTP-backed catalogs; Hugging Face metadata; Keychain-backed tokens;
-device-fit analysis; single-file or directory artifacts; checksum and resource
-validation; resumable foreground/background downloads; atomic installation;
-revision checks; and App Intents. `LocalModelCatalog` is offline.
-HTTP-backed catalogs are network-dependent and must be selected deliberately by
-the host app.
-
-Runnable MLX artifacts are distinct from raw `GGUF`, `SafeTensors`, and
-Transformers files. Unsupported or conversion-required artifacts are never
-reported as Ready. See [`Documentation/model-format.md`](Documentation/model-format.md).
-
-The developer-only `archon-model` executable handles inspection, validation,
-packaging, conversion through Apple's `coreai-models` exporter, and local
-artifact preparation benchmarks.
-
-For the official-publisher MLX discovery boundary and Gemma compatibility details, see the
-[supported model policy](Documentation/reference/supported-models.md).
-
-## Evidence status
-
-The maintained [competitor comparison](Documentation/reference/competitor-comparison.md)
-records capability evidence separately from independent user-pull evidence. A
-feature is not called “user-loved” from official documentation alone. The
-[release validation guide](Documentation/how-to/validate-a-release.md) defines
-the evidence gates required before a replacement becomes the default.
-
-The package contains 371 Swift tests across 10 bundles, and the complete
-package-wide suite passes on the configured Xcode toolchain. Signed-app,
-physical-device, live UI, real-model, and production-server validation remain
-explicit release gates.
-
 ## Build and test
 
 ```bash
@@ -424,23 +247,6 @@ Optional live research tests and timing-sensitive benchmarks are disabled by
 default. Run the opt-in checks from [`Benchmarks/README.md`](Benchmarks/README.md)
 only on a controlled development machine; their timings are not portable
 device guarantees.
-
-## Integration boundaries
-
-The package includes the MLX Swift, Hugging Face, and Transformers dependencies
-needed by `ArchonAgent`; consumers do not need to add a separate local-provider
-package. The package is a SwiftPM library family with a buildable SwiftUI example
-host, not a signed Xcode application. A production app supplies its own:
-
-- provider credentials, network consent, and any app-specific non-MLX model adapters;
-- privacy usage descriptions, entitlements, and platform permissions;
-- MCP servers, search services, lifecycle forwarding, and host semantic observations;
-- web research fetching, competitor-site credentials, source normalization, and
-  the manual refresh policy for `CompetitiveResearchSnapshot` imports;
-- user-facing policy for side effects and data retention.
-
-When one of these boundaries is absent, the relevant API returns a typed error
-or unavailable result. Test and preview code can inject deterministic mocks.
 
 ## Documentation
 
