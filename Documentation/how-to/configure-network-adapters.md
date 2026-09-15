@@ -34,6 +34,35 @@ let webResponse = try await ArchonSearchProvider().search(webRequest)
 
 `localOnly` rejects network sources and rejects a live crawl for a local source.
 
+## Rank results without the network
+
+`rankedSearch` applies the local reranker (term overlap, freshness decay,
+host allow/block scoping, max-age filter) with no model or network call.
+Pass an Apple `NaturalLanguageSimilarity` for an on-device semantic boost:
+
+```swift
+import ArchonSearch
+
+let client = ArchonSearchClient(configuration: .onDevice())
+let ranked = try await client.rankedSearch(
+    "Swift concurrency",
+    options: SearchRankingOptions(maxAge: 90 * 86_400, blockHosts: ["spam.example"]),
+    similarity: NaturalLanguageSimilarity()
+)
+```
+
+## Register additional engines
+
+Host apps add named `SearchEngine` adapters (SearXNG, future Brave/Tavily/Exa
+adapters with host-owned credentials) to a `SearchEngineRegistry`. Fan-out is
+concurrent with per-engine failure isolation and deterministic URL dedupe:
+
+```swift
+let registry = SearchEngineRegistry()
+await registry.register(name: "on-device", engine: DuckDuckGoSearchEngine())
+let merged = await registry.searchAll("Swift concurrency", limit: 10)
+```
+
 ## Model catalogs
 
 `HuggingFaceCatalog`, `RemoteModelCatalog`, and HTTP-backed role-specific

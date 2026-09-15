@@ -4,10 +4,12 @@
 and autonomous research engine for Apple platforms (iOS 27+, macOS 27+, visionOS 27+).
 On user devices, it operates entirely in the background with zero external servers,
 zero Docker containers, and zero API keys required. It integrates provider-neutral
-on-device search engines (`DuckDuckGoSearchEngine`), two-stage native in-process extraction
-(`NativeReader`), prompt-injection defense, citation verification, GRDB persistence,
-and Liquid Glass conversational UI. Docker companion microservices (SearXNG, Crawl4AI)
-are supported as optional developer/proxy extensions.
+on-device search engines (`DuckDuckGoSearchEngine`), multi-engine fan-out
+(`SearchEngineRegistry`), local keyword + neural reranking (`ResultReranker`,
+`NaturalLanguageSimilarity`), query rewriting (`SearchQueryRewriter`), two-stage native
+in-process extraction (`NativeReader`), prompt-injection defense, citation verification,
+GRDB persistence, and Liquid Glass conversational UI. Docker companion microservices
+(SearXNG, Crawl4AI) are supported as optional developer/proxy extensions.
 
 ## Architecture Diagram
 
@@ -19,7 +21,7 @@ flowchart TD
     end
 
     subgraph FacadeLayer ["Public Facade (§10)"]
-        Client["ArchonSearchClient Actor<br/>.onDevice() (Default) · .localFirst()<br/>search() · read() · ask() · research()"]
+        Client["ArchonSearchClient Actor<br/>.onDevice() (Default) · .localFirst()<br/>search() · rankedSearch() · read() · ask() · research()"]
     end
 
     UI --> Client
@@ -40,6 +42,17 @@ flowchart TD
         Composite["CompositeSearchEngine Actor<br/>SearXNG with Transparent On-Device Fallback"]
         Composite -.-> SXClient
         Composite -.-> DDG
+        Registry["SearchEngineRegistry Actor<br/>Named Adapter Fan-Out · URL Dedupe"]
+        Registry -.-> DDG
+        Registry -.-> SXClient
+    end
+
+    subgraph RankingLayer ["Local Ranking (No Network · No Model Download)"]
+        Rewriter["SearchQueryRewriter<br/>Bounded Local Query Variants"]
+        Reranker["ResultReranker<br/>Term Overlap + Freshness Decay<br/>Allow/Block Hosts · Max-Age"]
+        Semantic["NaturalLanguageSimilarity<br/>On-Device NLEmbedding Vectors<br/>Bounded Semantic Boost"]
+        Rewriter --> Reranker
+        Semantic --> Reranker
     end
 
     subgraph RetrievalLayer ["Content Extraction Pipeline (RetrievalRouter)"]
@@ -86,6 +99,7 @@ flowchart TD
 
     Client -->|search (default)| DDG
     Client -->|search (companion/proxy)| Composite
+    Client -->|rankedSearch| Reranker
     Client -->|read| Router
     Client -->|research| Coordinator
     Client -->|ask| DDG
@@ -117,6 +131,18 @@ The search discovery layer is unified behind the `SearchEngine` protocol:
   `DuckDuckGoSearchEngine` if the primary service is unreachable or errors.
 - **`SearXNGClient` (Optional Companion)**: Interfaces with a self-hosted SearXNG meta-search
   instance over HTTP JSON (`GET /search?format=json`). Used in `.localFirst()` or server proxy setups.
+- **`SearchEngineRegistry` (Multi-Engine Fan-Out)**: Host apps register named `SearchEngine`
+  adapters (on-device plus explicit network adapters with host-owned credentials); `searchAll`
+  fans out concurrently with per-engine failure isolation, deterministic URL dedupe, and
+  cancellation checks.
+- **`ResultReranker` + `SearchRankingOptions` (Local Rerank)**: Engine score plus query-term
+  overlap, exponential freshness decay, `maxAge` filtering, and Goggles-style `allowHosts` /
+  `blockHosts` scoping. Stable URL tiebreak; undated results keep relevance order.
+- **`NaturalLanguageSimilarity` (On-Device Neural Rerank)**: Apple `NLEmbedding` sentence
+  vectors behind the vendor-neutral `SemanticSimilarity` seam. No model download, no network;
+  contributes a bounded clamped boost via `rankedSearch`, and soft-nils keep keyword behavior.
+- **`SearchQueryRewriter` (Local Query Variants)**: Deterministic normalization plus bounded
+  term-drop variants for parallel discovery fan-out. No model, no network.
 
 ### 3. Dual Retrieval Router & Native Extraction
 `RetrievalRouter` arbitrates between native in-process extraction and optional companion crawling:

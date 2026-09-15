@@ -59,6 +59,7 @@ public actor ArchonSearchClient: Sendable {
     )
 
     public func search(_ query: String, categories: [String]? = nil, page: Int = 1) async throws -> [SearchResult]
+    public func rankedSearch(_ query: String, categories: [String]? = nil, page: Int = 1, options: SearchRankingOptions = SearchRankingOptions(), similarity: (any SemanticSimilarity)? = nil, semanticWeight: Double = 0.4) async throws -> [SearchResult]
     public func read(url: URL, options: ReaderOptions = ReaderOptions()) async throws -> WebDocument
     public func ask(query: String) async throws -> (context: String, sources: [Source], citations: [Citation])
     public func ask(_ query: String) async throws -> SearchAnswer
@@ -67,7 +68,8 @@ public actor ArchonSearchClient: Sendable {
 }
 ```
 
-- `search(_:categories:page:)`: Dispatches queries to the configured `SearchEngine` (`DuckDuckGoSearchEngine` by default) and returns ranked `[SearchResult]`.
+- `search(_:categories:page:)`: Dispatches queries to the configured `SearchEngine` (`DuckDuckGoSearchEngine` by default) and returns `[SearchResult]`.
+- `rankedSearch(_:categories:page:options:)`: Applies the local `ResultReranker` (term overlap + freshness decay + host allow/block scoping + max-age filter) with no network or model.
 - `read(url:options:)`: Extracts clean text and Markdown from a URL using `RetrievalRouter` (`NativeReader` by default).
 - `ask(query:)` / `ask(_:)`: Executes search, extracts source pages, encapsulates content inside `<reference_data>`, and verifies citations (returning tuple or `SearchAnswer`).
 - `research(topic:options:)`: Executes autonomous multi-round iterative research.
@@ -198,6 +200,18 @@ public actor CompositeSearchEngine: SearchEngine {
     public func checkHealth() async -> Bool
 }
 ```
+
+#### `SearchEngineRegistry` (Multi-Engine Fan-Out)
+Actor registry for named `SearchEngine` adapters. Host apps register on-device and explicit network adapters (SearXNG, future Brave/Tavily/Exa adapters with host-owned credentials); `searchAll` fans out concurrently with per-engine failure isolation, deterministic URL dedupe, and cancellation checks.
+
+#### `ResultReranker` + `SearchRankingOptions` (Local Rerank)
+Dependency-free value types combining engine score, query-term overlap, exponential freshness decay (`freshnessHalfLife`), `maxAge` filtering, and Goggles-style `allowHosts`/`blockHosts` scoping. Sorting is stable by URL; undated results keep relevance order.
+
+#### `SemanticSimilarity` + `NaturalLanguageSimilarity` (On-Device Neural Rerank)
+Vendor-neutral meaning-overlap seam with an Apple `NLEmbedding` sentence-vector implementation: no model download, no network, no new dependency. `ResultReranker` adds a bounded boost (`semanticWeight`, clamped 0...1); `nil` similarity keeps keyword behavior. Host apps can inject their own scorers.
+
+#### `SearchQueryRewriter` (Local Query Variants)
+Deterministic normalization plus bounded term-drop variants for parallel discovery fan-out. No model, no network.
 
 #### `SearXNGClient` (Optional Companion)
 Actor conforming to `SearchEngine` managing HTTP JSON queries against a self-hosted SearXNG instance without third-party trackers. Used in Docker companion or server proxy configurations.

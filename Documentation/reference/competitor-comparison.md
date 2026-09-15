@@ -291,9 +291,9 @@ Source records: the search comparison in this document.
 
 | Keep from the market | Archon implementation boundary | Required proof |
 | --- | --- | --- |
-| Query rewriting and reranking | Provider-neutral query and ranking contracts | Deterministic ranking and citation tests |
+| Query rewriting and reranking | `SearchQueryRewriter`, `ResultReranker` + `SearchRankingOptions`, `SemanticSimilarity` / `NaturalLanguageSimilarity`, exposed via `rankedSearch` | `SearchRankingTests`: keyword, semantic, freshness, scope, determinism |
 | Crawl, map, and extract | Bounded local WebKit/URLSession orchestration plus adapters | Robots, limits, prompt-injection isolation, cleanup |
-| Freshness and structured output | `SearchResult`, source graph, extraction schema, and timestamps | Freshness policy and schema failure tests |
+| Freshness and structured output | `SearchResult` timestamps plus `SearchRankingOptions` (`maxAge`, `freshnessHalfLife`, `preferRecent`) applied by `rankedSearch` | Max-age filter and recency-ordering tests in `SearchRankingTests` |
 | Citations and claims | Claim-to-source references with network metadata | Verifiable source URLs and abstention |
 | Offline research | Local corpus provider under `localOnly` | Network-denied tests prove no remote attempt |
 

@@ -40,6 +40,19 @@ public actor ArchonSearchClient: Sendable {
         try await searchEngine.search(query, categories: categories, page: page)
     }
 
+    /// Ranked search: local rerank with freshness and host scoping.
+    public func rankedSearch(
+        _ query: String,
+        categories: [String]? = nil,
+        page: Int = 1,
+        options: SearchRankingOptions = SearchRankingOptions(),
+        similarity: (any SemanticSimilarity)? = nil,
+        semanticWeight: Double = 0.4
+    ) async throws -> [SearchResult] {
+        let results = try await searchEngine.search(query, categories: categories, page: page)
+        return ResultReranker().rank(results, for: query, options: options, similarity: similarity, semanticWeight: semanticWeight)
+    }
+
     /// Reads and extracts structured text and markdown from a webpage URL.
     public func read(url: URL, options: ReaderOptions = ReaderOptions()) async throws -> WebDocument {
         try await router.read(url: url, options: options)

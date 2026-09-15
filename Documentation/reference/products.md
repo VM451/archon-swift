@@ -12,7 +12,7 @@ unnecessary dependencies.
 | [`ArchonContext`](products/context.md) | Deterministic request-scoped context assembly | Does not persist or execute |
 | [`ArchonMemory`](products/memory.md) | Durable facts, graph/vector retrieval, RAG, profile/context synthesis, source-linked competitive research, local feedback, optional CloudKit sync | Local store is authoritative |
 | [`ArchonMemoryProxima`](products/memory-proxima.md) | Optional ProximaKit dense-index adapter | Not included in `ArchonFull` |
-| [`ArchonSearch`](products/search.md) | Discovery, crawl, extraction, research, citations, monitoring | Network sources require explicit policy |
+| [`ArchonSearch`](products/search.md) | Discovery, registry fan-out, keyword + neural rerank, freshness, crawl, extraction, research, citations, monitoring | Network sources require explicit policy |
 | [`ArchonSandbox`](products/sandbox.md) | Capability-restricted WebKit workspaces, DOM/JS bridge, workspace sync | In-process WebKit is not VM isolation |
 | [`ArchonConnect`](products/connect.md) | MCP tools, resources, prompts, JSON-RPC/streamable HTTP, permissions | Host resolves credentials and server lifecycle |
 | [`ArchonComputerUse`](products/computer-use.md) | Semantic snapshots, risk checks, host actions, postconditions | Host supplies observations and side effects |
