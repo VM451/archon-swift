@@ -134,18 +134,6 @@ for Archon's local-native core.
 | `ArchonModelsUI` | SwiftUI model discovery, installed-library, detail, storage, and download views |
 | `ArchonFull` | Convenience re-export of the base SDK products; excludes optional `ArchonMemoryProxima` |
 
-## ArchonMemory reuse, adaptation, and build map
-
-| Reuse | Adapt | Build from the ground up |
-| --- | --- | --- |
-| GRDB/SQLite durable documents, `DocumentItem`, `VectorStore`, `KnowledgeBaseIndex`, `RAGRetriever`, configured embedding providers, temporal memory fields, `CoreMemoryBlock`, recall, summaries, export, and the optional `VectorIndex` seam | Durable document rehydration, document metadata and filters, hybrid ranking, workspace-scoped App Intents, typed retrieval limits, private credentials, cancellation-aware CloudKit operations, and migration-safe exports | `CompetitiveResearchSnapshot`, `CompetitiveInsight`, `ProviderProfile`, `CompetitiveInsightFilter`, `MemoryFeedbackEvent`, 14-provider seed data, full snapshot archiving, stale-refresh protection, and competitive research tests |
-
-The package reuses outcomes and public APIs where they already fit. Competitor
-repositories are research references, not copied runtime code. The SDK does not
-fetch competitor sites: a consuming app or CLI owns web fetching, credentials,
-source normalization, and manual refresh, then passes a validated snapshot to
-`ArchonMemory`.
-
 ## Competitive comparison
 
 This matrix is intentionally concise. Each competitor column names the
