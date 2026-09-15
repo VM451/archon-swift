@@ -112,33 +112,6 @@ Developer tools: `archon-model` (offline model workflows via
 `archon-example-app` (golden SwiftUI host) are both BUILD, reusing the
 patterns above.
 
-### Position
-
-Archon's gate is strict: native Swift, local, in-process core. Cloud products
-can lead a capability and still fail that gate, in which case Archon adapts
-the pattern or builds the local boundary.
-
-| Capability | Archon | Signal |
-| --- | :---: | --- |
-| Native Swift, local in-process core | ✅ | The qualifying gate |
-| On-device model runtime | ✅ | Apple + MLX adapters |
-| Model catalog and lifecycle | ✅ | Archon-owned lifecycle |
-| Agent graphs, checkpoints, replay | ✅ | Recovery + effect receipts |
-| Tools and handoffs | ✅ | Typed tools, MCP interop |
-| Durable memory and RAG | ✅ | Local store, optional CloudKit |
-| Web research and citations | ✅ | Grounded, cited, inspectable |
-| Offline local-corpus search | ✅ | Local workspace search |
-| Secure execution boundary | ⚠️ | Restricted WebKit, not a VM |
-| Semantic host actions | ⚠️ | Host-defined, approval-gated |
-| MCP tools, resources, prompts | ✅ | Official SDK + Archon policy |
-| SwiftUI and App Intents | ✅ | Native surfaces |
-| Network and isolation disclosure | ✅ | Explicit boundaries |
-
-Legend: ✅ strong · ⚠️ partial, host-dependent, or explicitly bounded.
-Per-vendor evidence, scores, and release gates live in the
-[competitor comparison](Documentation/reference/competitor-comparison.md) and
-[release validation guide](Documentation/how-to/validate-a-release.md).
-
 ## Quick start
 
 Add the package URL in Xcode or Swift Package Manager. Pin a release tag or
