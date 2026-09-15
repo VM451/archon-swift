@@ -112,12 +112,11 @@ Developer tools: `archon-model` (offline model workflows via
 `archon-example-app` (golden SwiftUI host) are both BUILD, reusing the
 patterns above.
 
-## Where Archon stands
+### Position
 
 Archon's gate is strict: native Swift, local, in-process core. Cloud products
 can lead a capability and still fail that gate, in which case Archon adapts
-the pattern or builds the local boundary. Competitor columns name reference
-sets, not identical scope or market share.
+the pattern or builds the local boundary.
 
 | Capability | Archon | Signal |
 | --- | :---: | --- |
