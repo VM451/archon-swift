@@ -203,6 +203,49 @@ public protocol LLMProvider: ArchonStructuredOutputProvider {
     ) -> AsyncThrowingStream<ModelResponseChunk, Error>
 }
 
+/// Deterministic request-shape validation shared by on-device providers.
+///
+/// Estimates are deliberately conservative character-based heuristics, not
+/// tokenizer output: they must run identically on every device without model
+/// assets and fail closed before any weight download, specialization, or
+/// system-model call.
+public enum LocalRequestValidation: Sendable {
+    /// Estimates prompt tokens as ceiling(chars / 4) plus a small per-message
+    /// framing allowance. Always >= 1 for a non-empty prompt.
+    public static func estimatedTokenCount(for prompt: [ChatMessage]) -> Int {
+        var characters = 0
+        for message in prompt {
+            characters += message.content.count
+        }
+        characters += prompt.count * 8
+        return max(1, (characters + 3) / 4)
+    }
+
+    /// Returns whether every message is blank (whitespace-only or empty).
+    public static func isEffectivelyEmpty(_ prompt: [ChatMessage]) -> Bool {
+        guard !prompt.isEmpty else { return true }
+        return !prompt.contains {
+            !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
+    /// Returns a human-readable reason when generation options are unusable.
+    public static func optionsProblem(_ options: GenerationOptions) -> String? {
+        if let temperature = options.temperature,
+           !(temperature.isFinite && temperature >= 0 && temperature <= 2) {
+            return "temperature must be finite within 0...2."
+        }
+        if let topP = options.topP,
+           !(topP.isFinite && topP >= 0 && topP <= 1) {
+            return "topP must be finite within 0...1."
+        }
+        if let maxTokens = options.maxTokens, maxTokens <= 0 {
+            return "maxTokens must be positive."
+        }
+        return nil
+    }
+}
+
 public extension LLMProvider {
     func generateStructuredOutput<T: Decodable & Sendable>(
         prompt: String,

@@ -158,10 +158,15 @@ public actor ContextBuilder {
         tokenEstimator: any ContextTokenEstimator = UTF8ContextTokenEstimator()
     ) {
         self.tokenEstimator = tokenEstimator
-        for contributor in contributors { self.contributors[contributor.id] = contributor }
+        for contributor in contributors where !contributor.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            self.contributors[contributor.id] = contributor
+        }
     }
 
+    /// Registers a contributor, ignoring blank identifiers fail-closed so an
+    /// unaddressable contributor can never enter deterministic ordering.
     public func register(_ contributor: any ContextContributor) {
+        guard !contributor.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         contributors[contributor.id] = contributor
     }
 
@@ -170,6 +175,7 @@ public actor ContextBuilder {
     }
 
     public func snapshot(budget: ContextBudget? = nil) async throws -> ContextSnapshot {
+        try Task.checkCancellation()
         let orderedContributors = contributors.values.sorted { $0.id < $1.id }
         let fragments = try await withThrowingTaskGroup(of: ContextFragment.self, returning: [ContextFragment].self) { group in
             for contributor in orderedContributors {

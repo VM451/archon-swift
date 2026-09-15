@@ -43,6 +43,21 @@ public struct SandboxConfiguration: Sendable, Equatable {
     /// Polling interval for memory watchdog checking.
     public var watchdogCheckIntervalSeconds: TimeInterval
 
+    /// WebKit isolation boundary disclosed on SwiftUI surfaces. Derived from
+    /// the capability and developer flags; setting capabilities widens the
+    /// reported level instead of being silently absorbed.
+    public var isolationLevel: SandboxIsolationLevel {
+        SandboxIsolationLevel.level(
+            for: allowedPermissions,
+            allowNetworkAccess: allowNetworkAccess,
+            developerModeEnabled: developerModeEnabled,
+            isInspectable: isInspectable
+        )
+    }
+
+    /// User-facing isolation disclosure for SwiftUI surfaces and logs.
+    public var isolationDisclosure: String { isolationLevel.disclosure }
+
     /// Tool names explicitly approved for invocation by page JavaScript.
     /// Every page-originated tool requires an entry in this set; a tool's
     /// read-only classification describes effects but is not authorization.

@@ -11,6 +11,7 @@ public enum AppleFoundationModelError: Error, LocalizedError, Sendable, Equatabl
     case contextWindowExceeded
     case emptyPrompt
     case toolCallingUnsupported
+    case invalidOptions(String)
 
     public var errorDescription: String? {
         switch self {
@@ -24,6 +25,8 @@ public enum AppleFoundationModelError: Error, LocalizedError, Sendable, Equatabl
             return "Apple Foundation Model generation requires a non-empty prompt."
         case .toolCallingUnsupported:
             return "Dynamic Archon tool definitions cannot be converted safely into Foundation Models Tool values."
+        case .invalidOptions(let reason):
+            return "Apple Foundation Model generation options are invalid: \(reason)"
         }
     }
 }
@@ -96,9 +99,12 @@ public struct FoundationModelsRuntime: AppleFoundationModelRuntime, Sendable {
                 maximumResponseTokens: options.maxTokens
             )
             let response = try await session.respond(to: prompt, options: foundationOptions)
+            let promptTokens = response.usage.input.totalTokenCount
+            let completionTokens = response.usage.output.totalTokenCount
             let usage = TokenUsage(
-                promptTokens: response.usage.input.totalTokenCount,
-                completionTokens: response.usage.output.totalTokenCount
+                promptTokens: promptTokens,
+                completionTokens: completionTokens,
+                totalTokens: promptTokens + completionTokens
             )
             return AppleFoundationModelRuntimeResponse(text: response.content, usage: usage)
         }
@@ -209,17 +215,7 @@ public final class AppleFoundationModelProvider: LLMProvider, @unchecked Sendabl
         tools: [ToolDefinition],
         options: GenerationOptions
     ) async throws -> ModelResponse {
-        guard !prompt.isEmpty else {
-            throw AppleFoundationModelError.emptyPrompt
-        }
-        guard tools.isEmpty else {
-            throw AppleFoundationModelError.toolCallingUnsupported
-        }
-
-        let transcript = FoundationModelsBridge.formatTranscript(for: prompt)
-        guard !transcript.userPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw AppleFoundationModelError.emptyPrompt
-        }
+        let transcript = try validatedTranscript(prompt: prompt, tools: tools, options: options)
 
         if let mock = mockResponse(for: transcript.userPrompt) {
             if simulatedDelay > 0 {
@@ -243,7 +239,7 @@ public final class AppleFoundationModelProvider: LLMProvider, @unchecked Sendabl
             prompt: transcript.userPrompt,
             options: options
         )
-        return ModelResponse(text: response.text, finishReason: "stop", usage: response.usage)
+        return ModelResponse(text: response.text, finishReason: "stop", usage: Self.normalizedUsage(response.usage))
     }
 
     public func stream(
@@ -254,17 +250,7 @@ public final class AppleFoundationModelProvider: LLMProvider, @unchecked Sendabl
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    guard !prompt.isEmpty else {
-                        throw AppleFoundationModelError.emptyPrompt
-                    }
-                    guard tools.isEmpty else {
-                        throw AppleFoundationModelError.toolCallingUnsupported
-                    }
-
-                    let transcript = FoundationModelsBridge.formatTranscript(for: prompt)
-                    guard !transcript.userPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                        throw AppleFoundationModelError.emptyPrompt
-                    }
+                    let transcript = try self.validatedTranscript(prompt: prompt, tools: tools, options: options)
 
                     if let mock = self.mockResponse(for: transcript.userPrompt) {
                         for word in mock.split(whereSeparator: \.isWhitespace) {
@@ -298,6 +284,42 @@ public final class AppleFoundationModelProvider: LLMProvider, @unchecked Sendabl
                 task.cancel()
             }
         }
+    }
+
+    private func validatedTranscript(
+        prompt: [ChatMessage],
+        tools: [ToolDefinition],
+        options: GenerationOptions
+    ) throws -> (systemInstruction: String?, userPrompt: String) {
+        guard !LocalRequestValidation.isEffectivelyEmpty(prompt) else {
+            throw AppleFoundationModelError.emptyPrompt
+        }
+        guard tools.isEmpty else {
+            throw AppleFoundationModelError.toolCallingUnsupported
+        }
+        if let problem = LocalRequestValidation.optionsProblem(options) {
+            throw AppleFoundationModelError.invalidOptions(problem)
+        }
+        let transcript = FoundationModelsBridge.formatTranscript(for: prompt)
+        guard !transcript.userPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AppleFoundationModelError.emptyPrompt
+        }
+        let estimatedTokens = LocalRequestValidation.estimatedTokenCount(for: prompt)
+        guard estimatedTokens <= capabilities.maxContextTokens else {
+            throw AppleFoundationModelError.contextWindowExceeded
+        }
+        return transcript
+    }
+
+    private static func normalizedUsage(_ usage: TokenUsage?) -> TokenUsage? {
+        guard let usage else { return nil }
+        let total = usage.promptTokens + usage.completionTokens
+        guard usage.totalTokens != total else { return usage }
+        return TokenUsage(
+            promptTokens: usage.promptTokens,
+            completionTokens: usage.completionTokens,
+            totalTokens: total
+        )
     }
 
     private func mockResponse(for prompt: String) -> String? {

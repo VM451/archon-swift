@@ -281,6 +281,21 @@ public final class OnDeviceProvider: LLMProvider, @unchecked Sendable {
                     (candidate: nil, gemmaVariant: nil)
                 )
             }
+            // `fits` gates on the static safe budget only. An explicit request
+            // must also respect currently available headroom so a foregrounding
+            // app under memory pressure fails closed instead of OOMing.
+            let effectiveBudgetBytes = min(
+                hardwareProfile.safeModelMemoryBudgetBytes,
+                hardwareProfile.availableProcessMemoryBytes
+            )
+            let variantPeakBytes = UInt64(max(0, variant.estimatedMemoryMB)) * 1_048_576
+            guard variantPeakBytes > 0, variantPeakBytes <= effectiveBudgetBytes else {
+                return (
+                    UnavailableAdaptiveModelProvider(),
+                    .unavailable,
+                    (candidate: nil, gemmaVariant: nil)
+                )
+            }
             guard runtimePref != .appleFoundationModelOnly else {
                 return (
                     UnavailableAdaptiveModelProvider(),

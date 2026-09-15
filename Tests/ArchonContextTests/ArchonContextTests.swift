@@ -9,6 +9,19 @@ private struct TestContributor: ContextContributor {
     func makeContextFragment() async throws -> ContextFragment { fragment }
 }
 
+private struct ThrowingContributor: ContextContributor {
+    struct FragmentFailure: Error, Equatable {}
+    let id: String
+    func makeContextFragment() async throws -> ContextFragment { throw FragmentFailure() }
+}
+
+private struct BlankIDContributor: ContextContributor {
+    let id = "   "
+    func makeContextFragment() async throws -> ContextFragment {
+        ContextFragment(source: "blank", content: "must never appear")
+    }
+}
+
 private struct DelayedContributor: ContextContributor {
     let id: String
 
@@ -140,6 +153,54 @@ struct ArchonContextTests {
         #expect(snapshot.fragments.first?.trust == .trusted)
         #expect(snapshot.fragments.first?.metadata["archon.truncated"] == "true")
         #expect(snapshot.fragments.first.map { UTF8ContextTokenEstimator().estimateTokens($0.content) } ?? 0 <= 4)
+    }
+
+    @Test("ContextBuilder fails closed when a contributor throws")
+    func contributorThrowFailsClosed() async {
+        let builder = ContextBuilder(contributors: [
+            TestContributor(id: "ok", fragment: ContextFragment(source: "ok", content: "fine")),
+            ThrowingContributor(id: "bad"),
+        ])
+        do {
+            _ = try await builder.snapshot()
+            Issue.record("A throwing contributor must fail the snapshot.")
+        } catch is ThrowingContributor.FragmentFailure {
+            // Expected: partial fragments are never returned.
+        } catch {
+            Issue.record("Expected FragmentFailure, got \(error).")
+        }
+    }
+
+    @Test("ContextBuilder ignores blank-identifier contributors")
+    func blankContributorIDIgnored() async throws {
+        let builder = ContextBuilder(contributors: [
+            BlankIDContributor(),
+            TestContributor(id: "ok", fragment: ContextFragment(source: "ok", content: "fine")),
+        ])
+        await builder.register(BlankIDContributor())
+        let snapshot = try await builder.snapshot()
+        #expect(snapshot.fragments.map(\.source) == ["ok"])
+        #expect(!snapshot.assembledText.contains("must never appear"))
+    }
+
+    @Test("ContextBuilder zero-byte budget yields an empty snapshot")
+    func zeroByteBudget() async throws {
+        let builder = ContextBuilder(contributors: [
+            TestContributor(id: "a", fragment: ContextFragment(source: "a", content: "hello")),
+        ])
+        let snapshot = try await builder.snapshot(budget: try ContextBudget(maxUTF8Bytes: 0))
+        #expect(snapshot.fragments.isEmpty)
+        #expect(snapshot.assembledText.isEmpty)
+    }
+
+    @Test("ContextBuilder omits the truncation flag when nothing is truncated")
+    func noTruncationFlagWhenWhole() async throws {
+        let builder = ContextBuilder(contributors: [
+            TestContributor(id: "a", fragment: ContextFragment(source: "a", content: "hi")),
+        ])
+        let snapshot = try await builder.snapshot(budget: try ContextBudget(maxUTF8Bytes: 10_000))
+        #expect(snapshot.fragments.count == 1)
+        #expect(snapshot.fragments.first?.metadata["archon.truncated"] == nil)
     }
 
     @Test("ContextBuilder propagates task cancellation")

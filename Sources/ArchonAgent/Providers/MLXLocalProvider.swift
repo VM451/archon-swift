@@ -42,6 +42,8 @@ public enum MLXLocalProviderError: Error, LocalizedError, Sendable, Equatable {
     case memoryEstimateUnavailable
     case insufficientMemory(predictedPeakBytes: UInt64, availableBudgetBytes: UInt64)
     case unavailableOnPlatform
+    case contextWindowExceeded(Int, Int)
+    case invalidOptions(String)
 
     public var errorDescription: String? {
         switch self {
@@ -53,6 +55,10 @@ public enum MLXLocalProviderError: Error, LocalizedError, Sendable, Equatable {
             return "MLX model loading is blocked: predicted peak memory \(predictedPeakBytes) bytes exceeds the current safe model budget of \(availableBudgetBytes) bytes."
         case .unavailableOnPlatform:
             return "The MLX runtime is unavailable on this platform. Use an Apple Foundation Model, Core AI model, or a consuming app that links MLX Swift for this platform."
+        case .contextWindowExceeded(let current, let max):
+            return "MLX prompt context (\(current) tokens) exceeded limit (\(max) tokens)."
+        case .invalidOptions(let reason):
+            return "MLX generation options are invalid: \(reason)"
         }
     }
 }
@@ -171,6 +177,7 @@ public final class MLXLocalProvider: LLMProvider, @unchecked Sendable {
         options: GenerationOptions
     ) async throws -> ModelResponse {
         let request = try Self.makeRequest(prompt: prompt)
+        try Self.validateRequestShape(prompt: prompt, options: options, capabilities: capabilities)
         try validateMemoryBudget()
         let model = try await runtime.modelContainer()
         let session = ChatSession(
@@ -230,9 +237,10 @@ public final class MLXLocalProvider: LLMProvider, @unchecked Sendable {
         options: GenerationOptions
     ) -> AsyncThrowingStream<ModelResponseChunk, Error> {
         AsyncThrowingStream { continuation in
-            let task = Task { [runtime, prompt, tools, options] in
+            let task = Task { [runtime, prompt, tools, options, capabilities] in
                 do {
                     let request = try Self.makeRequest(prompt: prompt)
+                    try Self.validateRequestShape(prompt: prompt, options: options, capabilities: capabilities)
                     try validateMemoryBudget()
                     let model = try await runtime.modelContainer()
                     let session = ChatSession(
@@ -291,6 +299,24 @@ public final class MLXLocalProvider: LLMProvider, @unchecked Sendable {
                 predictedPeakBytes: predictedPeakMemoryBytes,
                 availableBudgetBytes: availableBudgetBytes
             )
+        }
+    }
+
+    /// Validates request shape before any weight download or container load.
+    static func validateRequestShape(
+        prompt: [ChatMessage],
+        options: GenerationOptions,
+        capabilities: ModelCapabilities
+    ) throws {
+        guard !LocalRequestValidation.isEffectivelyEmpty(prompt) else {
+            throw MLXLocalProviderError.emptyPrompt
+        }
+        if let problem = LocalRequestValidation.optionsProblem(options) {
+            throw MLXLocalProviderError.invalidOptions(problem)
+        }
+        let estimatedTokens = LocalRequestValidation.estimatedTokenCount(for: prompt)
+        guard estimatedTokens <= capabilities.maxContextTokens else {
+            throw MLXLocalProviderError.contextWindowExceeded(estimatedTokens, capabilities.maxContextTokens)
         }
     }
 }
@@ -370,6 +396,7 @@ public final class MLXLocalProvider: LLMProvider, @unchecked Sendable {
         tools: [ToolDefinition],
         options: GenerationOptions
     ) async throws -> ModelResponse {
+        try Self.validateRequestShape(prompt: prompt, options: options, capabilities: capabilities)
         throw MLXLocalProviderError.unavailableOnPlatform
     }
 
@@ -384,8 +411,33 @@ public final class MLXLocalProvider: LLMProvider, @unchecked Sendable {
         tools: [ToolDefinition],
         options: GenerationOptions
     ) -> AsyncThrowingStream<ModelResponseChunk, Error> {
-        AsyncThrowingStream { continuation in
+        do {
+            try Self.validateRequestShape(prompt: prompt, options: options, capabilities: capabilities)
+        } catch {
+            return AsyncThrowingStream { continuation in
+                continuation.finish(throwing: error)
+            }
+        }
+        return AsyncThrowingStream { continuation in
             continuation.finish(throwing: MLXLocalProviderError.unavailableOnPlatform)
+        }
+    }
+
+    /// Validates request shape before reporting platform availability.
+    static func validateRequestShape(
+        prompt: [ChatMessage],
+        options: GenerationOptions,
+        capabilities: ModelCapabilities
+    ) throws {
+        guard !LocalRequestValidation.isEffectivelyEmpty(prompt) else {
+            throw MLXLocalProviderError.emptyPrompt
+        }
+        if let problem = LocalRequestValidation.optionsProblem(options) {
+            throw MLXLocalProviderError.invalidOptions(problem)
+        }
+        let estimatedTokens = LocalRequestValidation.estimatedTokenCount(for: prompt)
+        guard estimatedTokens <= capabilities.maxContextTokens else {
+            throw MLXLocalProviderError.contextWindowExceeded(estimatedTokens, capabilities.maxContextTokens)
         }
     }
 }
@@ -521,6 +573,9 @@ private extension MLXLocalProvider {
 
     static func makeRequest(prompt: [ChatMessage]) throws -> Request {
         guard let last = prompt.last else {
+            throw MLXLocalProviderError.emptyPrompt
+        }
+        guard !LocalRequestValidation.isEffectivelyEmpty(prompt) else {
             throw MLXLocalProviderError.emptyPrompt
         }
 

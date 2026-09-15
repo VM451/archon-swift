@@ -149,7 +149,12 @@ public actor NoOpArchonAuditSink: ArchonAuditSink {
 /// Redacts values by key before they cross an Archon audit boundary.
 public enum ArchonRedactor {
     private static let sensitiveKeyFragments = [
-        "token", "secret", "password", "credential", "authorization", "api-key", "apikey", "cookie"
+        "token", "secret", "password", "passwd", "credential", "authorization",
+        "api-key", "apikey", "api_key", "bearer",
+        "private-key", "privatekey", "private_key", "passphrase",
+        "access-key", "accesskey", "access_key",
+        "refresh-token", "refreshtoken", "refresh_token",
+        "id-token", "idtoken", "id_token", "cookie",
     ]
 
     public static func redact(_ metadata: [String: String]) -> [String: String] {

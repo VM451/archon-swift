@@ -551,9 +551,9 @@ public actor ModelLibrary {
                   !repository.isEmpty,
                   !currentRevision.isEmpty else { continue }
 
-            let descriptors = try await catalog.search(ModelSearchRequest(query: repository, limit: 100))
-            guard let descriptor = descriptors.first(where: { $0.id == repository }),
+            guard let descriptor = try await lookupDescriptor(repository: repository, using: catalog),
                   let availableRevision = descriptor.revision,
+                  !availableRevision.isEmpty,
                   availableRevision != currentRevision else { continue }
 
             let matchingVariant = descriptor.variants.first {
@@ -571,6 +571,51 @@ public actor ModelLibrary {
         }
 
         return updates.sorted { $0.id < $1.id }
+    }
+
+    /// Finds the catalog descriptor for an installed source repository.
+    ///
+    /// A single bounded `search` only observes the first result page, so a
+    /// repository sorted behind popular entries would silently read as "up to
+    /// date". Paginated catalogs are walked with their own continuation tokens
+    /// (or offsets for offset-paginated providers) until the exact repository
+    /// identifier is found or the pages are exhausted. The walk is bounded so
+    /// revision checks stay deterministic and offline-safe; a repository that
+    /// is not found within the bound yields no update rather than an invented
+    /// revision.
+    private func lookupDescriptor(
+        repository: String,
+        using catalog: any ModelCatalogProvider
+    ) async throws -> ModelDescriptor? {
+        guard let paginated = catalog as? any PaginatedModelCatalogProvider else {
+            return try await catalog.search(ModelSearchRequest(query: repository, limit: 100))
+                .first(where: { $0.id == repository })
+        }
+        var offset = 0
+        var continuationToken: String? = nil
+        var seenTokens = Set<String>()
+        for _ in 0..<8 {
+            var request = ModelSearchRequest(query: repository, offset: offset, limit: 50)
+            request.continuationToken = continuationToken
+            let page = try await paginated.searchPage(request)
+            if let match = page.models.first(where: { $0.id == repository }) {
+                return match
+            }
+            guard page.hasMore else { return nil }
+            if let token = page.nextContinuationToken {
+                guard seenTokens.insert(token).inserted else { return nil }
+                continuationToken = token
+            } else {
+                // Offset-paginated providers report more pages without a
+                // cursor. Advance by the observed page or stop when the
+                // provider makes no progress.
+                let advanced = offset + page.models.count
+                guard !page.models.isEmpty, advanced > offset else { return nil }
+                offset = advanced
+                continuationToken = nil
+            }
+        }
+        return nil
     }
 
     public func stagingURL(for variant: ModelVariant) throws -> URL {

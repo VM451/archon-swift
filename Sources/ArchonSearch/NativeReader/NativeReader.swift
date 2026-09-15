@@ -6,12 +6,12 @@ public actor NativeReader: Sendable {
     public static let minimumBodyCharacters = 400
 
     private let session: URLSession
-    private let extractor: SwiftSoupArticleExtractor
+    private let extractor: any ArticleExtractor
     private let timeout: TimeInterval
 
     public init(
         session: URLSession = .shared,
-        extractor: SwiftSoupArticleExtractor = SwiftSoupArticleExtractor(),
+        extractor: any ArticleExtractor = SwiftSoupArticleExtractor(),
         timeout: TimeInterval = 15.0
     ) {
         self.session = session
@@ -75,16 +75,16 @@ public actor NativeReader: Sendable {
                 return nil
             }
             let html = String(data: data, encoding: .utf8) ?? String(decoding: data, as: UTF8.self)
-            guard let extracted = extractor.extract(html: html, url: url) else {
+            guard let extracted = extractor.extractArticle(from: html, url: url) else {
                 return nil
             }
             return WebDocument(
                 url: url,
                 title: extracted.title,
                 text: extracted.text,
-                markdown: extracted.markdown,
+                markdown: extracted.text,
                 publishedAt: extracted.publishedAt,
-                metadata: extracted.metadata
+                metadata: [:]
             )
         } catch {
             return nil

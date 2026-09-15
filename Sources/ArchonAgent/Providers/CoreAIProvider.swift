@@ -55,6 +55,7 @@ public enum CoreAIProviderError: Error, LocalizedError, Sendable, Equatable {
     case insufficientMemory(predictedPeakBytes: UInt64, availableBudgetBytes: UInt64)
     case textGenerationAdapterRequired
     case toolCallingUnsupported
+    case invalidOptions(String)
 
     public var errorDescription: String? {
         switch self {
@@ -82,6 +83,8 @@ public enum CoreAIProviderError: Error, LocalizedError, Sendable, Equatable {
             return "Core AI exposes tensor functions, not a universal text-generation contract; inject a model-specific tokenizer and text-generation adapter."
         case .toolCallingUnsupported:
             return "Dynamic Archon tool definitions cannot be executed without a concrete Core AI tool adapter."
+        case .invalidOptions(let reason):
+            return "Core AI generation options are invalid: \(reason)"
         }
     }
 }
@@ -245,6 +248,28 @@ public final class CoreAIProvider: LLMProvider, @unchecked Sendable {
         await modelRuntime.unload(source: modelSource)
     }
 
+    /// Validates request shape before any mock lookup, delay, or adapter call.
+    private func validatedPromptText(
+        prompt: [ChatMessage],
+        tools: [ToolDefinition],
+        options: GenerationOptions
+    ) throws -> String {
+        guard !LocalRequestValidation.isEffectivelyEmpty(prompt) else {
+            throw CoreAIProviderError.emptyPrompt
+        }
+        if let problem = LocalRequestValidation.optionsProblem(options) {
+            throw CoreAIProviderError.invalidOptions(problem)
+        }
+        guard tools.isEmpty || textGenerationAdapter != nil else {
+            throw CoreAIProviderError.toolCallingUnsupported
+        }
+        let estimatedTokens = LocalRequestValidation.estimatedTokenCount(for: prompt)
+        guard estimatedTokens <= capabilities.maxContextTokens else {
+            throw CoreAIProviderError.contextWindowExceeded(estimatedTokens, capabilities.maxContextTokens)
+        }
+        return prompt.map(\.content).joined(separator: "\n")
+    }
+
     private func validateMemoryBudget() throws {
         guard let predictedPeakMemoryBytes, predictedPeakMemoryBytes > 0 else {
             throw CoreAIProviderError.memoryEstimateUnavailable
@@ -263,15 +288,7 @@ public final class CoreAIProvider: LLMProvider, @unchecked Sendable {
         tools: [ToolDefinition],
         options: GenerationOptions
     ) async throws -> ModelResponse {
-        guard !prompt.isEmpty else {
-            throw CoreAIProviderError.emptyPrompt
-        }
-
-        let fullPromptText = prompt.map(\.content).joined(separator: "\n")
-
-        guard tools.isEmpty || textGenerationAdapter != nil else {
-            throw CoreAIProviderError.toolCallingUnsupported
-        }
+        let fullPromptText = try validatedPromptText(prompt: prompt, tools: tools, options: options)
 
         if let response = mockResponses.response(for: fullPromptText, caseSensitive: true) {
             return ModelResponse(
@@ -305,6 +322,13 @@ public final class CoreAIProvider: LLMProvider, @unchecked Sendable {
         options: GenerationOptions
     ) -> AsyncThrowingStream<ModelResponseChunk, Error> {
         if let textGenerationAdapter {
+            do {
+                _ = try validatedPromptText(prompt: prompt, tools: tools, options: options)
+            } catch {
+                return AsyncThrowingStream { continuation in
+                    continuation.finish(throwing: error)
+                }
+            }
             return textGenerationAdapter.stream(
                 source: modelSource,
                 computeUnit: computeUnit,

@@ -133,6 +133,33 @@ public enum ComputerUseSessionState: String, Codable, Sendable {
     case stopped
 }
 
+/// Deterministic fail-closed bounds for the semantic controller.
+public struct ComputerUseExecutionLimits: Codable, Equatable, Sendable {
+    public let maximumActionsPerSession: Int
+    public let maximumActionIDLength: Int
+    public let maximumElementsPerSnapshot: Int
+
+    public init(
+        maximumActionsPerSession: Int = 100,
+        maximumActionIDLength: Int = 128,
+        maximumElementsPerSnapshot: Int = 1_000
+    ) {
+        self.maximumActionsPerSession = max(maximumActionsPerSession, 1)
+        self.maximumActionIDLength = max(maximumActionIDLength, 1)
+        self.maximumElementsPerSnapshot = max(maximumElementsPerSnapshot, 1)
+    }
+
+    public static let `default` = ComputerUseExecutionLimits()
+
+    /// Fail-closed action-ID validation: non-empty, bounded length, and drawn
+    /// from an explicit allowlist so IDs cannot smuggle paths or expressions.
+    public func isValidActionID(_ id: String) -> Bool {
+        guard !id.isEmpty, id.utf8.count <= maximumActionIDLength else { return false }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-_"))
+        return id.unicodeScalars.allSatisfy { allowed.contains($0) }
+    }
+}
+
 public enum ComputerUseError: Error, LocalizedError, Equatable, Sendable {
     case actionNotFound(String)
     case permissionDenied(String)
@@ -141,6 +168,7 @@ public enum ComputerUseError: Error, LocalizedError, Equatable, Sendable {
     case staleObservation(String)
     case verificationFailed(String)
     case actionCancelled(String)
+    case limitsExceeded(String)
     case stopped
 
     public var errorDescription: String? {
@@ -152,6 +180,7 @@ public enum ComputerUseError: Error, LocalizedError, Equatable, Sendable {
         case .staleObservation(let id): "Computer-use observation became stale before action execution: \(id)"
         case .verificationFailed(let id): "Computer-use verification failed: \(id)"
         case .actionCancelled(let id): "Computer-use action was cancelled: \(id)"
+        case .limitsExceeded(let id): "Computer-use execution limit exceeded: \(id)"
         case .stopped: "Computer-use execution was stopped."
         }
     }
@@ -168,19 +197,33 @@ public actor ComputerUseController {
     public private(set) var lastSnapshot: SemanticSnapshot?
     public private(set) var state: ComputerUseSessionState = .idle
 
+    private let limits: ComputerUseExecutionLimits
+    private var executedActionCount = 0
+
     public init(
         observationProvider: (any ComputerUseObservationProvider)? = nil,
         permissionPolicy: any ComputerUsePermissionPolicy = ReadOnlyComputerUsePolicy(),
-        auditSink: any ArchonAuditSink = NoOpArchonAuditSink()
+        auditSink: any ArchonAuditSink = NoOpArchonAuditSink(),
+        limits: ComputerUseExecutionLimits = .default
     ) {
         self.observationProvider = observationProvider
         self.permissionPolicy = permissionPolicy
         self.auditSink = auditSink
+        self.limits = limits
     }
 
-    public func register(_ action: SemanticAction) {
+    /// Registers a semantic action. Fail closed: invalid IDs are refused and
+    /// report false so untrusted registrations cannot enter the registry.
+    @discardableResult
+    public func register(_ action: SemanticAction) -> Bool {
+        guard limits.isValidActionID(action.id) else { return false }
         actions[action.id] = action
+        return true
     }
+
+    public func isRegistered(id: String) -> Bool { actions[id] != nil }
+
+    public var executionLimits: ComputerUseExecutionLimits { limits }
 
     public func removeAction(id: String) {
         actions.removeValue(forKey: id)
@@ -202,6 +245,9 @@ public actor ComputerUseController {
         state = .observing
         do {
             let snapshot = try await observationProvider.captureSnapshot()
+            guard snapshot.elements.count <= limits.maximumElementsPerSnapshot else {
+                throw ComputerUseError.limitsExceeded("snapshot.\(snapshot.screenID)")
+            }
             lastSnapshot = snapshot
             if state == .observing { state = .idle }
             return snapshot
@@ -212,6 +258,10 @@ public actor ComputerUseController {
     }
 
     public func execute(actionID: String) async throws -> SemanticActionResult {
+        guard limits.isValidActionID(actionID) else { throw ComputerUseError.limitsExceeded(actionID) }
+        guard executedActionCount < limits.maximumActionsPerSession else {
+            throw ComputerUseError.limitsExceeded(actionID)
+        }
         guard let action = actions[actionID] else { throw ComputerUseError.actionNotFound(actionID) }
         guard let approval = await permissionPolicy.approval(for: action.risk, action: action), approval.isValid() else {
             await auditSink.record(ArchonAuditEvent(
@@ -289,6 +339,7 @@ public actor ComputerUseController {
         guard approval.isValid() else {
             throw ComputerUseError.approvalRequired(actionID)
         }
+        executedActionCount += 1
         await auditSink.record(ArchonAuditEvent(
             category: "computer-use",
             action: actionID,

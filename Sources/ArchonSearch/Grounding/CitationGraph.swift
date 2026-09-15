@@ -76,15 +76,23 @@ public struct CitationGraph: Sendable {
     }
 
     /// Verifies that every parsed citation exists in the retrieved source set.
+    ///
+    /// Fail-closed: a passage-qualified reference (`[S1/P9]`) whose passage was
+    /// never retrieved is a hallucination even when the source exists.
     public func verify(citations: [CitationReference]) -> (valid: [CitationReference], hallucinations: [CitationReference]) {
         var valid: [CitationReference] = []
         var hallucinations: [CitationReference] = []
         for citation in citations {
-            if indexedSources[citation.sourceIndex] != nil {
-                valid.append(citation)
-            } else {
+            guard indexedSources[citation.sourceIndex] != nil else {
                 hallucinations.append(citation)
+                continue
             }
+            if let passageIndex = citation.passageIndex,
+               passageMap["S\(citation.sourceIndex)/P\(passageIndex)"] == nil {
+                hallucinations.append(citation)
+                continue
+            }
+            valid.append(citation)
         }
         return (valid, hallucinations)
     }

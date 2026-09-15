@@ -23,6 +23,9 @@ public final class ModelLibraryViewModel: ObservableObject {
     @Published public private(set) var progress: [String: Double] = [:]
     @Published public private(set) var state: ModelLibraryPresentationState = .idle
     @Published public private(set) var lastError: String?
+    /// Redacted error safe for SwiftUI surfaces. Never contains file paths,
+    /// URLs, or credential-adjacent values; `lastError` keeps the detail.
+    @Published public private(set) var userVisibleError: String?
 
     public let library: ModelLibrary
     public let catalog: (any ModelCatalogProvider)?
@@ -58,9 +61,11 @@ public final class ModelLibraryViewModel: ObservableObject {
         do {
             models = try await library.installedMLXModels()
             lastError = nil
+            userVisibleError = nil
             state = .loaded
         } catch {
             lastError = error.localizedDescription
+            userVisibleError = Self.redactedMessage(for: error)
             state = .failed(error.localizedDescription)
         }
     }
@@ -71,17 +76,42 @@ public final class ModelLibraryViewModel: ObservableObject {
             let candidates = try await library.checkForUpdates(using: catalog)
             updates = Dictionary(uniqueKeysWithValues: candidates.map { ($0.installedModelID, $0) })
             lastError = nil
+            userVisibleError = nil
             state = .loaded
         } catch {
             lastError = error.localizedDescription
+            userVisibleError = Self.redactedMessage(for: error)
             state = Self.isNetworkError(error) ? .offline : .failed(error.localizedDescription)
         }
+    }
+
+    /// Records deterministic download progress clamped to 0...1. Out-of-range
+    /// values from transfer callbacks fail closed to the nearest bound.
+    public func recordProgress(variantID: String, value: Double) {
+        progress[variantID] = min(max(value, 0), 1)
+    }
+
+    /// Redacted, user-safe error message. Strips file paths, URLs, and
+    /// credential-adjacent values; fails closed to a generic message.
+    public static func redactedMessage(for error: Error) -> String {
+        if isNetworkError(error) {
+            return "The model catalog is unreachable. Check the connection and try again."
+        }
+        let raw = error.localizedDescription
+        var redacted = raw
+        redacted = redacted.replacingOccurrences(of: #"(?i)[a-z][a-z0-9+.-]*://\S+"#, with: "<address>", options: .regularExpression)
+        redacted = redacted.replacingOccurrences(of: #"/[^\s\"']+"#, with: "<path>", options: .regularExpression)
+        redacted = redacted.replacingOccurrences(of: #"(?i)(token|secret|password|credential|authorization|api[-_ ]?key|cookie)[^\n]{0,40}"#, with: "$1 <redacted>", options: .regularExpression)
+        let trimmed = redacted.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "The model library operation failed." }
+        return String(trimmed.prefix(300))
     }
 
     public func download(_ request: ModelDownloadRequest) async {
         guard request.variant.runtime == .mlx, request.variant.format == .mlx else {
             let message = "Only MLX model variants can be downloaded through the user-facing model library."
             lastError = message
+            userVisibleError = message
             state = .failed(message)
             return
         }
@@ -90,12 +120,13 @@ public final class ModelLibraryViewModel: ObservableObject {
             for try await event in events {
                 switch event.state {
                 case .downloading(let value, _, _):
-                    progress[event.variantID] = value
+                    recordProgress(variantID: event.variantID, value: value)
                 case .ready:
                     progress.removeValue(forKey: event.variantID)
                     await refresh()
                 case .failed(let message):
                     lastError = message
+                    userVisibleError = message
                     state = .failed(message)
                 case .cancelled:
                     progress.removeValue(forKey: event.variantID)
@@ -107,6 +138,7 @@ public final class ModelLibraryViewModel: ObservableObject {
             progress.removeValue(forKey: request.variant.id)
         } catch {
             lastError = error.localizedDescription
+            userVisibleError = Self.redactedMessage(for: error)
             state = Self.isNetworkError(error) ? .offline : .failed(error.localizedDescription)
         }
     }
@@ -117,6 +149,7 @@ public final class ModelLibraryViewModel: ObservableObject {
             await refresh()
         } catch {
             lastError = error.localizedDescription
+            userVisibleError = Self.redactedMessage(for: error)
             state = .failed(error.localizedDescription)
         }
     }

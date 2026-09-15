@@ -56,6 +56,28 @@ struct ArchonCoreCoverageTests {
         #expect(ArchonRedactor.redact([:]).isEmpty)
     }
 
+    @Test("Redactor covers spelling variants and keeps near-miss keys visible")
+    func redactorSpellingVariants() {
+        let sensitive = [
+            "api_key": "a", "API_KEY": "b", "Authorization-Bearer": "c",
+            "bearerToken": "d", "private_key": "e", "privateKey": "f",
+            "passphrase": "g", "access_key": "h", "refresh_token": "i",
+            "id_token": "j", "userPasswd": "k",
+        ]
+        let out = ArchonRedactor.redact(sensitive)
+        for key in sensitive.keys {
+            #expect(out[key] == "<redacted>", "should redact \(key)")
+        }
+        // Near-miss benign keys must stay visible: "author" must not match
+        // an auth fragment, and request/session identifiers are not secrets.
+        let benign = ArchonRedactor.redact([
+            "author": "niti", "request-id": "1", "session-id": "s1", "provider": "local",
+        ])
+        #expect(benign == [
+            "author": "niti", "request-id": "1", "session-id": "s1", "provider": "local",
+        ])
+    }
+
     @Test("Audit event redacts on init and preserves identity fields")
     func auditEventInit() {
         let id = UUID()

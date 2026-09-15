@@ -39,13 +39,17 @@ public final class SandboxURLSchemeHandler: NSObject, WKURLSchemeHandler, @unche
             return
         }
         
-        // Extract relative path from sandbox://app/index.html or sandbox://index.html
-        var path = url.path
-        if path.hasPrefix("/") {
-            path = String(path.dropFirst())
-        }
-        if path.isEmpty {
-            path = currentWorkspace.entryPointPath
+        // Fail closed: only sandbox://app/* (or bare sandbox://) paths that
+        // normalize to a workspace-relative file are served. Traversal,
+        // absolute paths, unknown hosts/schemes, and overlong input are 404.
+        guard let path = SandboxRequestGate.workspacePath(
+            scheme: url.scheme,
+            host: url.host,
+            path: url.path,
+            entryPointPath: currentWorkspace.entryPointPath
+        ) else {
+            urlSchemeTask.didFailWithError(NSError(domain: "SandboxURLSchemeHandler", code: 403, userInfo: [NSLocalizedDescriptionKey: "Request denied by the sandbox isolation boundary."]))
+            return
         }
         
         // Check for virtual file in workspace

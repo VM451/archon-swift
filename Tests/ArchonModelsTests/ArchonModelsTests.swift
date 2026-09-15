@@ -2347,6 +2347,140 @@ struct ArchonModelsTests {
         #expect(updates[0].variant?.id == variant.id)
     }
 
+    @Test("Update check pages past popular entries to find the installed repository")
+    func reportsUpdateBeyondFirstCatalogPage() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("archon-update-paged-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let artifact = root.appendingPathComponent("model.mlx")
+        try Data("model".utf8).write(to: artifact)
+
+        let manifest = ArchonModelManifest(
+            modelID: "mlx/example",
+            modelName: "Example MLX",
+            sourceRepository: "example/repository",
+            sourceRevision: "old-revision",
+            runtime: .mlx,
+            format: .mlx,
+            modelSizeBytes: 5
+        )
+        let library = ModelLibrary(rootURL: root.appendingPathComponent("library"))
+        _ = try await library.importArtifact(at: artifact, manifest: manifest)
+
+        func mlxVariant(repository: String, id: String) -> ModelVariant {
+            ModelVariant(
+                id: id,
+                name: "model.mlx",
+                modelID: repository,
+                source: .huggingFace,
+                format: .mlx,
+                runtime: .mlx
+            )
+        }
+        // Fillers share the query substring so the installed repository sorts
+        // behind a full first page of unrelated entries.
+        var models: [ModelDescriptor] = (0..<60).map { index in
+            let id = "example/repository-filler-\(index)"
+            return ModelDescriptor(
+                id: id,
+                name: "Filler \(index)",
+                publisher: "Example",
+                source: .huggingFace,
+                revision: "filler-revision",
+                variants: [mlxVariant(repository: id, id: "\(id)#mlx")]
+            )
+        }
+        models.append(ModelDescriptor(
+            id: "example/repository",
+            name: "Example MLX",
+            publisher: "Example",
+            source: .huggingFace,
+            revision: "new-revision",
+            variants: [mlxVariant(repository: "example/repository", id: "example/repository#mlx")]
+        ))
+        let catalog = MLXModelCatalog(provider: StaticModelCatalog(models: models))
+
+        let updates = try await library.checkForUpdates(using: catalog)
+
+        #expect(updates.count == 1)
+        #expect(updates[0].currentRevision == "old-revision")
+        #expect(updates[0].availableRevision == "new-revision")
+        #expect(updates[0].variant?.modelID == "example/repository")
+    }
+
+    @Test("Update check reports no update when the repository never appears")
+    func reportsNoUpdateForAbsentRepository() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("archon-update-absent-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let artifact = root.appendingPathComponent("model.mlx")
+        try Data("model".utf8).write(to: artifact)
+
+        let manifest = ArchonModelManifest(
+            modelID: "mlx/example",
+            modelName: "Example MLX",
+            sourceRepository: "example/repository",
+            sourceRevision: "old-revision",
+            runtime: .mlx,
+            format: .mlx,
+            modelSizeBytes: 5
+        )
+        let library = ModelLibrary(rootURL: root.appendingPathComponent("library"))
+        _ = try await library.importArtifact(at: artifact, manifest: manifest)
+
+        let fillers: [ModelDescriptor] = (0..<60).map { index in
+            ModelDescriptor(
+                id: "example/repository-filler-\(index)",
+                name: "Filler \(index)",
+                publisher: "Example",
+                source: .huggingFace,
+                revision: "filler-revision"
+            )
+        }
+        let updates = try await library.checkForUpdates(using: StaticModelCatalog(models: fillers))
+
+        #expect(updates.isEmpty)
+    }
+
+    @Test("Update check ignores empty catalog revisions instead of inventing one")
+    func ignoresEmptyCatalogRevision() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("archon-update-empty-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let artifact = root.appendingPathComponent("model.mlx")
+        try Data("model".utf8).write(to: artifact)
+
+        let manifest = ArchonModelManifest(
+            modelID: "mlx/example",
+            modelName: "Example MLX",
+            sourceRepository: "example/repository",
+            sourceRevision: "old-revision",
+            runtime: .mlx,
+            format: .mlx,
+            modelSizeBytes: 5
+        )
+        let library = ModelLibrary(rootURL: root.appendingPathComponent("library"))
+        _ = try await library.importArtifact(at: artifact, manifest: manifest)
+
+        let catalog = StaticModelCatalog(models: [ModelDescriptor(
+            id: "example/repository",
+            name: "Example MLX",
+            publisher: "Example",
+            source: .huggingFace,
+            revision: "",
+            variants: [ModelVariant(
+                id: "example/repository#mlx",
+                name: "model.mlx",
+                modelID: "example/repository",
+                source: .huggingFace,
+                format: .mlx,
+                runtime: .mlx
+            )]
+        )])
+
+        #expect(try await library.checkForUpdates(using: catalog).isEmpty)
+    }
+
     @Test("Model update replaces the selected installation when the catalog variant ID changes")
     func updateUsesExistingInstallationIdentity() async throws {
         let root = FileManager.default.temporaryDirectory
