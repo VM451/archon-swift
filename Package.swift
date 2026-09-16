@@ -102,6 +102,7 @@ let package = Package(
             name: "ArchonMemory",
             dependencies: [
                 "ArchonCore",
+                "ArchonContext",
                 .product(name: "GRDB", package: "GRDB.swift")
             ],
             path: "Sources/ArchonMemory",
@@ -192,13 +193,16 @@ let package = Package(
         ),
         .testTarget(
             name: "ArchonConnectTests",
-            dependencies: ["ArchonConnect"],
+            dependencies: [
+                "ArchonConnect",
+                .product(name: "MCP", package: "swift-sdk")
+            ],
             path: "Tests/ArchonConnectTests",
             swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]
         ),
         .testTarget(
             name: "ArchonComputerUseTests",
-            dependencies: ["ArchonComputerUse"],
+            dependencies: ["ArchonComputerUse", "ArchonCore"],
             path: "Tests/ArchonComputerUseTests",
             swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]
         ),
@@ -214,7 +218,7 @@ let package = Package(
         ),
         .testTarget(
             name: "ArchonMemoryTests",
-            dependencies: ["ArchonMemory"],
+            dependencies: ["ArchonMemory", "ArchonContext"],
             path: "Tests/ArchonMemoryTests",
             swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]
         ),

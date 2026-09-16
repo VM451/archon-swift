@@ -80,4 +80,28 @@ struct ArticleExtractionTests {
         let html = "<html><head><title>Blank</title></head><body></body></html>"
         #expect(extractor.extractArticle(from: html, url: url) == nil)
     }
+
+    @Test("Extractor recovers text from malformed markup")
+    func recoversMalformedMarkup() throws {
+        let html = "<html><body><article><p>Unclosed paragraph<p>Second <b>bold oops</article>trailing"
+        let article = try #require(extractor.extractArticle(from: html, url: url))
+        #expect(article.text.contains("Unclosed paragraph"))
+        #expect(article.text.contains("bold oops"))
+    }
+
+    @Test("Extractor drops in-article promo but keeps genuine paragraphs")
+    func dropsNestedPromo() throws {
+        let html = """
+        <html><head><title>Nested</title></head><body><article><h1>Head</h1>
+        <p>Genuine opening paragraph with real reporting content here.</p>
+        <div class="promo">Sponsored: miracle pills cure everything today</div>
+        <p>Genuine closing paragraph with further real reporting content.</p>
+        <div id="comments"><p>User comment one here</p><p>User comment two here</p></div>
+        </article></body></html>
+        """
+        let article = try #require(extractor.extractArticle(from: html, url: url))
+        #expect(!article.text.contains("miracle pills"))
+        #expect(article.text.contains("Genuine opening"))
+        #expect(article.text.contains("Genuine closing"))
+    }
 }

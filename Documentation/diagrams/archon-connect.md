@@ -17,8 +17,11 @@ flowchart TD
     Tools --> Exec[Tool execution with progress + cancellation]
     Exec --> Out[Structured output + typed errors]
     Disc[Disconnect] --> Cancel[Cancel active SDK contexts + notify]
+    Srv[Server-initiated roots / sampling / elicitation] --> Host[Host closures via MCPHostedCapabilities]
+    Host --> Out
 ```
 
 Endpoint policy, auth/header ownership, lifecycle, and error boundaries
 remain Archon's. The custom transport stays until full conformance and
-production-server lifecycle evidence close.
+production-server lifecycle evidence close. Hosted capabilities install
+before `connect()` and advertise exactly what the host implements.

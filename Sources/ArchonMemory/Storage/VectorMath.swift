@@ -23,6 +23,65 @@ public enum VectorMath: Sendable {
         return similarity.isFinite ? min(max(similarity, -1), 1) : 0
     }
 
+    /// Computes cosine similarities between one query and many rows with two
+    /// matrix multiplies instead of one vDSP triple per row. Rows whose
+    /// length differs from the query score exactly 0.0, matching the scalar
+    /// guard; scores may differ from `cosineSimilarity` by rounding only.
+    public static func batchCosineSimilarities(query: [Float], rows: [[Float]]) -> [Float] {
+        var result = [Float](repeating: 0, count: rows.count)
+        let dimensions = query.count
+        guard dimensions > 0, !rows.isEmpty else { return result }
+
+        var flat: [Float] = []
+        flat.reserveCapacity(rows.count * dimensions)
+        var positions: [Int] = []
+        for (index, row) in rows.enumerated() where row.count == dimensions {
+            flat.append(contentsOf: row)
+            positions.append(index)
+        }
+        guard !positions.isEmpty else { return result }
+
+        let count = positions.count
+        var dots = [Float](repeating: 0, count: count)
+        guard flat.withUnsafeBufferPointer({ flatPointer in
+            query.withUnsafeBufferPointer { queryPointer in
+                dots.withUnsafeMutableBufferPointer { dotPointer in
+                    guard let a = flatPointer.baseAddress,
+                          let b = queryPointer.baseAddress,
+                          let c = dotPointer.baseAddress else { return false }
+                    vDSP_mmul(a, 1, b, 1, c, 1, vDSP_Length(count), 1, vDSP_Length(dimensions))
+                    return true
+                }
+            }
+        }) else { return result }
+
+        var squares = [Float](repeating: 0, count: flat.count)
+        vDSP_vsq(flat, 1, &squares, 1, vDSP_Length(flat.count))
+        let ones = [Float](repeating: 1, count: dimensions)
+        var rowNormsSquared = [Float](repeating: 0, count: count)
+        squares.withUnsafeBufferPointer { squarePointer in
+            ones.withUnsafeBufferPointer { onePointer in
+                rowNormsSquared.withUnsafeMutableBufferPointer { normPointer in
+                    guard let a = squarePointer.baseAddress,
+                          let b = onePointer.baseAddress,
+                          let c = normPointer.baseAddress else { return }
+                    vDSP_mmul(a, 1, b, 1, c, 1, vDSP_Length(count), 1, vDSP_Length(dimensions))
+                }
+            }
+        }
+
+        var queryNormSquared: Float = 0
+        vDSP_svesq(query, 1, &queryNormSquared, vDSP_Length(dimensions))
+        let queryNorm = sqrt(queryNormSquared)
+        for (position, index) in positions.enumerated() {
+            let denominator = queryNorm * sqrt(rowNormsSquared[position])
+            guard denominator.isFinite, denominator > 0 else { continue }
+            let similarity = dots[position] / denominator
+            result[index] = similarity.isFinite ? min(max(similarity, -1), 1) : 0
+        }
+        return result
+    }
+
     /// Computes Euclidean distance between two float vectors using Accelerate vDSP.
     public static func euclideanDistance(_ a: [Float], _ b: [Float]) -> Float {
         guard a.count == b.count, !a.isEmpty else { return Float.greatestFiniteMagnitude }

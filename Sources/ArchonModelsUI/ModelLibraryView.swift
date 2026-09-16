@@ -37,6 +37,7 @@ public struct ModelLibraryView: View {
         Group {
             if models.isEmpty, !isRefreshing {
                 ContentUnavailableView("No Installed MLX Models", systemImage: "shippingbox", description: Text("Download or import a runnable MLX model to see it here."))
+                    .accessibilityIdentifier("archon.models.library.empty")
             } else {
                 List {
                     ForEach(models) { model in
@@ -65,6 +66,7 @@ public struct ModelLibraryView: View {
                                             update(candidate)
                                         }
                                         .disabled(updatingIDs.contains(model.id) || candidate.variant == nil)
+                                        .accessibilityIdentifier("archon.models.library.update.\(model.id)")
                                     }
                                 }
                                 if updates[model.id] != nil {
@@ -92,6 +94,7 @@ public struct ModelLibraryView: View {
                         }
                     }
                 }
+                .accessibilityIdentifier("archon.models.library.list")
             }
         }
         .navigationTitle("MLX Model Library")
@@ -101,12 +104,14 @@ public struct ModelLibraryView: View {
                     isImporting = true
                 }
                 .disabled(isRefreshing)
+                .accessibilityIdentifier("archon.models.library.import")
             }
             ToolbarItem(placement: .primaryAction) {
                 Button("Refresh", systemImage: "arrow.clockwise") {
                     Task { await refresh() }
                 }
                 .disabled(isRefreshing)
+                .accessibilityIdentifier("archon.models.library.refresh")
             }
             if let catalog {
                 ToolbarItem {
@@ -114,6 +119,7 @@ public struct ModelLibraryView: View {
                         Task { await checkForUpdates(using: catalog) }
                     }
                     .disabled(isCheckingUpdates || isRefreshing)
+                    .accessibilityIdentifier("archon.models.library.checkUpdates")
                 }
             }
         }
@@ -345,6 +351,7 @@ public struct ModelBrowserView: View {
                 Section {
                     ProgressView("Loading MLX models…")
                         .frame(maxWidth: .infinity, alignment: .center)
+                        .accessibilityIdentifier("archon.models.browser.loading")
                 }
             }
 
@@ -355,6 +362,7 @@ public struct ModelBrowserView: View {
                         systemImage: "shippingbox",
                         description: Text("Try changing the search or filters.")
                     )
+                    .accessibilityIdentifier("archon.models.browser.empty")
                 }
             }
 
@@ -403,15 +411,18 @@ public struct ModelBrowserView: View {
                     if isLoadingMore {
                         ProgressView("Loading more MLX models…")
                             .frame(maxWidth: .infinity, alignment: .center)
+                            .accessibilityIdentifier("archon.models.browser.loadingMore")
                     } else {
                         Button("Load more MLX models", systemImage: "arrow.down.circle") {
                             requestNextPage()
                         }
                         .frame(maxWidth: .infinity, alignment: .center)
+                        .accessibilityIdentifier("archon.models.browser.loadMore")
                     }
                 }
             }
         }
+        .accessibilityIdentifier("archon.models.browser.list")
         #if os(macOS)
         .searchable(text: $query, prompt: "Search models")
         #else
@@ -474,6 +485,7 @@ public struct ModelBrowserView: View {
                     .textFieldStyle(.plain)
                     .font(.body)
                     .autocorrectionDisabled()
+                    .accessibilityIdentifier("archon.models.browser.search")
 
                 if !query.isEmpty {
                     Button {
@@ -538,11 +550,13 @@ public struct ModelBrowserView: View {
                 } label: {
                     Label("Reset Filters", systemImage: "arrow.counterclockwise")
                 }
+                .accessibilityIdentifier("archon.models.browser.resetFilters")
             }
         } label: {
             Image(systemName: hasActiveFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
         }
         .accessibilityLabel("Filter models")
+        .accessibilityIdentifier("archon.models.browser.filters")
     }
 
     private var hasActiveFilters: Bool {

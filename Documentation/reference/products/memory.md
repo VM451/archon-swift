@@ -23,6 +23,12 @@ controls whether deleted records may be queried. Durable records remain the
 source of truth; index adapters must follow the `VectorIndex` update/delete
 contract.
 
+Vector search scores through batched column-major blocks with a single-gemm
+fast path for uniform corpora (mixed dimensions fall back to scalar scoring
+without trapping). The benchmark gate holds steady p95 under 20 ms with
+Recall@10 at least 0.99 at 10k x 384; see
+[`Benchmarks/README.md`](../../../Benchmarks/README.md).
+
 `CompetitiveResearchSnapshot` is imported by a consuming app or CLI that owns
 web fetching, credentials, and source normalization. The package validates the
 snapshot, persists each insight/profile through the durable document store, and

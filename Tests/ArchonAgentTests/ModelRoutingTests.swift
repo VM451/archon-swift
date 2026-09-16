@@ -266,4 +266,125 @@ struct ModelRoutingTests {
 
         #expect(selection == .unavailable("No compatible local model satisfies the requested policy."))
     }
+
+    private func foundationModelsDevice() -> ArchonDeviceCapabilities {
+        ArchonDeviceCapabilities(
+            platform: .iOS,
+            osVersion: ArchonOSVersion(major: 27),
+            physicalMemoryBytes: 8_000_000_000,
+            availableMemoryBytes: 6_000_000_000,
+            processorCount: 6,
+            deviceArchitecture: "arm64",
+            supportsAppleFoundationModels: true,
+            supportsCoreAI: true
+        )
+    }
+
+    @Test("System-model fast path honors the full requirements contract")
+    func fastPathNegotiatesFullRequirements() {
+        let full = ModelCapabilityRequirements(
+            task: .textGeneration,
+            requiresStreaming: true,
+            requiresToolCalling: true,
+            requiresStructuredOutput: true
+        )
+        #expect(AgentModelRouter.select(
+            policy: ModelPolicy(privacy: .localOnly, requirements: full),
+            device: foundationModelsDevice()
+        ) == .appleFoundationModel)
+        #expect(AgentModelRouter.select(
+            policy: ModelPolicy(privacy: .appleOnly, requirements: full),
+            device: foundationModelsDevice()
+        ) == .appleFoundationModel)
+    }
+
+    @Test("Vision requirements skip the system model for a compatible installed variant")
+    func visionRequirementsSkipSystemModel() {
+        let variant = ModelVariant(
+            id: "vision-mlx",
+            name: "vision.mlx",
+            modelID: "example/vision",
+            source: .localImport,
+            format: .mlx,
+            runtime: .mlx,
+            sizeBytes: 100,
+            estimatedMemoryBytes: 100,
+            capabilities: ArchonModelCapabilities(
+                tasks: [.textGeneration, .vision],
+                supportsStreaming: true,
+                supportsToolCalling: true,
+                supportsStructuredOutput: true
+            )
+        )
+        let installed = InstalledModel(
+            id: variant.id,
+            directoryURL: .temporaryDirectory,
+            manifest: ArchonModelManifest(variant: variant, modelName: "Vision")
+        )
+        let selection = AgentModelRouter.select(
+            policy: ModelPolicy(
+                privacy: .preferLocal,
+                capability: .textGeneration,
+                requirements: ModelCapabilityRequirements(
+                    task: .vision,
+                    requiresStreaming: true
+                )
+            ),
+            device: foundationModelsDevice(),
+            installed: [installed]
+        )
+
+        guard case .installed(let selected) = selection else {
+            Issue.record("Expected the vision-capable installed variant, got \(selection).")
+            return
+        }
+        #expect(selected.id == "vision-mlx")
+    }
+
+    @Test("Apple-only policy fails closed when requirements exceed the system model")
+    func appleOnlyRejectsUnsatisfiedRequirements() {
+        let selection = AgentModelRouter.select(
+            policy: ModelPolicy(
+                privacy: .appleOnly,
+                capability: .textGeneration,
+                requirements: ModelCapabilityRequirements(task: .vision)
+            ),
+            device: foundationModelsDevice()
+        )
+        #expect(selection == .unavailable("Apple Foundation Models do not satisfy the requested capability requirements."))
+    }
+
+    @Test("Prefer-local names the host remote fallback; local-only does not")
+    func unavailableMessagesDistinguishRemoteFallback() {
+        let legacyDevice = ArchonDeviceCapabilities(
+            platform: .iOS,
+            osVersion: ArchonOSVersion(major: 27),
+            physicalMemoryBytes: 8_000_000_000,
+            availableMemoryBytes: 6_000_000_000,
+            processorCount: 6,
+            deviceArchitecture: "arm64",
+            supportsAppleFoundationModels: false,
+            supportsCoreAI: false
+        )
+        let preferLocal = AgentModelRouter.select(
+            policy: ModelPolicy(privacy: .preferLocal),
+            device: legacyDevice
+        )
+        let localOnly = AgentModelRouter.select(
+            policy: ModelPolicy(
+                privacy: .localOnly,
+                capability: .textGeneration,
+                requirements: ModelCapabilityRequirements(task: .vision)
+            ),
+            device: foundationModelsDevice()
+        )
+        // Prefer-local with no compatible local option stays honest about the
+        // host-owned remote path; local-only never suggests one.
+        #expect(preferLocal == .unavailable("No compatible local model is installed or catalogued; a remote provider may be selected by the host application."))
+        if case .unavailable(let reason) = localOnly {
+            #expect(!reason.lowercased().contains("remote"))
+        } else {
+            Issue.record("Expected local-only vision routing to be unavailable, got \(localOnly).")
+        }
+    }
 }

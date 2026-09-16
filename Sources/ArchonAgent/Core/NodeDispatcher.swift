@@ -11,6 +11,7 @@ public enum GraphError: Error, LocalizedError, Sendable, Equatable {
     case graphHalted(reason: String)
     case interrupted(message: String, threadId: String)
     case stateDeserializationFailed(String)
+    case staleCheckpoint(expected: String, latest: String)
     case zeroCloudViolation(String)
     case toolExecutionFailed(toolName: String, errorDescription: String)
 
@@ -34,6 +35,8 @@ public enum GraphError: Error, LocalizedError, Sendable, Equatable {
             return "Graph execution interrupted on thread '\(threadId)': \(message)"
         case .stateDeserializationFailed(let msg):
             return "Failed to serialize/deserialize agent state: \(msg)"
+        case .staleCheckpoint(let expected, let latest):
+            return "Resume checkpoint '\(expected)' is stale; the thread's latest checkpoint is '\(latest)'. Re-read history before resuming."
         case .zeroCloudViolation(let reason):
             return "ZeroCloudMode Violation: Network request blocked: \(reason)"
         case .toolExecutionFailed(let tool, let err):

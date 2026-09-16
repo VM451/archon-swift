@@ -27,6 +27,23 @@ qualification gate. Archon therefore keeps two questions separate:
 | Models and runtimes | Foundation Models/Core ML local Apple execution | 4.6 / 5 | Apple-native paths qualify; others qualify only by runtime | Reuse Apple APIs; adapt lifecycle and artifacts |
 | Protocols | MCP's interoperable tools, resources, and prompts | 4.3 / 5 | The SDK is local Swift; connected servers may be remote | Adapt the official SDK; retain Archon policy |
 
+## Evidence addendum (2026-09-16)
+
+Prose-only updates; scored tables below are unchanged.
+
+- Memory latency: `LocalVectorStore` scores through batched column-major
+  blocks and holds steady p95 `9.1 ms` with `Recall@10 = 1.000` at 10k x 384,
+  beating Wax 36605ff on the identical workload (12.9 ms, 6.4x slower
+  ingest). First package-vs-rival latency win recorded in
+  [`Benchmarks/README.md`](../../Benchmarks/README.md).
+- Proxima device proof: iPhone 16 holds `Recall@10 = 1.000` from
+  `efSearch=64` (`0.99 ms` p95) and beats USearch's recall-1.0 point 2.8x on
+  the same device and workload. Latency/recall device evidence exists;
+  persistence, recovery, migration, and memory ceilings are still open.
+- MCP hosted capabilities: `ArchonConnect` now serves roots, sampling, and
+  elicitation through host-owned closures over Streamable HTTP. The spec
+  remainder is stdio transport and server-side coverage.
+
 ## How to read the scores
 
 ### Capability scale
@@ -518,7 +535,7 @@ inspection, cloud demo, or package build into a replacement claim.
 
 | Priority | Work | Products | Exit evidence |
 | :---: | --- | --- | --- |
-| 1 | Complete memory adapter comparison | `ArchonMemory`, `ArchonMemoryProxima` | Recall, p95, memory ceiling, update/delete, recovery, migration, iOS device |
+| 1 | Complete memory adapter comparison | `ArchonMemory`, `ArchonMemoryProxima` | Recall, p95, memory ceiling, update/delete, recovery, migration, iOS device (recall/p95/iOS-device latency recorded 2026-09-16; ceiling, recovery, migration open) |
 | 2 | Complete graph recovery and side-effect tests | `ArchonAgent` | Crash/reopen, fork/replay, handoff, cancellation, idempotence |
 | 3 | Complete offline and citation workloads | `ArchonSearch` | Network denied local results, bounded crawl, dedupe, verifiable citations |
 | 4 | Threat-model local action boundaries | `ArchonSandbox`, `ArchonComputerUse` | CSP/path/quota/audit tests, stale-state and approval evidence |

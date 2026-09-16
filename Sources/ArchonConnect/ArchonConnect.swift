@@ -261,6 +261,12 @@ public protocol MCPTransport: Sendable {
     /// Installs the host-approved tool capability set. A transport must deny
     /// direct tool calls until this set is explicitly supplied.
     func setAuthorizedToolNames(_ names: Set<String>) async
+    /// Installs host-provided MCP client capabilities (roots, sampling,
+    /// elicitation). Call before `connect()` so the initialize handshake
+    /// advertises exactly what the host implements. Transports without a
+    /// server-to-client request channel keep the default no-op and never
+    /// advertise hosted capabilities.
+    func setHostedCapabilities(_ capabilities: MCPHostedCapabilities) async
 }
 
 public extension MCPTransport {
@@ -291,6 +297,10 @@ public extension MCPTransport {
     }
 
     func setAuthorizedToolNames(_ names: Set<String>) async {}
+
+    /// Default: hosted capabilities are ignored. Only transports with a
+    /// server-to-client request channel override this and advertise them.
+    func setHostedCapabilities(_ capabilities: MCPHostedCapabilities) async {}
 }
 
 public protocol MCPPermissionPolicy: Sendable {
@@ -984,6 +994,13 @@ public actor MCPClient {
             action: "disconnect",
             outcome: "completed"
         ))
+    }
+
+    /// Installs host-provided MCP client capabilities (roots, sampling,
+    /// elicitation) on the underlying transport. Call before `connect()` so
+    /// the initialize handshake advertises exactly what the host implements.
+    public func setHostedCapabilities(_ capabilities: MCPHostedCapabilities) async {
+        await transport.setHostedCapabilities(capabilities)
     }
 
     public func tools() -> [MCPTool] {

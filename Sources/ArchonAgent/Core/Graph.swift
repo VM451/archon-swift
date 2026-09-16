@@ -235,6 +235,81 @@ public final class Graph<State: AgentState>: Sendable {
             throw GraphError.graphHalted(reason: "No checkpoint found for thread '\(threadId)'.")
         }
 
+        return try await resumeStreamFromCheckpoint(
+            latest,
+            threadId: threadId,
+            inputs: inputs,
+            approval: approval
+        )
+    }
+
+    /// Resumes a thread only when `checkpointId` is still the thread's latest
+    /// checkpoint. A stale pin fails closed with `GraphError.staleCheckpoint`
+    /// instead of resuming from state the caller has not seen.
+    public func resumeStream(
+        threadId: String,
+        fromCheckpointId checkpointId: String,
+        with inputs: State? = nil,
+        approval: Bool = true
+    ) async throws -> AsyncThrowingStream<GraphEvent<State>, Error> {
+        guard let checkpointer = self.checkpointer else {
+            throw GraphError.graphHalted(reason: "Cannot resume graph without an active checkpointer.")
+        }
+
+        guard let latest = try await checkpointer.getLatest(threadId: threadId, as: State.self) else {
+            throw GraphError.graphHalted(reason: "No checkpoint found for thread '\(threadId)'.")
+        }
+
+        guard latest.checkpointId == checkpointId else {
+            throw GraphError.staleCheckpoint(expected: checkpointId, latest: latest.checkpointId)
+        }
+
+        return try await resumeStreamFromCheckpoint(
+            latest,
+            threadId: threadId,
+            inputs: inputs,
+            approval: approval
+        )
+    }
+
+    /// Resumes a thread pinned to `checkpointId`, collecting the final state.
+    public func resume(
+        threadId: String,
+        fromCheckpointId checkpointId: String,
+        with inputs: State? = nil,
+        approval: Bool = true
+    ) async throws -> State {
+        let stream = try await resumeStream(
+            threadId: threadId,
+            fromCheckpointId: checkpointId,
+            with: inputs,
+            approval: approval
+        )
+        var finalState: State?
+
+        for try await event in stream {
+            switch event {
+            case .completed(let state, _):
+                finalState = state
+            case .interrupted(let interrupt, _, _):
+                throw GraphError.interrupted(message: interrupt.message, threadId: threadId)
+            default:
+                break
+            }
+        }
+
+        guard let finalState else {
+            throw GraphError.graphHalted(reason: "Resumed graph ended without a completed state.")
+        }
+        return finalState
+    }
+
+    private func resumeStreamFromCheckpoint(
+        _ latest: TypedCheckpoint<State>,
+        threadId: String,
+        inputs: State?,
+        approval: Bool
+    ) async throws -> AsyncThrowingStream<GraphEvent<State>, Error> {
         guard approval else {
             throw GraphError.graphHalted(reason: "Approval was rejected; the interrupted graph was not resumed.")
         }

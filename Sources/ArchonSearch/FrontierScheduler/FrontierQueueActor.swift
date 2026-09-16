@@ -4,10 +4,16 @@ import ArchonCore
 
 @ModelActor
 public actor FrontierQueueActor {
-    private let robotsParser = RobotsParser()
+    private var robotsParser = RobotsParser()
     private var lastCrawlTimes = [String: Date]()
     private let defaultPolitenessDelay: TimeInterval = 1.0
-    
+
+    /// Replaces the robots.txt fetch session (robots cache resets). Hosts use
+    /// this to share session configuration; tests use it to inject fixtures.
+    public func setRobotsSession(_ session: URLSession?) {
+        robotsParser = RobotsParser(session: session)
+    }
+
     
 
     /// Enqueues new URLs to crawl if they haven't been crawled or queued yet.

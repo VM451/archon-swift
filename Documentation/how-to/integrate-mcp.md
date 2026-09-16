@@ -41,3 +41,30 @@ Use `streamTool` when the server supports notifications or progress. Keep the
 stream task cancellable, surface transport errors, and disconnect during host
 shutdown. Do not convert a disconnected or timed-out operation into a
 successful empty result.
+
+## Serve hosted capabilities
+
+When the server needs workspace roots, an LLM completion, or user input,
+provide them as host closures before connecting. Only the official-SDK
+transport serves server-initiated requests; unset capabilities are never
+advertised.
+
+```swift
+import ArchonConnect
+
+let client = MCPClient(transport: OfficialMCPTransport(endpoint: serverURL))
+await client.setHostedCapabilities(MCPHostedCapabilities(
+    roots: { [MCPHostRoot(uri: "file:///workspace", name: "Workspace")] },
+    sampling: { request in
+        try await hostComplete(request) // host-owned inference
+    },
+    elicitation: { request in
+        await hostPrompt(request) // host-owned UI; may decline/cancel
+    }
+))
+try await client.connect()
+```
+
+Sampling responses are text completions; elicitation content submits only on
+`.accept`. Keep inference, UI, and filesystem resolution in the app —
+Archon only translates the wire shape.

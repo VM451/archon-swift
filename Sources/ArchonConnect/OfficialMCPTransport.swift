@@ -2,6 +2,17 @@ import Foundation
 import MCP
 import ArchonCore
 
+extension MCP.Client {
+    /// Actor-isolated capability update. Swift forbids cross-actor property
+    /// mutation, so the adapter hops through this helper instead of assigning
+    /// `capabilities` directly. The SDK reads the live property during
+    /// initialize, so applying before `connect()` advertises exactly the
+    /// installed hosted capabilities.
+    func setArchonCapabilities(_ capabilities: Capabilities) {
+        self.capabilities = capabilities
+    }
+}
+
 /// Archon policy adapter over the official Model Context Protocol Swift SDK.
 ///
 /// The official SDK owns MCP wire types, protocol negotiation, and transport
@@ -17,7 +28,9 @@ public actor OfficialMCPTransport: MCPTransport {
     private let transport: MCP.HTTPClientTransport
     private var connected = false
     private var authorizedToolNames: Set<String> = []
+    private var hostedCapabilities = MCPHostedCapabilities()
     private var progressContinuations: [MCP.ProgressToken: AsyncThrowingStream<MCPStreamEvent, Error>.Continuation] = [:]
+    private var notificationContinuations: [UUID: AsyncThrowingStream<MCPStreamEvent, Error>.Continuation] = [:]
     private var activeRequestIDs: Set<MCP.ID> = []
 
     public init(
@@ -27,7 +40,8 @@ public actor OfficialMCPTransport: MCPTransport {
         streaming: Bool = true,
         requestTimeout: TimeInterval? = 60,
         clientName: String = "Archon",
-        clientVersion: String = "1.0"
+        clientVersion: String = "1.0",
+        authorizer: (any MCP.HTTPClientAuthorizer)? = nil
     ) {
         self.endpoint = endpoint
 
@@ -55,6 +69,7 @@ public actor OfficialMCPTransport: MCPTransport {
             endpoint: endpoint,
             configuration: sessionConfiguration,
             streaming: streaming,
+            authorizer: authorizer,
             requestModifier: requestModifier
         )
         self.client = MCP.Client(name: clientName, version: clientVersion)
@@ -62,15 +77,69 @@ public actor OfficialMCPTransport: MCPTransport {
 
     public func connect() async throws {
         do {
+            // Advertise hosted capabilities before the initialize handshake
+            // so the server negotiates against exactly what the host provides.
+            await applyHostedCapabilities()
             _ = try await client.connect(transport: transport)
             await client.onNotification(MCP.ProgressNotification.self) { [weak self] message in
                 guard let self else { return }
                 await self.route(progress: message.params)
             }
+            await client.onNotification(MCP.ToolListChangedNotification.self) { [weak self] _ in
+                guard let self else { return }
+                await self.broadcast(method: MCP.ToolListChangedNotification.name, params: nil)
+            }
+            await client.onNotification(MCP.ResourceListChangedNotification.self) { [weak self] _ in
+                guard let self else { return }
+                await self.broadcast(method: MCP.ResourceListChangedNotification.name, params: nil)
+            }
+            await client.onNotification(MCP.PromptListChangedNotification.self) { [weak self] _ in
+                guard let self else { return }
+                await self.broadcast(method: MCP.PromptListChangedNotification.name, params: nil)
+            }
+            await client.onNotification(MCP.ResourceUpdatedNotification.self) { [weak self] message in
+                guard let self else { return }
+                await self.broadcast(
+                    method: MCP.ResourceUpdatedNotification.name,
+                    params: .object(["uri": .string(message.params.uri)])
+                )
+            }
+            await client.onNotification(MCP.LogMessageNotification.self) { [weak self] message in
+                guard let self else { return }
+                var parameters: [String: JSONValue] = [
+                    "level": .string(message.params.level.rawValue),
+                    "data": Self.jsonValue(from: message.params.data)
+                ]
+                if let logger = message.params.logger {
+                    parameters["logger"] = .string(logger)
+                }
+                await self.broadcast(
+                    method: MCP.LogMessageNotification.name,
+                    params: .object(parameters)
+                )
+            }
             connected = true
         } catch {
             throw Self.mapped(error)
         }
+    }
+
+    /// Streams connection-level server notifications (list changes, resource
+    /// updates, log messages) for the lifetime of the connection. Progress
+    /// notifications stay scoped to their tool stream. The stream ends when
+    /// the consumer terminates it or the transport disconnects.
+    public func notificationStream() async -> AsyncThrowingStream<MCPStreamEvent, Error> {
+        let (stream, continuation) = AsyncThrowingStream<MCPStreamEvent, Error>.makeStream()
+        guard connected else {
+            continuation.finish(throwing: MCPTransportError.notConnected)
+            return stream
+        }
+        let id = UUID()
+        notificationContinuations[id] = continuation
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.removeNotificationContinuation(id) }
+        }
+        return stream
     }
 
     public func disconnect() async {
@@ -91,6 +160,10 @@ public actor OfficialMCPTransport: MCPTransport {
             continuation.finish(throwing: CancellationError())
         }
         progressContinuations.removeAll()
+        for continuation in notificationContinuations.values {
+            continuation.finish(throwing: CancellationError())
+        }
+        notificationContinuations.removeAll()
         await client.disconnect()
         connected = false
     }
@@ -294,6 +367,81 @@ public actor OfficialMCPTransport: MCPTransport {
         authorizedToolNames = names
     }
 
+    /// Installs host-provided MCP client capabilities. Handlers apply
+    /// immediately; capability advertisement takes effect on `connect()`
+    /// (including reconnects). Unlike tool grants, hosted capabilities persist
+    /// across `disconnect()`; pass `.init()` to clear them.
+    public func setHostedCapabilities(_ capabilities: MCPHostedCapabilities) async {
+        hostedCapabilities = capabilities
+        await applyHostedCapabilities()
+    }
+
+    private func applyHostedCapabilities() async {
+        if hostedCapabilities.roots != nil {
+            await client.withMethodHandler(MCP.ListRoots.self) { [weak self] _ in
+                guard let self else { throw MCPTransportError.notConnected }
+                return try await self.handleListRoots()
+            }
+        }
+        if hostedCapabilities.sampling != nil {
+            await client.withMethodHandler(MCP.CreateSamplingMessage.self) { [weak self] params in
+                guard let self else { throw MCPTransportError.notConnected }
+                return try await self.handleSampling(params)
+            }
+        }
+        if hostedCapabilities.elicitation != nil {
+            await client.withMethodHandler(MCP.CreateElicitation.self) { [weak self] params in
+                guard let self else { throw MCPTransportError.notConnected }
+                return try await self.handleElicitation(params)
+            }
+        }
+        await client.setArchonCapabilities(MCP.Client.Capabilities(
+            sampling: hostedCapabilities.sampling == nil ? nil : .init(),
+            elicitation: hostedCapabilities.elicitation == nil ? nil : .init(),
+            roots: hostedCapabilities.roots == nil ? nil : .init()
+        ))
+    }
+
+    func handleListRoots() async throws -> MCP.ListRoots.Result {
+        guard let roots = hostedCapabilities.roots else {
+            throw MCPTransportError.unsupported("roots/list")
+        }
+        let hosted = try await roots()
+        guard hosted.count <= MCPTransportLimits.maximumCollectionItems else {
+            throw MCPTransportError.collectionTooLarge(maximumItems: MCPTransportLimits.maximumCollectionItems)
+        }
+        return MCP.ListRoots.Result(roots: hosted.map { MCP.Root(uri: $0.uri, name: $0.name) })
+    }
+
+    func handleSampling(_ params: MCP.CreateSamplingMessage.Parameters) async throws -> MCP.CreateSamplingMessage.Result {
+        guard let sampling = hostedCapabilities.sampling else {
+            throw MCPTransportError.unsupported("sampling/createMessage")
+        }
+        let response = try await sampling(Self.samplingRequest(from: params))
+        return MCP.CreateSamplingMessage.Result(
+            model: response.model,
+            stopReason: response.stopReason.map(MCP.Sampling.StopReason.init(rawValue:)),
+            role: .assistant,
+            content: .single(.text(response.text))
+        )
+    }
+
+    func handleElicitation(_ params: MCP.CreateElicitation.Parameters) async throws -> MCP.CreateElicitation.Result {
+        guard let elicitation = hostedCapabilities.elicitation else {
+            throw MCPTransportError.unsupported("elicitation/create")
+        }
+        let response = try await elicitation(Self.elicitationRequest(from: params))
+        let action: MCP.CreateElicitation.Result.Action = switch response.action {
+        case .accept: .accept
+        case .decline: .decline
+        case .cancel: .cancel
+        }
+        return MCP.CreateElicitation.Result(
+            action: action,
+            content: response.action == .accept ? response.content?.mapValues(Self.mcpValue(from:)) : nil
+        )
+    }
+
     private func callToolWithRequestContext(
         name: String,
         arguments: [String: JSONValue],
@@ -352,6 +500,16 @@ public actor OfficialMCPTransport: MCPTransport {
 
     private func removeProgressContinuation(_ token: MCP.ProgressToken) {
         progressContinuations[token] = nil
+    }
+
+    private func broadcast(method: String, params: JSONValue?) {
+        for continuation in notificationContinuations.values {
+            continuation.yield(.notification(method: method, params: params))
+        }
+    }
+
+    private func removeNotificationContinuation(_ id: UUID) {
+        notificationContinuations[id] = nil
     }
 
     private nonisolated static func mapped(_ error: Error) -> Error {
@@ -548,5 +706,86 @@ public actor OfficialMCPTransport: MCPTransport {
         if let text = content.text { value["text"] = .string(text) }
         if let blob = content.blob { value["blob"] = .string(blob) }
         return .object(value)
+    }
+
+    private static func samplingRequest(from params: MCP.CreateSamplingMessage.Parameters) -> MCPSamplingRequest {
+        var modelHints: [String] = []
+        if let preferences = params.modelPreferences, let hints = preferences.hints {
+            modelHints = hints.compactMap(\.name)
+        }
+        return MCPSamplingRequest(
+            messages: params.messages.map { message in
+                MCPSamplingRequest.Message(
+                    role: message.role == .assistant ? .assistant : .user,
+                    content: message.content.asArray.map(Self.samplingContent(from:))
+                )
+            },
+            systemPrompt: params.systemPrompt,
+            maxTokens: params.maxTokens,
+            temperature: params.temperature,
+            stopSequences: params.stopSequences,
+            modelHints: modelHints,
+            includeContext: params.includeContext?.rawValue
+        )
+    }
+
+    private static func samplingContent(from block: MCP.Sampling.Message.Content.ContentBlock) -> MCPSamplingContent {
+        switch block {
+        case .text(let text):
+            .text(text)
+        case .image(let data, let mimeType):
+            .image(data: data, mimeType: mimeType)
+        case .audio(let data, let mimeType):
+            .audio(data: data, mimeType: mimeType)
+        case .toolUse(let use):
+            .toolUse(id: use.id, name: use.name, input: use.input.mapValues(Self.jsonValue(from:)))
+        case .toolResult(let result):
+            .toolResult(
+                toolUseId: result.toolUseId,
+                blocks: result.content.map(Self.samplingResultBlock(from:)),
+                structured: result.structuredContent?.mapValues(Self.jsonValue(from:)),
+                isError: result.isError ?? false
+            )
+        }
+    }
+
+    private static func samplingResultBlock(from block: MCP.Sampling.ToolResultContent.ContentBlock) -> MCPSamplingContent {
+        switch block {
+        case .text(let text):
+            .text(text)
+        case .image(let data, let mimeType):
+            .image(data: data, mimeType: mimeType)
+        case .audio(let data, let mimeType):
+            .audio(data: data, mimeType: mimeType)
+        case .resource(let resource, _, _):
+            .embeddedResource(
+                uri: resource.uri,
+                mimeType: resource.mimeType,
+                text: resource.text,
+                blob: resource.blob
+            )
+        case .resourceLink(let uri, let name, _, _, let mimeType, _):
+            .resourceLink(uri: uri, name: name, mimeType: mimeType)
+        }
+    }
+
+    private static func elicitationRequest(from params: MCP.CreateElicitation.Parameters) -> MCPElicitationRequest {
+        switch params {
+        case .form(let form):
+            MCPElicitationRequest(
+                message: form.message,
+                mode: form.mode?.rawValue,
+                kind: .form(
+                    properties: form.requestedSchema.properties.mapValues(Self.jsonValue(from:)),
+                    required: form.requestedSchema.required ?? []
+                )
+            )
+        case .url(let url):
+            MCPElicitationRequest(
+                message: url.message,
+                mode: url.mode.rawValue,
+                kind: .url(url: url.url, elicitationId: url.elicitationId)
+            )
+        }
     }
 }

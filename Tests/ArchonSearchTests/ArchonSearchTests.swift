@@ -137,7 +137,8 @@ struct FrontierQueueActorTests {
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: schema, configurations: [config])
         let actor = FrontierQueueActor(modelContainer: container)
-        
+        await actor.setRobotsSession(makeRobotsMockSession())
+
         let url1 = URL(string: "https://example.com/page1")!
         let url2 = URL(string: "https://example.com/page2")!
         

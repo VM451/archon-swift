@@ -127,4 +127,66 @@ struct VectorStoreTests {
         #expect(abs((recovered?.createdAt.timeIntervalSince1970 ?? 0) - item.createdAt.timeIntervalSince1970) < 0.001)
         #expect(abs((recovered?.updatedAt.timeIntervalSince1970 ?? 0) - item.updatedAt.timeIntervalSince1970) < 0.001)
     }
+
+    @Test("Search reflects saves, updates, deletes, and resets immediately")
+    func testSearchReflectsMutations() async throws {
+        let store = try LocalVectorStore(inMemory: true, alpha: 1, beta: 0)
+        let item = MemoryItem(memory: "Cache fact", vector: [1, 0, 0, 0], userId: "u1")
+        try await store.save(item: item)
+
+        let query = VectorMath.normalize([1, 0, 0, 0])
+        var results = try await store.search(query: nil, vector: query, limit: 10, filters: MemoryFilter())
+        #expect(results.map(\.item.id) == [item.id])
+
+        var updated = item
+        updated.vector = [0, 0, 0, 1]
+        try await store.save(item: updated)
+        results = try await store.search(query: nil, vector: query, limit: 10, filters: MemoryFilter())
+        #expect(results.isEmpty)
+
+        try await store.save(item: item)
+        results = try await store.search(query: nil, vector: query, limit: 10, filters: MemoryFilter())
+        #expect(results.map(\.item.id) == [item.id])
+
+        try await store.delete(id: item.id)
+        results = try await store.search(query: nil, vector: query, limit: 10, filters: MemoryFilter())
+        #expect(results.isEmpty)
+
+        try await store.save(item: item)
+        try await store.reset()
+        results = try await store.search(query: nil, vector: query, limit: 10, filters: MemoryFilter())
+        #expect(results.isEmpty)
+    }
+
+    @Test("Mixed embedding dimensions search without trapping and score the matching block")
+    func mixedDimensionsSearchSafely() async throws {
+        let store = try LocalVectorStore(inMemory: true, alpha: 1, beta: 0)
+        let match = MemoryItem(memory: "dim four fact", vector: [1, 0, 0, 0], userId: "u1")
+        try await store.save(item: match)
+        try await store.save(item: MemoryItem(memory: "dim two fact", vector: [1, 0], userId: "u1"))
+
+        let query = VectorMath.normalize([1, 0, 0, 0])
+        let results = try await store.search(query: nil, vector: query, limit: 10, filters: MemoryFilter())
+        #expect(results.map(\.item.id) == [match.id])
+    }
+
+    @Test("Delete keeps block scoring positions consistent across repeated searches")
+    func deleteKeepsBlockPositionsConsistent() async throws {
+        let store = try LocalVectorStore(inMemory: true, alpha: 1, beta: 0)
+        let basis: [[Float]] = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1], [1, 1, 0, 0]]
+        var items: [MemoryItem] = []
+        for (index, vector) in basis.enumerated() {
+            let item = MemoryItem(memory: "fact \(index)", vector: vector, userId: "u1")
+            items.append(item)
+            try await store.save(item: item)
+        }
+        try await store.delete(id: items[2].id)
+
+        let query = VectorMath.normalize([0, 0, 0, 1])
+        let first = try await store.search(query: nil, vector: query, limit: 10, filters: MemoryFilter())
+        let second = try await store.search(query: nil, vector: query, limit: 10, filters: MemoryFilter())
+        #expect(first.map(\.item.id) == second.map(\.item.id))
+        #expect(first.first?.item.id == items[3].id)
+        #expect(first.contains(where: { $0.item.id == items[2].id }) == false)
+    }
 }

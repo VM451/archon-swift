@@ -38,7 +38,7 @@ private let expectedDependencies: [String: Set<String>] = [
         "Tokenizers@swift-transformers"
     ],
     "ArchonContext": ["ArchonCore"],
-    "ArchonMemory": ["ArchonCore", "GRDB@GRDB.swift"],
+    "ArchonMemory": ["ArchonCore", "ArchonContext", "GRDB@GRDB.swift"],
     "ArchonMemoryProxima": ["ArchonMemory", "ProximaKit@ProximaKit"],
     "ArchonSearch": ["ArchonCore", "GRDB@GRDB.swift"],
     "ArchonSandbox": ["ArchonCore"],

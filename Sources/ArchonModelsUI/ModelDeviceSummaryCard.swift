@@ -47,6 +47,7 @@ public struct ModelDeviceSummaryCard: View {
         .padding(.vertical, 2)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilitySummary)
+        .accessibilityIdentifier("archon.models.browser.deviceCard")
     }
 
     @ViewBuilder

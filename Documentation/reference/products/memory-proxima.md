@@ -8,4 +8,7 @@ records, scopes, filters, temporal facts, graph, deletion, migration, or
 recovery behavior. The adapter is excluded from `ArchonFull` and must not become
 the default until the [competitor scorecard](../competitor-comparison.md)
 passes recall, latency, memory, persistence, recovery, migration, privacy, and
-device gates.
+device gates. First latency/recall evidence — package gate plus iPhone 16
+measurements — is recorded in
+[`Benchmarks/README.md`](../../../Benchmarks/README.md); persistence,
+recovery, migration, and memory ceilings are still open.

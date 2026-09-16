@@ -109,6 +109,10 @@ public protocol ComputerUsePermissionPolicy: Sendable {
     func allows(_ risk: ComputerUseRisk, action: SemanticAction) async -> Bool
 
     func approval(for risk: ComputerUseRisk, action: SemanticAction) async -> ComputerUseApproval?
+
+    /// Governs host-executed visual fallbacks for screens with no semantic
+    /// surface. Denied by default: a host opts in explicitly.
+    func allowsFallback(_ request: ComputerUseFallbackRequest) async -> Bool
 }
 
 public extension ComputerUsePermissionPolicy {
@@ -116,12 +120,43 @@ public extension ComputerUsePermissionPolicy {
         guard await allows(risk, action: action) else { return nil }
         return ComputerUseApproval(actionID: action.id)
     }
+
+    func allowsFallback(_ request: ComputerUseFallbackRequest) async -> Bool {
+        _ = request
+        return false
+    }
 }
 
 public struct ReadOnlyComputerUsePolicy: ComputerUsePermissionPolicy, Sendable {
     public init() {}
     public func allows(_ risk: ComputerUseRisk, action: SemanticAction) async -> Bool {
         risk == .read || risk == .navigate
+    }
+}
+
+/// A host-executed visual fallback request for screens with no semantic
+/// surface. Archon never captures screenshots or issues coordinate taps
+/// itself; it validates the request bounds, requires explicit host opt-in
+/// through the permission policy, and audits the decision. The host performs
+/// the fallback outside Archon and re-observes through the semantic provider.
+public struct ComputerUseFallbackRequest: Codable, Equatable, Sendable {
+    public let actionID: String
+    public let reason: String
+    /// Caller-stated uncertainty in 0...1 (higher means less sure). There is
+    /// no default: the caller must state how uncertain the fallback is.
+    public let uncertainty: Double
+    public let maximumAttempts: Int
+
+    public init(
+        actionID: String,
+        reason: String,
+        uncertainty: Double,
+        maximumAttempts: Int = 1
+    ) {
+        self.actionID = actionID
+        self.reason = reason
+        self.uncertainty = uncertainty
+        self.maximumAttempts = maximumAttempts
     }
 }
 
@@ -259,6 +294,7 @@ public actor ComputerUseController {
 
     public func execute(actionID: String) async throws -> SemanticActionResult {
         guard limits.isValidActionID(actionID) else { throw ComputerUseError.limitsExceeded(actionID) }
+        guard state != .stopped else { throw ComputerUseError.stopped }
         guard executedActionCount < limits.maximumActionsPerSession else {
             throw ComputerUseError.limitsExceeded(actionID)
         }
@@ -366,5 +402,37 @@ public actor ComputerUseController {
         guard state == .paused || state == .stopped else { return try await execute(actionID: actionID) }
         state = .idle
         return try await execute(actionID: actionID)
+    }
+
+    /// Governs one host-executed visual fallback. Validates bounds, requires
+    /// explicit policy opt-in, and audits the decision. The host performs the
+    /// fallback itself and re-observes through the semantic provider.
+    public func requestFallback(_ request: ComputerUseFallbackRequest) async throws {
+        guard limits.isValidActionID(request.actionID) else {
+            throw ComputerUseError.limitsExceeded(request.actionID)
+        }
+        guard request.uncertainty.isFinite,
+              (0...1).contains(request.uncertainty),
+              request.maximumAttempts >= 1 else {
+            throw ComputerUseError.limitsExceeded(request.actionID)
+        }
+        guard await permissionPolicy.allowsFallback(request) else {
+            await auditSink.record(ArchonAuditEvent(
+                category: "computer-use",
+                action: "fallback.\(request.actionID)",
+                outcome: "denied",
+                metadata: ["uncertainty": String(request.uncertainty)]
+            ))
+            throw ComputerUseError.permissionDenied("fallback.\(request.actionID)")
+        }
+        await auditSink.record(ArchonAuditEvent(
+            category: "computer-use",
+            action: "fallback.\(request.actionID)",
+            outcome: "approved",
+            metadata: [
+                "uncertainty": String(request.uncertainty),
+                "maximumAttempts": String(request.maximumAttempts)
+            ]
+        ))
     }
 }

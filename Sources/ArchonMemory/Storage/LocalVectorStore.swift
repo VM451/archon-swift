@@ -259,6 +259,24 @@ public actor LocalVectorStore: VectorStore {
                 }
             }
         }
+        markScoringBlocksDirty()
+        if vectorCacheWarmed {
+            for item in items {
+                // The cache mirrors non-deleted rows only; a save that marks
+                // a row deleted evicts it, matching the SQL filter truth.
+                guard !item.isDeleted else {
+                    vectorCache[item.id] = nil
+                    continue
+                }
+                vectorCache[item.id] = CachedScoringVector(
+                    vector: item.vector,
+                    lastAccessedAt: item.lastAccessedAt.timeIntervalSince1970,
+                    scoreWeight: item.scoreWeight,
+                    validFrom: item.validFrom.timeIntervalSince1970,
+                    validTo: item.validTo?.timeIntervalSince1970
+                )
+            }
+        }
     }
 
     public func fetch(id: UUID) async throws -> MemoryItem? {
@@ -328,6 +346,8 @@ public actor LocalVectorStore: VectorStore {
             )
             try db.execute(sql: "DELETE FROM memories_fts WHERE id = ?", arguments: [id.uuidString])
         }
+        vectorCache[id] = nil
+        markScoringBlocksDirty()
     }
 
     public func deleteAll(userId: String?, agentId: String?, runId: String?) async throws {
@@ -365,6 +385,9 @@ public actor LocalVectorStore: VectorStore {
                 arguments: StatementArguments(scopeArgs)
             )
         }
+        vectorCache.removeAll()
+        vectorCacheWarmed = false
+        markScoringBlocksDirty()
     }
 
     public func reset() async throws {
@@ -377,6 +400,252 @@ public actor LocalVectorStore: VectorStore {
             try db.execute(sql: "DELETE FROM recall_messages")
             try db.execute(sql: "DELETE FROM conversation_summaries")
             try db.execute(sql: "DELETE FROM memory_feedback")
+        }
+        vectorCache.removeAll()
+        vectorCacheWarmed = false
+        markScoringBlocksDirty()
+    }
+
+    /// Lean scoring row: only the columns ranking needs. Full items are
+    /// materialized solely for the trimmed top-K, keeping large-corpus
+    /// search proportional to K instead of N.
+    private struct SearchCandidate: Sendable {
+        let id: UUID
+        let vector: [Float]
+        let lastAccessedAt: Double
+        let scoreWeight: Float
+    }
+
+    /// In-RAM mirror of the scoring columns. Filter truth stays in SQL (the
+    /// candidate ID set always comes from a filtered query); this cache only
+    /// avoids re-reading vectors per search. Write-through on every memories
+    /// mutation, so it can never disagree with the database. Footprint is
+    /// roughly 4 bytes per stored float plus dictionary overhead.
+    private struct CachedScoringVector: Sendable {
+        var vector: [Float]
+        var lastAccessedAt: Double
+        var scoreWeight: Float
+        var validFrom: Double
+        var validTo: Double?
+    }
+
+    private var vectorCache: [UUID: CachedScoringVector] = [:]
+    private var vectorCacheWarmed = false
+
+    /// Packed scoring block for one vector dimension: row-major matrix plus
+    /// precomputed squared norms, so a query needs one multiply instead of a
+    /// pack plus three reductions. Rebuilt lazily after vector-affecting
+    /// mutations only; access touches never dirty it.
+    private struct ScoringBlock: Sendable {
+        var ids: [UUID] = []
+        var flat: [Float] = []
+        var normsSquared: [Float] = []
+        var accessed: [Double] = []
+        var weights: [Float] = []
+        var validFrom: [Double] = []
+        var validTo: [Double?] = []
+        var dimensions: Int = 0
+    }
+
+    private var scoringBlocks: [Int: ScoringBlock] = [:]
+    private var blockPositions: [UUID: (dimensions: Int, index: Int)] = [:]
+    private var emptyVectorIDs: Set<UUID> = []
+    private var scoringBlocksDirty = true
+
+    private func markScoringBlocksDirty() {
+        scoringBlocksDirty = true
+    }
+
+    private func rebuildScoringBlocksIfNeeded() {
+        guard scoringBlocksDirty else { return }
+        var blocks: [Int: ScoringBlock] = [:]
+        var positions: [UUID: (dimensions: Int, index: Int)] = [:]
+        var emptyIDs = Set<UUID>()
+        for (id, cached) in vectorCache {
+            let dimensions = cached.vector.count
+            guard dimensions > 0 else {
+                emptyIDs.insert(id)
+                continue
+            }
+            var block = blocks[dimensions] ?? ScoringBlock(dimensions: dimensions)
+            positions[id] = (dimensions, block.ids.count)
+            block.ids.append(id)
+            block.flat.append(contentsOf: cached.vector)
+            block.accessed.append(cached.lastAccessedAt)
+            block.weights.append(cached.scoreWeight)
+            block.validFrom.append(cached.validFrom)
+            block.validTo.append(cached.validTo)
+            blocks[dimensions] = block
+        }
+        for dimensions in blocks.keys {
+            guard var block = blocks[dimensions] else { continue }
+            var squares = [Float](repeating: 0, count: block.flat.count)
+            vDSP_vsq(block.flat, 1, &squares, 1, vDSP_Length(block.flat.count))
+            let ones = [Float](repeating: 1, count: dimensions)
+            var norms = [Float](repeating: 0, count: block.ids.count)
+            squares.withUnsafeBufferPointer { squarePointer in
+                ones.withUnsafeBufferPointer { onePointer in
+                    norms.withUnsafeMutableBufferPointer { normPointer in
+                        guard let a = squarePointer.baseAddress,
+                              let b = onePointer.baseAddress,
+                              let c = normPointer.baseAddress else { return }
+                        vDSP_mmul(
+                            a, 1, b, 1, c, 1,
+                            vDSP_Length(block.ids.count), 1, vDSP_Length(dimensions)
+                        )
+                    }
+                }
+            }
+            block.normsSquared = norms
+            blocks[dimensions] = block
+        }
+        scoringBlocks = blocks
+        blockPositions = positions
+        emptyVectorIDs = emptyIDs
+        scoringBlocksDirty = false
+    }
+
+    private func warmVectorCacheIfNeeded() async throws {
+        guard !vectorCacheWarmed else { return }
+        let snapshot = try await dbQueue.read { db -> [UUID: CachedScoringVector] in
+            let rows = try Row.fetchAll(db, sql: "SELECT id, vectorData, lastAccessedAt, scoreWeight, validFrom, validTo FROM memories WHERE isDeleted = 0")
+            var snapshot: [UUID: CachedScoringVector] = [:]
+            for row in rows {
+                let idString: String = row["id"]
+                let id = UUID(uuidString: idString) ?? UUID()
+                var vector: [Float] = []
+                if let blob: Data = row["vectorData"] {
+                    guard blob.count % MemoryLayout<Float>.size == 0 else {
+                        throw ArchonMemoryError.invalidConfiguration("Stored memory vector has an invalid byte length.")
+                    }
+                    vector = blob.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
+                    try Self.validate(vector: vector, label: "stored memory")
+                }
+                let accessed: Double = row["lastAccessedAt"]
+                let validFrom: Double = row["validFrom"]
+                let validTo: Double? = row["validTo"]
+                snapshot[id] = CachedScoringVector(
+                    vector: vector,
+                    lastAccessedAt: accessed,
+                    scoreWeight: Float(row["scoreWeight"] as Double),
+                    validFrom: validFrom,
+                    validTo: validTo
+                )
+            }
+            return snapshot
+        }
+        vectorCache = snapshot
+        vectorCacheWarmed = true
+    }
+
+    /// True when the filter is the default active/non-deleted shape, so the
+    /// candidate set can be evaluated from the cache without a SQL round
+    /// trip. Any scope, metadata, or deleted-inclusion predicate takes the
+    /// SQL path, keeping filter truth in exactly one place per shape.
+    private static func isDefaultActiveFilter(_ filters: MemoryFilter) -> Bool {
+        filters.userId == nil
+            && filters.agentId == nil
+            && filters.runId == nil
+            && (filters.metadata?.isEmpty ?? true)
+            && !filters.includeDeleted
+    }
+
+    private func fetchSearchCandidates(filters: MemoryFilter) async throws -> [SearchCandidate] {
+        try await warmVectorCacheIfNeeded()
+        if Self.isDefaultActiveFilter(filters) {
+            let activeAt = filters.activeAt?.timeIntervalSince1970
+            return vectorCache.compactMap { id, cached in
+                // Mirrors the SQL temporal predicate exactly: validFrom <=
+                // activeAt AND (validTo IS NULL OR validTo > activeAt).
+                if let activeAt {
+                    let inWindow = cached.validFrom <= activeAt
+                        && (cached.validTo.map { $0 > activeAt } ?? true)
+                    guard inWindow else { return nil }
+                }
+                return SearchCandidate(
+                    id: id,
+                    vector: cached.vector,
+                    lastAccessedAt: cached.lastAccessedAt,
+                    scoreWeight: cached.scoreWeight
+                )
+            }
+        }
+        let requiredMetadata: [String: String]? =
+            filters.metadata?.isEmpty == false ? filters.metadata : nil
+        let matchingIDs = try await dbQueue.read { db -> [UUID] in
+            var sql = "SELECT id"
+            if requiredMetadata != nil {
+                sql += ", metadataJson"
+            }
+            sql += " FROM memories WHERE 1=1"
+            var args: [DatabaseValueConvertible] = []
+            Self.appendFilterConditions(filters: filters, sql: &sql, args: &args)
+            let rows = try Row.fetchAll(db, sql: sql, arguments: StatementArguments(args))
+            return try rows.compactMap { row -> UUID? in
+                let idString: String = row["id"]
+                let id = UUID(uuidString: idString) ?? UUID()
+                if let requiredMetadata {
+                    var metadata: [String: String] = [:]
+                    if let json: String = row["metadataJson"],
+                       let data = json.data(using: .utf8) {
+                        guard data.count <= Self.maximumMetadataBytes else {
+                            throw ArchonMemoryError.inputTooLarge(maxBytes: Self.maximumMetadataBytes)
+                        }
+                        metadata = (try? JSONDecoder().decode([String: String].self, from: data)) ?? [:]
+                    }
+                    guard requiredMetadata.allSatisfy({ metadata[$0.key] == $0.value }) else {
+                        return nil
+                    }
+                }
+                return id
+            }
+        }
+        var candidates: [SearchCandidate] = []
+        candidates.reserveCapacity(matchingIDs.count)
+        for id in matchingIDs {
+            if let cached = vectorCache[id] {
+                candidates.append(SearchCandidate(
+                    id: id,
+                    vector: cached.vector,
+                    lastAccessedAt: cached.lastAccessedAt,
+                    scoreWeight: cached.scoreWeight
+                ))
+            } else if let item = try await fetch(id: id) {
+                // Defensive: write-through keeps the cache complete, so this
+                // only runs for rows created outside the mutation funnel.
+                vectorCache[id] = CachedScoringVector(
+                    vector: item.vector,
+                    lastAccessedAt: item.lastAccessedAt.timeIntervalSince1970,
+                    scoreWeight: item.scoreWeight,
+                    validFrom: item.validFrom.timeIntervalSince1970,
+                    validTo: item.validTo?.timeIntervalSince1970
+                )
+                candidates.append(SearchCandidate(
+                    id: id,
+                    vector: item.vector,
+                    lastAccessedAt: item.lastAccessedAt.timeIntervalSince1970,
+                    scoreWeight: item.scoreWeight
+                ))
+            }
+        }
+        return candidates
+    }
+
+    private func fetchRankedItems(ids: [UUID]) async throws -> [UUID: MemoryItem] {
+        guard !ids.isEmpty else { return [:] }
+        return try await dbQueue.read { db in
+            let placeholders = ids.map { _ in "?" }.joined(separator: ", ")
+            let rows = try Row.fetchAll(
+                db,
+                sql: "SELECT * FROM memories WHERE id IN (\(placeholders))",
+                arguments: StatementArguments(ids.map { $0.uuidString })
+            )
+            var items: [UUID: MemoryItem] = [:]
+            for row in rows {
+                let item = try Self.rowToMemoryItem(row)
+                items[item.id] = item
+            }
+            return items
         }
     }
 
@@ -395,9 +664,118 @@ public actor LocalVectorStore: VectorStore {
         if let vector {
             try Self.validate(vector: vector, label: "query")
         }
-        let candidates = try await fetchAll(filters: filters)
+        // Retrieval never returns deleted or expired facts by default. A nil
+        // filter means "active, non-deleted" rather than "unfiltered"; callers
+        // opt out explicitly with includeDeleted or activeAt: nil.
+        let effectiveFilters = filters ?? MemoryFilter()
+        if let queryVector = vector, !queryVector.isEmpty,
+           Self.isDefaultActiveFilter(effectiveFilters) {
+            return try await searchDefaultVector(
+                query: query,
+                vector: queryVector,
+                limit: limit,
+                filters: effectiveFilters
+            )
+        }
+        let candidates = try await fetchSearchCandidates(filters: effectiveFilters)
         guard !candidates.isEmpty else { return [] }
         
+        let textScores = try await fetchTextScores(query: query)
+
+        let now = Date().timeIntervalSince1970
+
+        // One batched scoring pass replaces N per-row vDSP triples. Rows with
+        // empty vectors keep a nil similarity, exactly as before; dimension
+        // mismatches score 0.0 through the shared batch guard.
+        var vectorSimilarities = [Float?](repeating: nil, count: candidates.count)
+        if let queryVector = vector, !queryVector.isEmpty {
+            let batch = VectorMath.batchCosineSimilarities(
+                query: queryVector,
+                rows: candidates.map(\.vector)
+            )
+            for index in candidates.indices where !candidates[index].vector.isEmpty {
+                vectorSimilarities[index] = batch[index]
+            }
+        }
+
+        var rankedIDs: [(id: UUID, score: Float, vectorSimilarity: Float?, textRank: Float)] = []
+        rankedIDs.reserveCapacity(candidates.count)
+        for (index, candidate) in candidates.enumerated() {
+            let similarity = vectorSimilarities[index]
+            let textRank = textScores[candidate.id] ?? 0.0
+            let vScore = similarity ?? 0.0
+
+            let ageInDays = Float(max(0, now - candidate.lastAccessedAt) / 86400.0)
+            let timeDecay = exp(-decayLambda * ageInDays)
+
+            let finalScore = (alpha * vScore + beta * textRank * timeDecay) * candidate.scoreWeight
+
+            if finalScore > 0 || vector == nil {
+                rankedIDs.append((
+                    id: candidate.id,
+                    score: finalScore,
+                    vectorSimilarity: similarity,
+                    textRank: textRank
+                ))
+            }
+        }
+
+        rankedIDs.sort { lhs, rhs in
+            if lhs.score != rhs.score { return lhs.score > rhs.score }
+            return lhs.id.uuidString < rhs.id.uuidString
+        }
+        let trimmed = Array(rankedIDs.prefix(limit))
+        guard !trimmed.isEmpty else { return [] }
+
+        let itemsByID = try await fetchRankedItems(ids: trimmed.map(\.id))
+        var results: [SearchResult] = []
+        results.reserveCapacity(trimmed.count)
+        for entry in trimmed {
+            // A row deleted between the scoring read and this read is
+            // skipped: never return a fact that no longer exists.
+            guard let item = itemsByID[entry.id] else { continue }
+            results.append(SearchResult(
+                item: item,
+                score: entry.score,
+                vectorSimilarity: entry.vectorSimilarity,
+                textRank: entry.textRank
+            ))
+        }
+
+        if !results.isEmpty {
+            try await touchAccessed(ids: results.map { $0.item.id })
+        }
+
+        return results
+    }
+
+    private func touchAccessed(ids: [UUID]) async throws {
+        let touchTime = Date().timeIntervalSince1970
+        let placeholders = ids.map { _ in "?" }.joined(separator: ", ")
+        try await dbQueue.write { db in
+            var arguments: [DatabaseValueConvertible] = [touchTime]
+            arguments.append(contentsOf: ids.map { $0.uuidString })
+            try db.execute(
+                sql: "UPDATE memories SET accessCount = accessCount + 1, lastAccessedAt = ? WHERE id IN (\(placeholders))",
+                arguments: StatementArguments(arguments)
+            )
+        }
+        for id in ids {
+            vectorCache[id]?.lastAccessedAt = touchTime
+            if let position = blockPositions[id] {
+                scoringBlocks[position.dimensions]?.accessed[position.index] = touchTime
+            }
+        }
+    }
+
+    private struct RankedEntry: Sendable {
+        let id: UUID
+        let score: Float
+        let vectorSimilarity: Float?
+        let textRank: Float
+    }
+
+    private func fetchTextScores(query: String?) async throws -> [UUID: Float] {
         var textScores: [UUID: Float] = [:]
         if let query = query, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let ftsResults = try await dbQueue.read { db -> [Row] in
@@ -412,7 +790,7 @@ public actor LocalVectorStore: VectorStore {
                     arguments: ["\"\(sanitizedQuery)\"*"]
                 )
             }
-            
+
             for row in ftsResults {
                 if let idString: String = row["id"], let id = UUID(uuidString: idString), let rank: Double = row["rank"] {
                     let normalizedRank = Float(1.0 / (1.0 + abs(rank)))
@@ -420,54 +798,140 @@ public actor LocalVectorStore: VectorStore {
                 }
             }
         }
+        return textScores
+    }
 
+    /// Default-filter vector search over the packed score blocks: one matrix
+    /// multiply per query plus cached norms, with per-row metadata resolved
+    /// from the write-through cache.
+    private func searchDefaultVector(
+        query: String?,
+        vector queryVector: [Float],
+        limit: Int,
+        filters: MemoryFilter
+    ) async throws -> [SearchResult] {
+        try await warmVectorCacheIfNeeded()
+        rebuildScoringBlocksIfNeeded()
+        guard !vectorCache.isEmpty else { return [] }
+
+        let textScores = try await fetchTextScores(query: query)
         let now = Date().timeIntervalSince1970
-        
-        var results: [SearchResult] = []
-        for item in candidates {
-            var vectorSim: Float? = nil
-            if let queryVector = vector, !queryVector.isEmpty, !item.vector.isEmpty {
-                vectorSim = VectorMath.cosineSimilarity(queryVector, item.vector)
+        let activeAt = filters.activeAt?.timeIntervalSince1970
+
+        var queryNormSquared: Float = 0
+        vDSP_svesq(queryVector, 1, &queryNormSquared, vDSP_Length(queryVector.count))
+        let queryNorm = sqrt(queryNormSquared)
+
+        var matchingDots: [Float] = []
+        if let block = scoringBlocks[queryVector.count], !block.ids.isEmpty {
+            var dots = [Float](repeating: 0, count: block.ids.count)
+            block.flat.withUnsafeBufferPointer { flatPointer in
+                queryVector.withUnsafeBufferPointer { queryPointer in
+                    dots.withUnsafeMutableBufferPointer { dotPointer in
+                        guard let a = flatPointer.baseAddress,
+                              let b = queryPointer.baseAddress,
+                              let c = dotPointer.baseAddress else { return }
+                        vDSP_mmul(
+                            a, 1, b, 1, c, 1,
+                            vDSP_Length(block.ids.count), 1, vDSP_Length(block.dimensions)
+                        )
+                    }
+                }
             }
-            
-            let textRank = textScores[item.id] ?? 0.0
-            let vScore = vectorSim ?? 0.0
-            
-            let ageInDays = Float(max(0, now - item.lastAccessedAt.timeIntervalSince1970) / 86400.0)
+            matchingDots = dots
+        }
+
+        var ranked: [RankedEntry] = []
+        ranked.reserveCapacity(vectorCache.count)
+        for block in scoringBlocks.values {
+            let isMatchingBlock = block.dimensions == queryVector.count
+            for position in block.ids.indices {
+                if let activeAt {
+                    let inWindow = block.validFrom[position] <= activeAt
+                        && (block.validTo[position].map { $0 > activeAt } ?? true)
+                    guard inWindow else { continue }
+                }
+                let similarity: Float
+                if isMatchingBlock {
+                    let denominator = queryNorm * sqrt(block.normsSquared[position])
+                    if denominator.isFinite, denominator > 0 {
+                        let raw = matchingDots[position] / denominator
+                        similarity = raw.isFinite ? min(max(raw, -1), 1) : 0
+                    } else {
+                        similarity = 0
+                    }
+                } else {
+                    similarity = 0
+                }
+                let id = block.ids[position]
+                let textRank = textScores[id] ?? 0.0
+
+                let ageInDays = Float(max(0, now - block.accessed[position]) / 86400.0)
+                let timeDecay = exp(-decayLambda * ageInDays)
+
+                let finalScore = (alpha * similarity + beta * textRank * timeDecay) * block.weights[position]
+                if finalScore > 0 {
+                    ranked.append(RankedEntry(
+                        id: id,
+                        score: finalScore,
+                        vectorSimilarity: similarity,
+                        textRank: textRank
+                    ))
+                }
+            }
+        }
+        for id in emptyVectorIDs {
+            guard let cached = vectorCache[id] else { continue }
+            if let activeAt {
+                let inWindow = cached.validFrom <= activeAt
+                    && (cached.validTo.map { $0 > activeAt } ?? true)
+                guard inWindow else { continue }
+            }
+            let textRank = textScores[id] ?? 0.0
+            let ageInDays = Float(max(0, now - cached.lastAccessedAt) / 86400.0)
             let timeDecay = exp(-decayLambda * ageInDays)
-            
-            let finalScore = (alpha * vScore + beta * textRank * timeDecay) * item.scoreWeight
-            
-            if finalScore > 0 || vector == nil {
-                results.append(SearchResult(
-                    item: item,
+            let finalScore = (beta * textRank * timeDecay) * cached.scoreWeight
+            if finalScore > 0 {
+                ranked.append(RankedEntry(
+                    id: id,
                     score: finalScore,
-                    vectorSimilarity: vectorSim,
+                    vectorSimilarity: nil,
                     textRank: textRank
                 ))
             }
         }
-        
-        results.sort { lhs, rhs in
-            if lhs.score != rhs.score { return lhs.score > rhs.score }
-            return lhs.item.id.uuidString < rhs.item.id.uuidString
+
+        return try await materialize(ranked: ranked, limit: limit)
+    }
+
+    private func materialize(ranked: [RankedEntry], limit: Int) async throws -> [SearchResult] {
+        let ordered = ranked.sorted {
+            if $0.score != $1.score { return $0.score > $1.score }
+            return $0.id.uuidString < $1.id.uuidString
         }
-        let trimmedResults = Array(results.prefix(limit))
-        
-        if !trimmedResults.isEmpty {
-            let accessedIds = trimmedResults.map { $0.item.id }
-            try await dbQueue.write { db in
-                let nowTime = Date().timeIntervalSince1970
-                for id in accessedIds {
-                    try db.execute(
-                        sql: "UPDATE memories SET accessCount = accessCount + 1, lastAccessedAt = ? WHERE id = ?",
-                        arguments: [nowTime, id.uuidString]
-                    )
-                }
-            }
+        let trimmed = Array(ordered.prefix(limit))
+        guard !trimmed.isEmpty else { return [] }
+
+        let itemsByID = try await fetchRankedItems(ids: trimmed.map(\.id))
+        var results: [SearchResult] = []
+        results.reserveCapacity(trimmed.count)
+        for entry in trimmed {
+            // A row deleted between the scoring read and this read is
+            // skipped: never return a fact that no longer exists.
+            guard let item = itemsByID[entry.id] else { continue }
+            results.append(SearchResult(
+                item: item,
+                score: entry.score,
+                vectorSimilarity: entry.vectorSimilarity,
+                textRank: entry.textRank
+            ))
         }
-        
-        return trimmedResults
+
+        if !results.isEmpty {
+            try await touchAccessed(ids: results.map { $0.item.id })
+        }
+
+        return results
     }
 
     // MARK: - Documents & Bookmarks (Supermemory)

@@ -110,6 +110,7 @@ public struct ModelDetailView: View {
                         }
                         if let value = progress[variant.id] {
                             ProgressView(value: value)
+                                .accessibilityIdentifier("archon.models.detail.progress.\(variant.id)")
                         }
 
                         variantActions(variant, compatibility: compatibility)
@@ -182,14 +183,20 @@ public struct ModelDetailView: View {
             switch phases[variant.id] {
             case .downloading:
                 Button("Pause") { pause(variantID: variant.id) }
+                    .accessibilityIdentifier("archon.models.detail.pause.\(variant.id)")
                 Button("Cancel", role: .cancel) { cancel(variantID: variant.id) }
+                    .accessibilityIdentifier("archon.models.detail.cancel.\(variant.id)")
             case .paused:
                 Button("Resume") { resume(variant) }
+                    .accessibilityIdentifier("archon.models.detail.resume.\(variant.id)")
                 Button("Cancel", role: .cancel) { cancel(variantID: variant.id) }
+                    .accessibilityIdentifier("archon.models.detail.cancel.\(variant.id)")
             case .failed, .cancelled:
                 Button("Retry") { retry(variant) }
+                    .accessibilityIdentifier("archon.models.detail.retry.\(variant.id)")
             case .ready:
                 Button("Redownload") { redownload(variant) }
+                    .accessibilityIdentifier("archon.models.detail.redownload.\(variant.id)")
             default:
                 if installed == nil {
                     Button(
@@ -202,8 +209,10 @@ public struct ModelDetailView: View {
                         !compatibility.canDownload ||
                         (variant.downloadURL == nil && variant.resources.isEmpty && variant.tokenizerResources.isEmpty)
                     )
+                    .accessibilityIdentifier("archon.models.detail.download.\(variant.id)")
                 } else {
                     Button("Redownload") { redownload(variant) }
+                        .accessibilityIdentifier("archon.models.detail.redownload.\(variant.id)")
                 }
             }
 
@@ -211,12 +220,14 @@ public struct ModelDetailView: View {
                 Button("Delete", role: .destructive) {
                     delete(installed)
                 }
+                .accessibilityIdentifier("archon.models.detail.delete.\(variant.id)")
             }
 
             if let onSelectVariant, compatibility.canLoad, installed != nil {
                 Button("Use Model") {
                     onSelectVariant(variant)
                 }
+                .accessibilityIdentifier("archon.models.detail.use.\(variant.id)")
             }
         }
         .buttonStyle(.borderless)
@@ -457,6 +468,7 @@ public struct ModelStorageView: View {
                 Button("Clear Temporary Download Data", role: .destructive) {
                     Task { await clearTemporaryStorage() }
                 }
+                .accessibilityIdentifier("archon.models.storage.clearTemporary")
             }
 
             Section("Installed MLX Models") {
@@ -491,6 +503,7 @@ public struct ModelStorageView: View {
                     Task { await refresh() }
                 }
                 .disabled(isRefreshing)
+                .accessibilityIdentifier("archon.models.storage.refresh")
             }
         }
         .task {

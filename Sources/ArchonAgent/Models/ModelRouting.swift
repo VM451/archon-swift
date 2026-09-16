@@ -41,18 +41,36 @@ public enum AgentModelSelection: Equatable, Sendable {
 /// Selects a model from deterministic capability metadata. It never asks an LLM to
 /// estimate memory fit and it never routes a local-only policy to a cloud model.
 public enum AgentModelRouter {
+    /// The system model's advertised contract, shared with the provider layer's
+    /// `ModelCapabilities.appleFoundation` declaration. The fast paths below
+    /// negotiate the full requirements against it instead of assuming any
+    /// text-generation request fits the system model.
+    private static let appleFoundationCapabilities = ModelRuntimeCapabilities(
+        runtime: .foundationModels,
+        capabilities: ArchonModelCapabilities(
+            tasks: [.textGeneration],
+            supportsStreaming: ModelCapabilities.appleFoundation.supportsStreaming,
+            supportsToolCalling: ModelCapabilities.appleFoundation.supportsToolCalling,
+            supportsStructuredOutput: ModelCapabilities.appleFoundation.supportsJSONSchema
+        )
+    )
+
     public static func select(
         policy: ModelPolicy,
         device: ArchonDeviceCapabilities,
         installed: [InstalledModel] = [],
         candidates: [ModelDescriptor] = []
     ) -> AgentModelSelection {
+        let requirements = policy.requirements ?? ModelCapabilityRequirements(task: policy.capability)
         if policy.privacy == .appleOnly {
             guard policy.preferredRuntime == nil || policy.preferredRuntime == .foundationModels else {
                 return .unavailable("The appleOnly policy cannot use a non-Apple Foundation Model runtime.")
             }
             guard policy.capability == .textGeneration else {
                 return .unavailable("Apple Foundation Models are only selected here for text generation; the requested capability requires another runtime.")
+            }
+            guard appleFoundationCapabilities.satisfies(requirements) else {
+                return .unavailable("Apple Foundation Models do not satisfy the requested capability requirements.")
             }
             return device.supportsAppleFoundationModels
                 ? .appleFoundationModel
@@ -61,7 +79,8 @@ public enum AgentModelRouter {
         if (policy.privacy == .localOnly || policy.privacy == .preferLocal) &&
             device.supportsAppleFoundationModels &&
             (policy.preferredRuntime == nil || policy.preferredRuntime == .foundationModels) &&
-            policy.capability == .textGeneration {
+            policy.capability == .textGeneration &&
+            appleFoundationCapabilities.satisfies(requirements) {
             return .appleFoundationModel
         }
 

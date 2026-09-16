@@ -31,6 +31,7 @@ all-base-products re-export; optional adapters remain separate.
   insight recall, stale-refresh protection, and exportable provenance.
 - Search and research outputs with citations and an inspectable search path.
 - Permission-aware MCP, semantic host actions, and capability-restricted WebKit sandboxes.
+- Hosted MCP roots, sampling, and elicitation served from app-owned closures.
 - No fabricated inference, extraction, search, telemetry, or platform records when a required capability is unavailable.
 
 ## System design
@@ -102,7 +103,7 @@ missing local behavior after the audit; it never means Apple APIs are ignored.
 | `ArchonMemoryProxima` | Optional dense-index adapter behind `VectorIndex` | PARTIAL / ADAPT | [ProximaKit](https://github.com/vivekptnk/ProximaKit), [RecallKit](https://github.com/gregyoung14/RecallKit), [Wax](https://github.com/christopherkarani/Wax); device fit first |
 | `ArchonSearch` | On-device search, neural + keyword rerank, freshness, registry fan-out, extraction, grounding, citations, chat UI | PARTIAL / ADAPT | DuckDuckGo engine, local `ResultReranker`/`NaturalLanguageSimilarity`/`SearchRankingOptions`/`SearchQueryRewriter`/`SearchEngineRegistry`, [SwiftSoup](https://github.com/scinfu/SwiftSoup) + Readability bridge, [GRDB](https://github.com/groue/GRDB.swift); companions [searxng](https://github.com/searxng/searxng), [crawl4ai](https://github.com/unclecode/crawl4ai); audit [tavily-python](https://github.com/tavily-ai/tavily-python), [exa-py](https://github.com/exa-labs/exa-py), [firecrawl](https://github.com/mendableai/firecrawl), [Perplexica](https://github.com/ItzCrazyKns/Perplexica) |
 | `ArchonSandbox` | Capability-restricted WebKit mini-apps and workspace sync | BUILD | WebKit; [e2b](https://github.com/e2b-dev/e2b), [modal-client](https://github.com/modal-labs/modal-client), [daytona](https://github.com/daytonaio/daytona), [deno](https://github.com/denoland/deno) |
-| `ArchonConnect` | MCP client, JSON-RPC transport, schema validation, permissions | PARTIAL / ADAPT | [swift-sdk](https://github.com/modelcontextprotocol/swift-sdk); audit [servers](https://github.com/modelcontextprotocol/servers) |
+| `ArchonConnect` | MCP client, transports, schema validation, permissions, hosted capabilities | PARTIAL / ADAPT | [swift-sdk](https://github.com/modelcontextprotocol/swift-sdk); audit [servers](https://github.com/modelcontextprotocol/servers) |
 | `ArchonComputerUse` | Semantic snapshots, approvals, host actions, postconditions | BUILD | Accessibility/DOM/App Intents; [stagehand](https://github.com/browserbase/stagehand), [anthropic-cookbook](https://github.com/anthropics/anthropic-cookbook) |
 | `ArchonModelsUI` | Model discovery, library, detail, storage, download views | BUILD | SwiftUI; [swift-book](https://github.com/apple/swift-book), [swift-navigation](https://github.com/pointfreeco/swift-navigation) |
 | `ArchonFull` | Re-export of the base products; excludes `ArchonMemoryProxima` | REUSE | Dependency scope only |
@@ -180,8 +181,9 @@ swift Tools/verify-dependency-licenses.swift
 
 Optional live research tests and timing-sensitive benchmarks are disabled by
 default. Run the opt-in checks from [`Benchmarks/README.md`](Benchmarks/README.md)
-only on a controlled development machine; their timings are not portable
-device guarantees.
+only on a controlled development machine; macOS timings are not portable
+device guarantees. First iPhone 16 latency/recall evidence for the vector
+path is recorded in the same document.
 
 ## Documentation
 

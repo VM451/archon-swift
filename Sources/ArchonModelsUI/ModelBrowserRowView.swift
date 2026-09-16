@@ -66,6 +66,7 @@ struct ModelBrowserRowView: View {
                         ProgressView(value: progressValue)
                             .progressViewStyle(.linear)
                             .padding(.top, 2)
+                            .accessibilityIdentifier("archon.models.browser.progress.\(variant.id)")
                     } else if let message = statusMessage {
                         Text(message)
                             .font(.caption2)
@@ -79,6 +80,7 @@ struct ModelBrowserRowView: View {
                 actionControl
             }
             .padding(.vertical, 4)
+            .accessibilityIdentifier("archon.models.browser.row.\(variant.id)")
         }
     }
 
@@ -261,6 +263,7 @@ struct ModelBrowserRowView: View {
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.circle)
                 .accessibilityLabel("Pause download")
+                .accessibilityIdentifier("archon.models.browser.pause.\(variant.id)")
 
                 Button(role: .cancel, action: onCancel) {
                     Image(systemName: "xmark")
@@ -269,6 +272,7 @@ struct ModelBrowserRowView: View {
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.circle)
                 .accessibilityLabel("Cancel download")
+                .accessibilityIdentifier("archon.models.browser.cancel.\(variant.id)")
             }
         case .paused:
             Button("Resume", action: onResume)
@@ -277,12 +281,14 @@ struct ModelBrowserRowView: View {
                 .buttonStyle(.borderedProminent)
                 .buttonBorderShape(.capsule)
                 .foregroundStyle(.background)
+                .accessibilityIdentifier("archon.models.browser.resume.\(variant.id)")
         case .failed, .cancelled:
             Button("Retry", action: onRetry)
                 .font(.caption.weight(.semibold))
                 .lineLimit(1)
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.capsule)
+                .accessibilityIdentifier("archon.models.browser.retry.\(variant.id)")
         case .ready:
             readyBadge
         default:
@@ -300,6 +306,7 @@ struct ModelBrowserRowView: View {
                 .buttonStyle(.borderedProminent)
                 .buttonBorderShape(.capsule)
                 .foregroundStyle(.background)
+                .accessibilityIdentifier("archon.models.browser.download.\(variant.id)")
                 .disabled(!canDownload)
             } else {
                 Text(compatibility.status == .conversionRequired ? "Convert" : "Unavailable")
@@ -325,6 +332,7 @@ struct ModelBrowserRowView: View {
                 installedBadgeLabel(title: "Installed")
             }
             .accessibilityLabel("\(variant.name) installed. Tap for options.")
+            .accessibilityIdentifier("archon.models.browser.installed.\(variant.id)")
         } else {
             installedBadgeLabel(title: variant.source == .appleCoreAI ? "System" : "Ready")
                 .accessibilityLabel("\(variant.name) \(variant.source == .appleCoreAI ? "system model" : "ready").")

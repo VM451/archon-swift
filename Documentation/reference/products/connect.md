@@ -9,6 +9,13 @@ typed transport errors, risk classification, schema validation, connection
 lifecycle, and host authorization. `MCPHTTPTransport` accepts already-resolved
 headers; it never discovers, persists, or prints credentials.
 
+Host-provided client capabilities — workspace roots, sampling completions,
+and elicitation answers — install through `MCPHostedCapabilities` before
+`connect()`, so the initialize handshake advertises exactly what the host
+implements. Unset capabilities are never advertised; unhandled
+server-initiated requests fail closed. Model inference, UI rendering, and
+filesystem access stay in the consuming app.
+
 Treat modify, sensitive, destructive, and external tools as side effects. Apply
 the host's `MCPPermissionPolicy`, validate arguments before transport, consume
 progress when available, and disconnect during host shutdown.

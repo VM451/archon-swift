@@ -48,15 +48,22 @@ local-native equivalent. Detailed capability evidence remains in the
 
 The deterministic [memory/index benchmark](../../../../context/memory-index-benchmark.md)
 compares Archon's current vector store, the optional Proxima adapter, and
-RecallKit on 2,000- and 10,000-record workloads. On the arm64 macOS package
-host, the Proxima adapter reached `Recall@10 = 1.000` at 10,000 records with
-`efSearch=256` and `0.73 / 0.75 ms` median/p95 query latency. These are not
-iPhone measurements and do not approve replacing the default.
+RecallKit on 2,000- and 10,000-record workloads. At 10k x 64 on the arm64
+macOS package host, the Proxima adapter reached `Recall@10 = 1.000` with
+`efSearch=256` and `0.73 / 0.75 ms` median/p95 query latency.
+
+At embedding scale (10k x 384), the vector store's batched scoring holds
+steady p95 `9.1 ms` with `Recall@10 = 1.000`, beating Wax 36605ff on the
+identical workload (12.9 ms steady p95, 6.4x slower ingest). On iPhone 16,
+the Proxima adapter holds `Recall@10 = 1.000` from `efSearch=64` up
+(`0.99 ms` p95) and beats USearch's recall-1.0 point 2.8x. Full numbers are
+in [Benchmarks](../../../../Benchmarks/README.md).
 
 The [quality scorecard](../../../../context/quality-scorecard.md) requires
 Recall@10 of at least `0.99`, no worse equivalent p95 latency, bounded memory,
 correct persistence/recovery/deletion/migration, no privacy regression, and
 consuming-app/device evidence before a replacement becomes the default.
+Device evidence now covers latency and recall; the remaining gates stay open.
 
 ## Design principles
 

@@ -1,6 +1,7 @@
 import Testing
 import ArchonConnect
 import Foundation
+import MCP
 
 private struct StubResponseState: Sendable {
     var responseBodies: [Data]
@@ -180,6 +181,48 @@ private actor CancellableMockTransport: MCPTransport {
 }
 
 private struct TestTimeout: Error {}
+
+private final class RecordingAuthorizer: MCP.HTTPClientAuthorizer, @unchecked Sendable {
+    let maxAuthorizationAttempts = 1
+    private let lock = NSLock()
+    private var validated: [URL] = []
+    private var headerRequests = 0
+
+    var validatedEndpoints: [URL] {
+        lock.lock()
+        defer { lock.unlock() }
+        return validated
+    }
+
+    var headerCallCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return headerRequests
+    }
+
+    func validateEndpointSecurity(for endpoint: URL) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        validated.append(endpoint)
+    }
+
+    func authorizationHeader(for endpoint: URL) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        headerRequests += 1
+        return "Bearer probe-token"
+    }
+
+    func handleChallenge(
+        statusCode: Int,
+        headers: [String: String],
+        endpoint: URL,
+        operationKey: String?,
+        session: URLSession
+    ) async throws -> Bool {
+        false
+    }
+}
 
 private func withTimeout<T: Sendable>(
     _ duration: Duration,
@@ -680,5 +723,98 @@ struct ArchonConnectTests {
         } catch let error as MCPTransportError {
             #expect(error == .responseTooLarge(maximumBytes: 8 * 1024 * 1024))
         }
+    }
+
+    @Test("Official adapter forwards server list-change and log notifications")
+    func officialAdapterForwardsServerNotifications() async throws {
+        let endpoint = URL(string: "https://mcp.example.test/rpc-\(UUID().uuidString)")!
+        StubURLProtocol.configure(responseBodies: [
+            Data(#"{"jsonrpc":"2.0","id":"__REQUEST_ID__","result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"fixture","version":"1"}}}"#.utf8),
+            Data(),
+            Data("event: message\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\",\"params\":{}}\n\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\",\"params\":{\"level\":\"info\",\"data\":\"hello\"}}\n\ndata: {\"jsonrpc\":\"2.0\",\"id\":\"__REQUEST_ID__\",\"result\":{\"tools\":[]}}\n\n".utf8)
+        ], responseContentTypes: [
+            "application/json",
+            "application/json",
+            "text/event-stream"
+        ], for: endpoint)
+        defer { StubURLProtocol.reset(for: endpoint) }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let transport = OfficialMCPTransport(
+            endpoint: endpoint,
+            configuration: configuration,
+            streaming: false,
+            requestTimeout: 0.5
+        )
+
+        let seen = try await withTimeout(.seconds(2)) {
+            try await transport.connect()
+            let stream = await transport.notificationStream()
+            async let listed: Void = {
+                _ = try await transport.listTools()
+            }()
+            var methods: [String] = []
+            var logData: JSONValue?
+            for try await event in stream {
+                if case .notification(let method, let params) = event {
+                    methods.append(method)
+                    if method == "notifications/message",
+                       case .object(let values) = params {
+                        logData = values["data"]
+                    }
+                    if methods.count == 2 { break }
+                }
+            }
+            try await listed
+            return (methods, logData)
+        }
+
+        #expect(seen.0.contains("notifications/tools/list_changed"))
+        #expect(seen.0.contains("notifications/message"))
+        #expect(seen.1 == .string("hello"))
+    }
+
+    @Test("Official adapter notification stream fails closed before connection")
+    func officialAdapterNotificationsRequireConnection() async throws {
+        let transport = OfficialMCPTransport(endpoint: URL(string: "https://mcp.example.test/rpc")!)
+        let stream = await transport.notificationStream()
+        do {
+            for try await _ in stream {}
+            Issue.record("Expected a not-connected failure from the notification stream.")
+        } catch let error as MCPTransportError {
+            #expect(error == .notConnected)
+        }
+    }
+
+    @Test("Official adapter injects the host authorizer into the SDK transport")
+    func officialAdapterInjectsAuthorizer() async throws {
+        let endpoint = URL(string: "https://mcp.example.test/rpc-\(UUID().uuidString)")!
+        StubURLProtocol.configure(responseBodies: [
+            Data(#"{"jsonrpc":"2.0","id":"__REQUEST_ID__","result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"fixture","version":"1"}}}"#.utf8),
+            Data(),
+            Data(#"{"jsonrpc":"2.0","id":"__REQUEST_ID__","result":{"tools":[]}}"#.utf8)
+        ], for: endpoint)
+        defer { StubURLProtocol.reset(for: endpoint) }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let authorizer = RecordingAuthorizer()
+        let transport = OfficialMCPTransport(
+            endpoint: endpoint,
+            configuration: configuration,
+            streaming: false,
+            requestTimeout: 0.5,
+            authorizer: authorizer
+        )
+
+        try await withTimeout(.seconds(2)) {
+            try await transport.connect()
+            _ = try await transport.listTools()
+        }
+
+        #expect(!authorizer.validatedEndpoints.isEmpty)
+        #expect(authorizer.validatedEndpoints.allSatisfy { $0 == endpoint })
+        #expect(authorizer.headerCallCount >= 1)
     }
 }
