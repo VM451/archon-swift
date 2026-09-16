@@ -21,19 +21,6 @@ all-base-products re-export; optional adapters remain separate.
 | Default safety posture | Typed errors, bounded operations, fail closed |
 | App boundary | The consuming app owns credentials, entitlements, permissions, and host adapters |
 
-## Why Archon
-
-- Native Swift APIs instead of a server-first control plane.
-- Local model discovery, compatibility checks, downloads, validation, and installation.
-- Composable agent graphs with model routing, tools, interrupts, checkpoints, and evaluation.
-- Application-owned memory and RAG with optional CloudKit synchronization.
-- Source-linked competitive research snapshots with local profiles, filtered
-  insight recall, stale-refresh protection, and exportable provenance.
-- Search and research outputs with citations and an inspectable search path.
-- Permission-aware MCP, semantic host actions, and capability-restricted WebKit sandboxes.
-- Hosted MCP roots, sampling, and elicitation served from app-owned closures.
-- No fabricated inference, extraction, search, telemetry, or platform records when a required capability is unavailable.
-
 ## System design
 
 ```mermaid
@@ -119,78 +106,6 @@ Developer tools: `archon-model` (offline model workflows via
 [swift-argument-parser](https://github.com/apple/swift-argument-parser)) and
 `archon-example-app` (golden SwiftUI host) are both BUILD, reusing the
 patterns above.
-
-## Quick start
-
-Add the package URL in Xcode or Swift Package Manager. Pin a release tag or
-commit in production for reproducible builds. Replace the placeholder with the
-exact release commit you have verified:
-
-```swift
-.package(url: "https://github.com/VM451/archon-swift.git", revision: "<verified-release-commit>")
-```
-
-Inspect a local model library without introducing a network request:
-
-```swift
-import Foundation
-import ArchonModels
-
-func findCompatibleModels(in libraryURL: URL) async throws -> [ModelDescriptor] {
-    let catalog = MLXModelCatalog(provider: LocalModelCatalog(locations: [libraryURL]))
-    return try await catalog.search(
-        ModelSearchRequest(
-            query: "",
-            runtime: .mlx,
-            format: .mlx,
-            compatibleOnly: true,
-            device: ArchonDeviceCapabilities.current
-        )
-    )
-}
-```
-
-For network-backed Hugging Face discovery, use the official-publisher wrapper
-and let the host app decide whether network access is permitted.
-
-```swift
-import ArchonModels
-
-func searchHuggingFace() async throws -> [ModelDescriptor] {
-    let catalog = OfficialModelCatalog(
-        provider: HuggingFaceCatalog(tokenStore: KeychainModelTokenStore())
-    )
-    return try await catalog.search(
-        ModelSearchRequest(query: "Qwen", task: .textGeneration, runtime: .mlx, format: .mlx,
-                           compatibleOnly: true,
-                           device: ArchonDeviceCapabilities.current)
-    )
-}
-```
-
-For Hugging Face, `OfficialModelCatalog` first applies the MLX runtime/format
-gate and then requires the descriptor and variant to share an allow-listed
-first-party namespace. Catalog results can be empty, and a compatible model
-can still require a model-family text adapter supplied by the consuming app.
-Never assume the first result is runnable; inspect the returned variant and
-run `ModelCompatibilityAnalyzer` before presenting an install or load action.
-
-## Build and test
-
-```bash
-swift package dump-package
-swift build -j 2
-swift test -j 2
-swift Tools/verify-competitor-scorecard.swift
-swift Tools/verify-product-scope.swift
-swift Tools/verify-dependency-licenses.swift
-```
-
-Optional live research tests and timing-sensitive benchmarks are disabled by
-default. Run the opt-in checks from [`Benchmarks/README.md`](Benchmarks/README.md)
-only on a controlled development machine; macOS timings are not portable
-device guarantees. First iPhone 16 latency/recall evidence for the vector
-path is recorded in the same document.
 
 ## Documentation
 
