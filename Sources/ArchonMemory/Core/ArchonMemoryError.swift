@@ -8,6 +8,8 @@ public enum ArchonMemoryError: Error, LocalizedError, Equatable, Sendable {
     case invalidConfiguration(String)
     case invalidSearchRequest(String)
     case invalidCompetitiveResearch(String)
+    case supersessionTargetInvalid(UUID)
+    case supersessionChainBroken(UUID)
 
     public var errorDescription: String? {
         switch self {
@@ -18,6 +20,8 @@ public enum ArchonMemoryError: Error, LocalizedError, Equatable, Sendable {
         case .invalidConfiguration(let reason): "Invalid ArchonMemory configuration: \(reason)"
         case .invalidSearchRequest(let reason): "Invalid memory search request: \(reason)"
         case .invalidCompetitiveResearch(let reason): "Invalid competitive research: \(reason)"
+        case .supersessionTargetInvalid(let id): "Memory \(id.uuidString) cannot be superseded because it is missing, deleted, or expired."
+        case .supersessionChainBroken(let id): "Supersession chain is broken at memory \(id.uuidString): the successor is missing or the chain cycles."
         }
     }
 }

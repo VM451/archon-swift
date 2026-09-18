@@ -21,6 +21,8 @@ struct ModelBrowserRowView: View {
     let progress: Double?
     let statusMessage: String?
     let isInstalled: Bool
+    /// Measured family benchmark for the badge row, if the catalog supplied one.
+    let benchmark: ModelFamilyBenchmark?
     let library: ModelLibrary
     let downloadManager: ModelDownloadManager
 
@@ -59,8 +61,11 @@ struct ModelBrowserRowView: View {
                         .multilineTextAlignment(.leading)
                         .minimumScaleFactor(0.85)
 
-                    fitBadge
-                        .padding(.top, 1)
+                    HStack(spacing: 6) {
+                        fitBadge
+                        benchmarkBadge
+                    }
+                    .padding(.top, 1)
 
                     if let progressValue = progress, phase == .downloading {
                         ProgressView(value: progressValue)
@@ -193,6 +198,46 @@ struct ModelBrowserRowView: View {
         default:
             return compatibility.fit.displayName
         }
+    }
+
+    @ViewBuilder
+    private var benchmarkBadge: some View {
+        if let benchmark, benchmark.isValid {
+            HStack(spacing: 3) {
+                Image(systemName: "chart.bar.fill")
+                    .font(.caption2)
+                Text(benchmarkBadgeText(benchmark))
+                    .font(.caption2.weight(.medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+            }
+            .foregroundStyle(.blue)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2.5)
+            .background(Color.blue.opacity(0.12), in: Capsule())
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(benchmarkAccessibilityLabel(benchmark))
+            .accessibilityIdentifier(ModelAccessibilityIDs.browserBenchmark(variantID: variant.id))
+        }
+    }
+
+    private func benchmarkBadgeText(_ benchmark: ModelFamilyBenchmark) -> String {
+        var text = "Measured \(benchmark.quality.formatted(.number.precision(.fractionLength(2))))"
+        if let speed = benchmark.tokensPerSecond {
+            text += " · \(speed.formatted(.number.precision(.fractionLength(0)))) tok/s"
+        }
+        return text
+    }
+
+    private func benchmarkAccessibilityLabel(_ benchmark: ModelFamilyBenchmark) -> String {
+        var label = "Measured quality \(benchmark.quality.formatted(.number.precision(.fractionLength(2))))"
+        if let speed = benchmark.tokensPerSecond {
+            label += ", \(speed.formatted(.number.precision(.fractionLength(0)))) tokens per second"
+        }
+        if let measuredOn = benchmark.measuredOn, !measuredOn.isEmpty {
+            label += ", measured on \(measuredOn)"
+        }
+        return label
     }
 
     private var fitAccessibilityLabel: String {

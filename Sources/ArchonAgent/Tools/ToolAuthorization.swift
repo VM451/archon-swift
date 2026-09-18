@@ -27,6 +27,14 @@ public struct ToolAuthorizationPolicy: Sendable {
         allowAllTools || tool.authorizationRequirement == .readOnly || explicitlyAllowedToolNames.contains(tool.definition.name)
     }
 
+    /// Conservative name-only query for guardrail reuse. It reports explicit
+    /// allowlist membership only; read-only classification requires the tool
+    /// instance, so dispatchers must keep using `allows(_:)`. This weakens no
+    /// policy: names absent here are denied.
+    public func allows(named toolName: String) -> Bool {
+        allowAllTools || explicitlyAllowedToolNames.contains(toolName)
+    }
+
     private init(allowAllTools: Bool) {
         self.allowAllTools = allowAllTools
         self.explicitlyAllowedToolNames = []

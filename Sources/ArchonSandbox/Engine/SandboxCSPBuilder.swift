@@ -1,6 +1,11 @@
 import Foundation
 
 /// Generates strict Content Security Policy (CSP) directives tailored to the sandbox runtime isolation model.
+///
+/// WASM-in-WebKit note: `'wasm-unsafe-eval'` is emitted only while
+/// `SandboxConfiguration.enableWebAssembly` is true, and `loadWasmModule`
+/// additionally refuses to run when the flag is off. Disabling the flag
+/// strips the token from the generated policy.
 public enum SandboxCSPBuilder: Sendable {
     
     /// Builds the standard CSP directive header based on configuration.

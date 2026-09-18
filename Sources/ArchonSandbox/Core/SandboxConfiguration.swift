@@ -2,6 +2,62 @@ import Foundation
 import CoreGraphics
 import ArchonCore
 
+/// Scope narrowing a sandbox capability grant. Fail closed: a grant covers
+/// exactly its scope, never a wider one.
+public enum SandboxScope: Sendable, Equatable, Hashable, Codable {
+    /// Session-wide check with no resource target.
+    case session
+    /// One workspace-relative file path (leading slashes ignored).
+    case workspaceFile(String)
+    /// One URL scheme (matched case-insensitively).
+    case scheme(String)
+
+    /// Normalized comparison so `"/app.js"` matches `"app.js"` and
+    /// `"HTTPS"` matches `"https"`.
+    public func covers(_ requested: SandboxScope) -> Bool {
+        switch (self, requested) {
+        case (.session, .session):
+            return true
+        case (.workspaceFile(let granted), .workspaceFile(let wanted)):
+            return SandboxScope.normalizePath(granted) == SandboxScope.normalizePath(wanted)
+        case (.scheme(let granted), .scheme(let wanted)):
+            return granted.lowercased() == wanted.lowercased()
+        default:
+            return false
+        }
+    }
+
+    private static func normalizePath(_ path: String) -> String {
+        path.hasPrefix("/") ? String(path.dropFirst()) : path
+    }
+}
+
+/// A per-capability grant narrowing `SandboxConfiguration.allowedPermissions`
+/// to a scope with an optional expiry. Grants never widen the base policy:
+/// a scoped check passes only when the permission is allowed AND a
+/// non-expired grant covers the requested scope.
+public struct SandboxCapabilityGrant: Sendable, Equatable {
+    public var permission: ArchonPermission
+    public var scope: SandboxScope
+    public var expiresAt: Date?
+
+    public init(
+        permission: ArchonPermission,
+        scope: SandboxScope = .session,
+        expiresAt: Date? = nil
+    ) {
+        self.permission = permission
+        self.scope = scope
+        self.expiresAt = expiresAt
+    }
+
+    /// Expired grants deny. A nil expiry never expires within the session.
+    public func isValid(at date: Date = Date()) -> Bool {
+        guard let expiresAt else { return true }
+        return date <= expiresAt
+    }
+}
+
 /// Configuration parameters governing the sandbox execution perimeter, security policy, and UI rendering.
 public struct SandboxConfiguration: Sendable, Equatable {
     /// Determines whether the sandbox can make outbound HTTP/HTTPS network requests. Defaults to `false` for zero-trust local isolation.
@@ -62,7 +118,12 @@ public struct SandboxConfiguration: Sendable, Equatable {
     /// Every page-originated tool requires an entry in this set; a tool's
     /// read-only classification describes effects but is not authorization.
     public var allowedSandboxToolNames: Set<String>
-    
+
+    /// Per-capability grants narrowing `allowedPermissions` to scopes with
+    /// optional expiry. Empty (the default) keeps the historical behavior:
+    /// session-scoped checks honor the base policy alone.
+    public var capabilityGrants: [SandboxCapabilityGrant]
+
     public init(
         allowNetworkAccess: Bool = false,
         allowedPermissions: Set<ArchonPermission> = [],
@@ -75,7 +136,8 @@ public struct SandboxConfiguration: Sendable, Equatable {
         allowedSchemes: [String] = ["sandbox", "data", "blob"],
         isInspectable: Bool = true,
         watchdogCheckIntervalSeconds: TimeInterval = 5.0,
-        allowedSandboxToolNames: Set<String> = []
+        allowedSandboxToolNames: Set<String> = [],
+        capabilityGrants: [SandboxCapabilityGrant] = []
     ) {
         self.allowNetworkAccess = allowNetworkAccess
         self.allowedPermissions = allowedPermissions
@@ -89,6 +151,7 @@ public struct SandboxConfiguration: Sendable, Equatable {
         self.isInspectable = isInspectable
         self.watchdogCheckIntervalSeconds = watchdogCheckIntervalSeconds
         self.allowedSandboxToolNames = allowedSandboxToolNames
+        self.capabilityGrants = capabilityGrants
     }
     
     public static let `default` = SandboxConfiguration()
@@ -102,6 +165,21 @@ public struct SandboxConfiguration: Sendable, Equatable {
         permission == .network
             ? allowNetworkAccess || allowedPermissions.contains(.network)
             : allowedPermissions.contains(permission)
+    }
+
+    /// Scoped capability check. The base policy must allow the permission and,
+    /// when grants are configured, a non-expired grant must cover the scope.
+    /// Grants never widen the base policy; expired or mismatched grants deny.
+    public func allows(_ permission: ArchonPermission, scope: SandboxScope, at date: Date = Date()) -> Bool {
+        guard allows(permission) else { return false }
+        if capabilityGrants.isEmpty {
+            // No grants configured: only session scope falls back to the base
+            // policy. Resource scopes require an explicit grant (fail closed).
+            return scope == .session
+        }
+        return capabilityGrants.contains {
+            $0.permission == permission && $0.scope.covers(scope) && $0.isValid(at: date)
+        }
     }
 
     /// Returns whether a URL scheme is allowed by both the scheme allowlist and

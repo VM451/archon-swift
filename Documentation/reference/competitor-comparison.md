@@ -44,6 +44,40 @@ Prose-only updates; scored tables below are unchanged.
   elicitation through host-owned closures over Streamable HTTP. The spec
   remainder is stdio transport and server-side coverage.
 
+## Evidence addendum (2026-09-18)
+
+Prose-only updates; scored tables below are unchanged.
+
+- Agent handoffs/guardrails: `SwarmOrchestrator.handoff` routes typed
+  `HandoffRequest` values with chain-depth tracking, cancellation, and audit;
+  `GuardrailChain` enforces first-deny-wins pre/post checks with built-in
+  output-length, tool-allowlist, and prohibited-pattern guardrails. Eval adds
+  tool-order and token-budget metrics, per-scenario timeouts, fail-fast, and
+  seeded ordering. Package-proof only; recovery/device gates still open.
+- Context budgets: per-family token profiles, a host-supplied summarization
+  seam with truncation fallback, and fail-closed per-contributor latency
+  budgets. Ordering/budget semantics unchanged.
+- Memory ranking/temporal: hybrid sparse/dense scoring is owned by one
+  `HybridRankingOptions` value; supersession resolves to the live head with
+  typed skip reasons and chain-integrity errors. Proxima migration
+  (`migrate(from:ceiling:)`) and recovery (`restoreOrRebuild`) are proven
+  package-side with resource ceilings; the adapter stays optional until
+  ceiling/device gates close.
+- Search rerank/eval/scheduling: opt-in Apple-embedding blend (off by
+  default, keyword-identical when disabled), deterministic answer-quality
+  fixture eval, and politeness-aware frontier scheduling (round-robin hosts,
+  depth/failure scoring, skip-not-sleep backoff). No new dependencies.
+- Models lifecycle/UI: neutral raw-to-MLX/Core AI prep recipes (runtime
+  still rejects raw), per-attempt download transparency with bounded retry,
+  measured family benchmarks, storage breakdown, and benchmark/size
+  badges with centralized accessibility IDs. CLI gains offline
+  `catalog-lint`, `device-fit`, and `prep-recipe`.
+- Platform safety: sandbox capability grants with scopes/expiry plus a
+  bounded audit stream and non-VM WASM-in-WebKit disclosure; MCP
+  fake-transport conformance probe, uniform pagination guard, and bounded
+  `disconnect(timeout:)` teardown on both transports (custom stays default);
+  semantic Computer Use catalog with fail-closed descriptor registration.
+
 ## How to read the scores
 
 ### Capability scale
@@ -470,7 +504,7 @@ scores and remain provisional until consuming-app and device evidence exists.
 | `ArchonAgent` | SDK | 5 | 5 | 4 | 4 | 5 | **93** | None recorded | Medium | ADAPT patterns; recovery gates open |
 | `ArchonContext` | SDK | 4 | 5 | 4 | 5 | 5 | **91** | None recorded | Medium | BUILD focused boundary |
 | `ArchonMemory` | SDK | 5 | 5 | 4 | 4 | 5 | **93** | None recorded | Medium | BUILD semantics; index adoption pending |
-| `ArchonMemoryProxima` | Optional adapter | 3 | 5 | 3 | 3 | 4 | **73** | None recorded | Medium | ADAPT; persistence/device gates open |
+| `ArchonMemoryProxima` | Optional adapter | 3 | 5 | 3 | 3 | 4 | **73** | None recorded | Medium | ADAPT; ceiling/device gates open |
 | `ArchonSearch` | SDK | 5 | 5 | 4 | 4 | 5 | **93** | None recorded | Medium | BUILD local orchestrator |
 | `ArchonSandbox` | SDK | 5 | 5 | 4 | 4 | 5 | **93** | None recorded | Medium | BUILD safety boundary |
 | `ArchonConnect` | SDK | 4 | 5 | 4 | 4 | 5 | **88** | None recorded | Medium | ADAPT official SDK; conformance open |
@@ -535,11 +569,11 @@ inspection, cloud demo, or package build into a replacement claim.
 
 | Priority | Work | Products | Exit evidence |
 | :---: | --- | --- | --- |
-| 1 | Complete memory adapter comparison | `ArchonMemory`, `ArchonMemoryProxima` | Recall, p95, memory ceiling, update/delete, recovery, migration, iOS device (recall/p95/iOS-device latency recorded 2026-09-16; ceiling, recovery, migration open) |
-| 2 | Complete graph recovery and side-effect tests | `ArchonAgent` | Crash/reopen, fork/replay, handoff, cancellation, idempotence |
+| 1 | Complete memory adapter comparison | `ArchonMemory`, `ArchonMemoryProxima` | Recall, p95, memory ceiling, update/delete, recovery, migration, iOS device (recall/p95/iOS-device latency recorded 2026-09-16; package-side migration/recovery proven 2026-09-18; ceiling, device open) |
+| 2 | Complete graph recovery and side-effect tests | `ArchonAgent` | Crash/reopen, fork/replay, handoff, cancellation, idempotence (typed handoffs, guardrails, eval budgets proven package-side 2026-09-18; device gates open) |
 | 3 | Complete offline and citation workloads | `ArchonSearch` | Network denied local results, bounded crawl, dedupe, verifiable citations |
-| 4 | Threat-model local action boundaries | `ArchonSandbox`, `ArchonComputerUse` | CSP/path/quota/audit tests, stale-state and approval evidence |
-| 5 | Complete official MCP lifecycle decision | `ArchonConnect` | Production-server conformance, authorizer, notification, teardown |
+| 4 | Threat-model local action boundaries | `ArchonSandbox`, `ArchonComputerUse` | CSP/path/quota/audit tests, stale-state and approval evidence (capability grants, audit stream, semantic catalog proven package-side 2026-09-18; consuming-app validation open) |
+| 5 | Complete official MCP lifecycle decision | `ArchonConnect` | Production-server conformance, authorizer, notification, teardown (fake-transport conformance scope and bounded teardown proven package-side 2026-09-18; production-server/device gates open) |
 | 6 | Validate model/UI paths in an app | `ArchonModels`, `ArchonModelsUI`, `ArchonFull` | Signed app, real artifact, accessibility, physical-device evidence |
 
 ## Evidence and maintenance policy

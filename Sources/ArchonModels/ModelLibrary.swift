@@ -30,6 +30,9 @@ public actor ModelLibraryIntentRegistry {
 public struct ModelDownloadRequest: Sendable {
     public let variant: ModelVariant
     public let modelName: String
+    /// Descriptive model family retained on the installed manifest for
+    /// benchmark lookup and recipe tuning. Classification only.
+    public let family: String?
     public let license: ModelLicenseMetadata?
     public let logoURL: URL?
     public let sourceRepository: String?
@@ -42,6 +45,7 @@ public struct ModelDownloadRequest: Sendable {
     public init(
         variant: ModelVariant,
         modelName: String,
+        family: String? = nil,
         license: ModelLicenseMetadata? = nil,
         logoURL: URL? = nil,
         sourceRepository: String? = nil,
@@ -50,6 +54,7 @@ public struct ModelDownloadRequest: Sendable {
     ) {
         self.variant = variant
         self.modelName = modelName
+        self.family = family
         self.license = license
         self.logoURL = logoURL
         self.sourceRepository = sourceRepository
@@ -61,6 +66,12 @@ public struct ModelDownloadRequest: Sendable {
 /// Bounded retry policy for transient model-download failures. Integrity and
 /// manifest failures are deterministic and are never retried.
 public struct ModelDownloadPolicy: Sendable, Equatable {
+    /// Hard upper bound for per-file attempts. A caller asking for more is
+    /// clamped here so a misconfigured policy cannot retry unboundedly.
+    public static let maximumAllowedAttempts = 10
+    /// Hard upper bound for the explicit `retry(variantID:backoff:)` delay.
+    public static let maximumRetryBackoff: TimeInterval = 60
+
     public let maxAttempts: Int
     public let initialBackoff: TimeInterval
     public let maximumBackoff: TimeInterval
@@ -74,10 +85,18 @@ public struct ModelDownloadPolicy: Sendable, Equatable {
         maximumBackoff: TimeInterval = 30,
         maximumDownloadBytes: Int64 = 16 * 1024 * 1024 * 1024
     ) {
-        self.maxAttempts = max(1, maxAttempts)
+        self.maxAttempts = max(1, min(maxAttempts, Self.maximumAllowedAttempts))
         self.initialBackoff = max(0, initialBackoff)
         self.maximumBackoff = max(self.initialBackoff, maximumBackoff)
         self.maximumDownloadBytes = max(1, maximumDownloadBytes)
+    }
+
+    /// Exponential backoff for the 1-based retry index after a failed file
+    /// attempt, capped at `maximumBackoff`. Pure and deterministic for tests.
+    public func backoffDelay(forRetryIndex retryIndex: Int) -> TimeInterval {
+        guard retryIndex >= 1 else { return 0 }
+        let exponent = pow(2, Double(retryIndex - 1))
+        return min(maximumBackoff, initialBackoff * exponent)
     }
 }
 
@@ -137,6 +156,20 @@ private struct BackgroundDownloadJob: Sendable {
     var transferIdentifiers: [String]
 }
 
+/// Mutable per-run foreground download bookkeeping shared between the run
+/// loop and its per-file retry helper. All access is actor-isolated to the
+/// owning `ModelDownloadManager`, so no synchronization is needed.
+private final class ForegroundDownloadRunState {
+    /// 1-based transport try for the current file (resets per file).
+    var currentTry = 1
+    /// Staged bytes present when the run started (range-resume offset).
+    var resumedFromBytes: Int64 = 0
+    /// Bytes of already-complete resources skipped by delta bookkeeping.
+    var reusedBytes: Int64 = 0
+    /// The most recent failed file-try error in this run, if any.
+    var lastTryError: String?
+}
+
 /// A byte-stream provider used by the foreground model downloader. The
 /// default implementation is backed by `URLSession`; hosts and tests may
 /// inject a transport to exercise cancellation, range resume, or custom
@@ -148,14 +181,26 @@ public typealias ModelByteStreamProvider = @Sendable (
 public enum ModelDownloadState: Sendable, Equatable {
     case queued
     case resolving
-    case downloading(progress: Double, bytesDownloaded: Int64, totalBytes: Int64?)
-    case paused
+    case downloading(progress: Double, bytesDownloaded: Int64, totalBytes: Int64?, attempt: ModelDownloadAttempt?)
+    case paused(attempt: ModelDownloadAttempt?)
     case verifying
     case installing
     case ready(InstalledModel)
     case updateAvailable(ModelUpdateCandidate)
-    case failed(String)
+    case failed(String, attempt: ModelDownloadAttempt?)
     case cancelled
+}
+
+extension ModelDownloadState {
+    /// The attempt info carried by downloading, paused, and failed states.
+    public var attempt: ModelDownloadAttempt? {
+        switch self {
+        case .downloading(_, _, _, let attempt): attempt
+        case .paused(let attempt): attempt
+        case .failed(_, let attempt): attempt
+        default: nil
+        }
+    }
 }
 
 public struct ModelDownloadEvent: Sendable {
@@ -634,6 +679,7 @@ public actor ModelLibrary {
         let manifest = ArchonModelManifest(
             variant: request.variant,
             modelName: request.modelName,
+            family: request.family,
             license: request.license,
             logoURL: request.logoURL,
             sourceRepository: request.sourceRepository,
@@ -819,6 +865,37 @@ public actor ModelLibrary {
         }
     }
 
+    /// Storage analytics: per-model bytes plus the temporary/staging split.
+    /// Counts every installed model, including non-MLX artifacts imported
+    /// through lower-level inspection APIs.
+    public func storageBreakdown() throws -> ModelStorageBreakdown {
+        try ensureRoot()
+        let entries = try installedModels().map { model in
+            ModelStorageEntry(id: model.id, bytes: directorySize(at: model.directoryURL))
+        }
+        let stagingDirectory = rootURL.appendingPathComponent(".staging", isDirectory: true)
+        let stagingBytes = FileManager.default.fileExists(atPath: stagingDirectory.path)
+            ? directorySize(at: stagingDirectory)
+            : 0
+        let temporaryPrefixes = [".staging", ".backup-", ".install-"]
+        let rootEntries = (try? FileManager.default.contentsOfDirectory(
+            at: rootURL,
+            includingPropertiesForKeys: nil,
+            options: []
+        )) ?? []
+        let tempBytes = rootEntries
+            .filter { entry in temporaryPrefixes.contains(where: { entry.lastPathComponent == $0 || entry.lastPathComponent.hasPrefix($0) }) }
+            .reduce(into: Int64(0)) { total, entry in
+                let (sum, overflow) = total.addingReportingOverflow(temporaryEntrySize(at: entry))
+                total = overflow ? Int64.max : sum
+            }
+        return ModelStorageBreakdown(
+            perModelBytes: entries,
+            stagingBytes: stagingBytes,
+            tempBytes: tempBytes
+        )
+    }
+
     private func ensureRoot() throws {
         try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
         var values = URLResourceValues()
@@ -843,6 +920,15 @@ public actor ModelLibrary {
             guard let item = item as? URL else { return nil }
             return try? item.resourceValues(forKeys: [.fileSizeKey]).fileSize.map(Int64.init)
         }.reduce(0, +)
+    }
+
+    private func temporaryEntrySize(at url: URL) -> Int64 {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else { return 0 }
+        if !isDirectory.boolValue {
+            return (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize.map(Int64.init)) ?? 0
+        }
+        return directorySize(at: url)
     }
 
     private func safeComponent(_ value: String) -> String {
@@ -1082,7 +1168,7 @@ public actor ModelDownloadManager {
     ) async throws -> AsyncThrowingStream<ModelDownloadEvent, Error> {
         guard let request = requests[variantID] else { throw ArchonModelsError.invalidModelIdentifier(variantID) }
         if backoff > 0 {
-            let bounded = min(backoff, 60)
+            let bounded = min(backoff, ModelDownloadPolicy.maximumRetryBackoff)
             try await Task.sleep(for: .seconds(bounded))
         }
         return try download(request, into: library, on: device)
@@ -1116,6 +1202,7 @@ public actor ModelDownloadManager {
         let request = ModelDownloadRequest(
             variant: variant,
             modelName: installed.manifest.modelName,
+            family: installed.manifest.family,
             license: installed.manifest.license,
             logoURL: candidate.logoURL ?? installed.manifest.logoURL,
             sourceRepository: candidate.sourceRepository,
@@ -1153,6 +1240,7 @@ public actor ModelDownloadManager {
     ) async {
         let id = request.variant.id
         defer { activeTasks[id] = nil }
+        let runState = ForegroundDownloadRunState()
 
         do {
             continuation.yield(ModelDownloadEvent(variantID: id, state: .resolving))
@@ -1197,6 +1285,7 @@ public actor ModelDownloadManager {
             let authorizationToken = request.variant.source == .huggingFace
                 ? await tokenStore?.token(for: "huggingface.co")
                 : nil
+            runState.resumedFromBytes = existingBytes
             var downloadedBytes = existingBytes
             for item in pending {
                 try Task.checkCancellation()
@@ -1209,7 +1298,8 @@ public actor ModelDownloadManager {
                     totalBytes: expectedTotal,
                     authorizationToken: authorizationToken,
                     variantID: id,
-                    continuation: continuation
+                    continuation: continuation,
+                    runState: runState
                 )
                 downloadedBytes += completed - previousFileBytes
             }
@@ -1237,7 +1327,7 @@ public actor ModelDownloadManager {
         } catch {
             if Task.isCancelled || error is CancellationError {
                 if pausedIDs.contains(id) {
-                    continuation.yield(ModelDownloadEvent(variantID: id, state: .paused))
+                    continuation.yield(ModelDownloadEvent(variantID: id, state: .paused(attempt: foregroundAttempt(runState: runState))))
                     continuation.finish()
                     return
                 }
@@ -1247,10 +1337,27 @@ public actor ModelDownloadManager {
                 continuation.yield(ModelDownloadEvent(variantID: id, state: .cancelled))
                 continuation.finish(throwing: ArchonModelsError.cancelled)
             } else {
-                continuation.yield(ModelDownloadEvent(variantID: id, state: .failed(error.localizedDescription)))
+                let message = error.localizedDescription
+                continuation.yield(ModelDownloadEvent(variantID: id, state: .failed(message, attempt: foregroundAttempt(runState: runState, lastError: message))))
                 continuation.finish(throwing: error)
             }
         }
+    }
+
+    /// Builds the attempt snapshot for foreground progress, pause, and
+    /// failure events. `attempt` is the 1-based transport try for the
+    /// current file against the bounded per-file policy cap.
+    private func foregroundAttempt(
+        runState: ForegroundDownloadRunState,
+        lastError: String? = nil
+    ) -> ModelDownloadAttempt {
+        ModelDownloadAttempt(
+            attempt: runState.currentTry,
+            maxAttempts: policy.maxAttempts,
+            resumedFromBytes: runState.resumedFromBytes > 0 ? runState.resumedFromBytes : nil,
+            deltaReusedBytes: runState.reusedBytes > 0 ? runState.reusedBytes : nil,
+            lastError: lastError ?? runState.lastTryError
+        )
     }
 
     private func runInBackground(
@@ -1265,6 +1372,10 @@ public actor ModelDownloadManager {
             activeTasks[id] = nil
             backgroundJobs[id] = nil
         }
+        // Bytes of transfers skipped because a previous run already staged
+        // them as ready. The OS owns background transport retries, so the
+        // manager reports a single try per run here.
+        var skippedReadyBytes: Int64 = 0
 
         do {
             continuation.yield(ModelDownloadEvent(variantID: id, state: .resolving))
@@ -1312,7 +1423,7 @@ public actor ModelDownloadManager {
             for (index, item) in pending.enumerated() {
                 try Task.checkCancellation()
                 if pausedIDs.contains(id) {
-                    continuation.yield(ModelDownloadEvent(variantID: id, state: .paused))
+                    continuation.yield(ModelDownloadEvent(variantID: id, state: .paused(attempt: backgroundAttempt(reusedBytes: skippedReadyBytes))))
                     continuation.finish()
                     return
                 }
@@ -1338,7 +1449,9 @@ public actor ModelDownloadManager {
                 if let transferRecord,
                    transferRecord.status == .ready,
                    FileManager.default.fileExists(atPath: targetURL.path) {
-                    completedBytes += fileSize(at: targetURL)
+                    let stagedBytes = fileSize(at: targetURL)
+                    completedBytes += stagedBytes
+                    skippedReadyBytes += stagedBytes
                     continue
                 } else if let transferRecord,
                           transferRecord.status == .downloading,
@@ -1365,13 +1478,14 @@ public actor ModelDownloadManager {
                         continuation.yield(ModelDownloadEvent(variantID: id, state: .downloading(
                             progress: progress,
                             bytesDownloaded: aggregate,
-                            totalBytes: expectedTotal ?? totalBytes.map { $0 + completedBytes }
+                            totalBytes: expectedTotal ?? totalBytes.map { $0 + completedBytes },
+                            attempt: backgroundAttempt(reusedBytes: skippedReadyBytes)
                         )))
                     case .ready:
                         ready = true
                     case .paused:
                         if pausedIDs.contains(id) {
-                            continuation.yield(ModelDownloadEvent(variantID: id, state: .paused))
+                            continuation.yield(ModelDownloadEvent(variantID: id, state: .paused(attempt: backgroundAttempt(reusedBytes: skippedReadyBytes))))
                             continuation.finish()
                             return
                         }
@@ -1417,7 +1531,7 @@ public actor ModelDownloadManager {
             continuation.finish()
         } catch {
             if pausedIDs.contains(id) {
-                continuation.yield(ModelDownloadEvent(variantID: id, state: .paused))
+                continuation.yield(ModelDownloadEvent(variantID: id, state: .paused(attempt: backgroundAttempt(reusedBytes: skippedReadyBytes))))
                 continuation.finish()
             } else if cancelledIDs.contains(id) {
                 if let url = try? await library.stagingURL(for: request.variant) {
@@ -1426,10 +1540,26 @@ public actor ModelDownloadManager {
                 continuation.yield(ModelDownloadEvent(variantID: id, state: .cancelled))
                 continuation.finish(throwing: ArchonModelsError.cancelled)
             } else {
-                continuation.yield(ModelDownloadEvent(variantID: id, state: .failed(error.localizedDescription)))
+                let message = error.localizedDescription
+                continuation.yield(ModelDownloadEvent(variantID: id, state: .failed(message, attempt: backgroundAttempt(reusedBytes: skippedReadyBytes, lastError: message))))
                 continuation.finish(throwing: error)
             }
         }
+    }
+
+    /// Builds the attempt snapshot for background progress, pause, and
+    /// failure events. Background transfers are single-try at the manager
+    /// layer; the OS owns transport retries.
+    private func backgroundAttempt(
+        reusedBytes: Int64,
+        lastError: String? = nil
+    ) -> ModelDownloadAttempt {
+        ModelDownloadAttempt(
+            attempt: 1,
+            maxAttempts: 1,
+            deltaReusedBytes: reusedBytes > 0 ? reusedBytes : nil,
+            lastError: lastError
+        )
     }
 
     private func registerBackgroundTransfer(variantID: String, transferIdentifier: String) {
@@ -1502,7 +1632,8 @@ public actor ModelDownloadManager {
         totalBytes: Int64?,
         authorizationToken: String?,
         variantID: String,
-        continuation: AsyncThrowingStream<ModelDownloadEvent, Error>.Continuation
+        continuation: AsyncThrowingStream<ModelDownloadEvent, Error>.Continuation,
+        runState: ForegroundDownloadRunState
     ) async throws -> Int64 {
         let fileManager = FileManager.default
         try fileManager.createDirectory(at: targetURL.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -1516,9 +1647,11 @@ public actor ModelDownloadManager {
             if let expectedChecksum = pending.checksum {
                 let actualChecksum = try sha256(of: targetURL)
                 if expectedChecksum.lowercased() == actualChecksum.lowercased() {
+                    runState.reusedBytes += currentBytes
                     return currentBytes
                 }
             } else {
+                runState.reusedBytes += currentBytes
                 return currentBytes
             }
             try handleRemoval(of: targetURL)
@@ -1587,7 +1720,7 @@ public actor ModelDownloadManager {
                     buffer.removeAll(keepingCapacity: true)
                     let aggregate = completedBytesBeforeFile + reportedBytes
                     let progress = inferredTotal.map { min(1, Double(aggregate) / Double(max($0, 1))) } ?? 0
-                    continuation.yield(ModelDownloadEvent(variantID: variantID, state: .downloading(progress: progress, bytesDownloaded: aggregate, totalBytes: inferredTotal)))
+                    continuation.yield(ModelDownloadEvent(variantID: variantID, state: .downloading(progress: progress, bytesDownloaded: aggregate, totalBytes: inferredTotal, attempt: foregroundAttempt(runState: runState))))
                 }
             }
             if !buffer.isEmpty {
@@ -1601,7 +1734,8 @@ public actor ModelDownloadManager {
             continuation.yield(ModelDownloadEvent(variantID: variantID, state: .downloading(
                 progress: progress,
                 bytesDownloaded: aggregate,
-                totalBytes: inferredTotal
+                totalBytes: inferredTotal,
+                attempt: foregroundAttempt(runState: runState)
             )))
         } catch {
             try? handle.close()
@@ -1627,9 +1761,11 @@ public actor ModelDownloadManager {
         totalBytes: Int64?,
         authorizationToken: String?,
         variantID: String,
-        continuation: AsyncThrowingStream<ModelDownloadEvent, Error>.Continuation
+        continuation: AsyncThrowingStream<ModelDownloadEvent, Error>.Continuation,
+        runState: ForegroundDownloadRunState
     ) async throws -> Int64 {
         var attempt = 0
+        runState.currentTry = 1
         while true {
             do {
                 return try await downloadSingle(
@@ -1639,17 +1775,20 @@ public actor ModelDownloadManager {
                     totalBytes: totalBytes,
                     authorizationToken: authorizationToken,
                     variantID: variantID,
-                    continuation: continuation
+                    continuation: continuation,
+                    runState: runState
                 )
             } catch {
                 attempt += 1
+                runState.lastTryError = error.localizedDescription
                 guard attempt < policy.maxAttempts,
                       shouldRetry(error),
                       !Task.isCancelled else {
+                    runState.currentTry = min(max(attempt, 1), policy.maxAttempts)
                     throw error
                 }
-                let exponent = pow(2, Double(attempt - 1))
-                let delay = min(policy.maximumBackoff, policy.initialBackoff * exponent)
+                runState.currentTry = attempt + 1
+                let delay = policy.backoffDelay(forRetryIndex: attempt)
                 if delay > 0 {
                     try await Task.sleep(for: .seconds(delay))
                 }

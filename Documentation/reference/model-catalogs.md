@@ -110,3 +110,13 @@ across curated local entries and explicit remote providers. Keep the ordering
 intentional: put offline or app-owned catalogs first when local-first behavior
 is required, and do not present a remote result as locally runnable without a
 compatible installed artifact.
+
+## Family benchmarks
+
+`ModelDescriptor.benchmarks` carries measured `ModelFamilyBenchmark` records
+(quality 0...1, optional speed, explicit provenance) through every catalog
+filter. Catalogs must only attach measurements they actually have:
+`HuggingFaceCatalog` always reports an empty list because the Hub exposes no
+measured quality contract. `recommendedVariant(for:device:task:benchmarks:)`
+uses explicit records first, then descriptor-carried records, and only as a
+fallback for variants without declared estimates. Invalid records are ignored.

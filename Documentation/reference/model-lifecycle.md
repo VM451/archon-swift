@@ -65,3 +65,15 @@ The package fails closed for unsupported formats, invalid manifests, checksum
 mismatches, incompatible devices, missing runtimes, missing credentials, and
 missing host lifecycle objects. It does not report a raw weight file as a
 runnable model or silently substitute a cloud provider.
+
+## Attempt transparency and delta semantics
+
+Foreground progress, pause, and failure events carry a `ModelDownloadAttempt`
+snapshot: the 1-based per-file try against the bounded policy cap (default 3,
+hard cap 10), the staged-byte resume offset, and the delta-reused bytes of
+verified-complete resources skipped without re-download. `retry` preserves
+staging for range resume; `redownload` clears it. Retry backoff is exponential
+and capped, and integrity failures are never retried. Background records
+persist try counts, resume offsets, and delta reuse with truncated errors and
+a 1 MiB resume-blob cap; the OS owns background transport retries, so the
+manager reports a single try per background run.

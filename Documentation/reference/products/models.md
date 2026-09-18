@@ -28,3 +28,28 @@ memory contract. Core AI, Foundation Models, cloud, raw, conversion-required,
 and community-converted variants are not returned by the browsing boundary.
 The bundled Gemma catalog is only a compatibility convenience; it is not the
 source of truth for official discovery.
+
+## Preparation recipes
+
+`ModelPrepRecipeIndex` maps raw GGUF, SafeTensors, and Transformers sources
+to developer-side MLX/Core AI preparation steps. Recipes are data plus
+documentation: lookup is fail-closed (unknown families and runnable sources
+return nil), and the runtime still rejects raw weights through
+`ModelCompatibilityAnalyzer`, `ModelArtifactInspector.isRunnable`, and
+`MLXModelCatalog`.
+
+## Download attempts and storage analytics
+
+`ModelDownloadState` carries `ModelDownloadAttempt` snapshots (try count
+against the bounded policy cap, resume offsets, delta-reused bytes) on its
+downloading, paused, and failed cases. `ModelBackgroundDownloadRecord`
+persists the same bookkeeping with truncated errors and capped resume blobs.
+`ModelLibrary.storageBreakdown()` reports per-model bytes plus the
+staging/temporary split.
+
+## Measured family benchmarks
+
+`ModelFamilyBenchmark` records carry measured quality/speed with explicit
+provenance. `recommendedVariant(for:device:task:benchmarks:)` consumes them
+after fit, filling in only when a variant has no declared estimate. Invalid
+records are ignored; Archon never invents scores.

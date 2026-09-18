@@ -204,6 +204,7 @@ public enum ComputerUseError: Error, LocalizedError, Equatable, Sendable {
     case verificationFailed(String)
     case actionCancelled(String)
     case limitsExceeded(String)
+    case invalidDescriptor(String)
     case stopped
 
     public var errorDescription: String? {
@@ -216,6 +217,7 @@ public enum ComputerUseError: Error, LocalizedError, Equatable, Sendable {
         case .verificationFailed(let id): "Computer-use verification failed: \(id)"
         case .actionCancelled(let id): "Computer-use action was cancelled: \(id)"
         case .limitsExceeded(let id): "Computer-use execution limit exceeded: \(id)"
+        case .invalidDescriptor(let id): "Computer-use descriptor was refused (invalid ID or modify+ action without a postcondition): \(id)"
         case .stopped: "Computer-use execution was stopped."
         }
     }
@@ -254,6 +256,37 @@ public actor ComputerUseController {
         guard limits.isValidActionID(action.id) else { return false }
         actions[action.id] = action
         return true
+    }
+
+    /// Registers a catalog descriptor with a host execution closure. Fail
+    /// closed: invalid IDs are refused, and modify+ descriptors require a
+    /// `verify` postcondition. A `targetRole` installs a precondition that
+    /// fails closed as a stale target when no current element carries it.
+    @discardableResult
+    public func register(
+        descriptor: SemanticActionDescriptor,
+        execute: @escaping @Sendable () async throws -> SemanticActionResult,
+        verify: (@Sendable (SemanticActionResult, SemanticSnapshot?) async -> Bool)? = nil
+    ) -> Bool {
+        guard limits.isValidActionID(descriptor.id) else { return false }
+        guard !descriptor.requiresPostcondition || verify != nil else { return false }
+        let precondition: (@Sendable (SemanticSnapshot?) async -> Bool)?
+        if let targetRole = descriptor.targetRole {
+            precondition = { snapshot in
+                snapshot?.elements.contains(where: { $0.role == targetRole }) ?? false
+            }
+        } else {
+            precondition = nil
+        }
+        return register(SemanticAction(
+            id: descriptor.id,
+            description: descriptor.description,
+            risk: descriptor.risk,
+            targetElementID: nil,
+            precondition: precondition,
+            verify: verify,
+            execute: execute
+        ))
     }
 
     public func isRegistered(id: String) -> Bool { actions[id] != nil }

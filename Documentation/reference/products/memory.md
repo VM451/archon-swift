@@ -29,6 +29,32 @@ without trapping). The benchmark gate holds steady p95 under 20 ms with
 Recall@10 at least 0.99 at 10k x 384; see
 [`Benchmarks/README.md`](../../../Benchmarks/README.md).
 
+## Hybrid ranking ownership
+
+The sparse-plus-dense blend is owned by the `HybridRankingOptions` value type
+(`Storage/HybridRanking.swift`): `score = (alpha * dense + beta * sparse *
+exp(-decayLambda * ageDays)) * weight`, with a missing dense component
+contributing zero. `LocalVectorStore.search` delegates to it, so every
+retrieval path shares one formula, one deterministic UUID tie-break, and one
+fail-closed clamp (negative sparse scores, ages, and weights behave as zero;
+the final score never goes negative). Index adapters reuse the same options
+rather than reimplementing the blend.
+
+## Temporal edge semantics
+
+Supersession chains extend without forking: updating a mid-chain record
+resolves to the live head via `MemoryExtractor.resolveSupersessionHead` and
+supersedes the head. Updates against deleted, expired (head `validTo` at or
+before now with no live successor), or missing targets are skipped but
+recorded in `MemoryChangeset.skipped` with a typed `MemorySkipReason`; skips
+never mutate the store and never append history. Dangling or cycling
+`supersededById` pointers are rejected with typed
+`ArchonMemoryError.supersessionTargetInvalid` /
+`supersessionChainBroken` errors. Active-window membership is
+`validFrom <= activeAt && (validTo == nil || validTo > activeAt)`, so a record
+expiring exactly at `activeAt` is excluded while `activeAt: nil` returns the
+full chain timelessly.
+
 `CompetitiveResearchSnapshot` is imported by a consuming app or CLI that owns
 web fetching, credentials, and source normalization. The package validates the
 snapshot, persists each insight/profile through the durable document store, and

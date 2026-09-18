@@ -13,6 +13,7 @@ public struct ModelLibraryView: View {
     @State private var updates: [String: ModelUpdateCandidate] = [:]
     @State private var updateStatus: [String: String] = [:]
     @State private var updatingIDs: Set<String> = []
+    @State private var modelSizes: [String: Int64] = [:]
     @State private var errorMessage: String?
     @State private var isRefreshing = false
     @State private var isCheckingUpdates = false
@@ -56,6 +57,12 @@ public struct ModelLibraryView: View {
                                         Text(model.manifest.runtime.rawValue + " · " + model.manifest.format.rawValue + (model.manifest.isExperimental ? " · Experimental" : ""))
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
+                                        if let bytes = modelSizes[model.id] {
+                                            Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .accessibilityIdentifier(ModelAccessibilityIDs.librarySize(modelID: model.id))
+                                        }
                                     }
                                     Spacer()
                                     if let candidate = updates[model.id] {
@@ -169,6 +176,8 @@ public struct ModelLibraryView: View {
         defer { isRefreshing = false }
         do {
             models = try await library.installedMLXModels()
+            let breakdown = try await library.storageBreakdown()
+            modelSizes = Dictionary(uniqueKeysWithValues: breakdown.perModelBytes.map { ($0.id, $0.bytes) })
             errorMessage = nil
         } catch {
             if !error.isCancellation && !Task.isCancelled {
@@ -247,10 +256,13 @@ public struct ModelLibraryView: View {
                         updateStatus[modelID] = "Queued"
                     case .resolving:
                         updateStatus[modelID] = "Resolving"
-                    case .downloading(let progress, _, _):
-                        updateStatus[modelID] = "Downloading \(Int(progress * 100))%"
-                    case .paused:
-                        updateStatus[modelID] = "Paused"
+                    case .downloading(let progress, _, _, let attempt):
+                        updateStatus[modelID] = ModelBrowserView.statusText(
+                            "Downloading \(Int(progress * 100))%",
+                            attempt: attempt
+                        )
+                    case .paused(let attempt):
+                        updateStatus[modelID] = ModelBrowserView.statusText("Paused", attempt: attempt)
                     case .verifying:
                         updateStatus[modelID] = "Verifying"
                     case .installing:
@@ -261,8 +273,11 @@ public struct ModelLibraryView: View {
                         await refresh()
                     case .updateAvailable:
                         updateStatus[modelID] = "Update available"
-                    case .failed(let message):
-                        updateStatus[modelID] = message
+                    case .failed(let message, let attempt):
+                        updateStatus[modelID] = ModelBrowserView.statusText(
+                            ModelLibraryViewModel.redactedText(message),
+                            attempt: attempt
+                        )
                     case .cancelled:
                         updateStatus[modelID] = "Cancelled"
                     }
@@ -387,6 +402,7 @@ public struct ModelBrowserView: View {
                             progress: progress[variant.id],
                             statusMessage: status[variant.id],
                             isInstalled: isInstalled(variant),
+                            benchmark: model.benchmarks.first,
                             library: library,
                             downloadManager: downloadManager,
                             onDownload: { beginDownload(variant, descriptor: model) },
@@ -915,6 +931,7 @@ public struct ModelBrowserView: View {
                     ModelDownloadRequest(
                         variant: variant,
                         modelName: descriptor.name,
+                        family: descriptor.family,
                         license: descriptor.license,
                         logoURL: descriptor.logoURL,
                         sourceRepository: descriptor.id,
@@ -983,19 +1000,19 @@ public struct ModelBrowserView: View {
                 let stream = try await downloadTask()
                 for try await event in stream {
                     switch event.state {
-                    case .downloading(let value, _, _):
+                    case .downloading(let value, _, _, let attempt):
                         progress[variantID] = value
                         phase[variantID] = .downloading
-                        status[variantID] = "Downloading"
+                        status[variantID] = Self.statusText("Downloading", attempt: attempt)
                     case .queued:
                         phase[variantID] = .queued
                         status[variantID] = "Queued"
                     case .resolving:
                         phase[variantID] = .resolving
                         status[variantID] = "Resolving"
-                    case .paused:
+                    case .paused(let attempt):
                         phase[variantID] = .paused
-                        status[variantID] = "Paused"
+                        status[variantID] = Self.statusText("Paused", attempt: attempt)
                     case .verifying:
                         phase[variantID] = .verifying
                         status[variantID] = "Verifying"
@@ -1010,9 +1027,12 @@ public struct ModelBrowserView: View {
                     case .updateAvailable:
                         phase[variantID] = .updateAvailable
                         status[variantID] = "Update Available"
-                    case .failed(let message):
+                    case .failed(let message, let attempt):
                         phase[variantID] = .failed
-                        status[variantID] = message
+                        status[variantID] = Self.statusText(
+                            ModelLibraryViewModel.redactedText(message),
+                            attempt: attempt
+                        )
                     case .cancelled:
                         phase[variantID] = .cancelled
                         status[variantID] = "Cancelled"
@@ -1024,10 +1044,17 @@ public struct ModelBrowserView: View {
                     status[variantID] = "Cancelled"
                 } else {
                     phase[variantID] = .failed
-                    status[variantID] = error.localizedDescription
+                    status[variantID] = ModelLibraryViewModel.redactedMessage(for: error)
                 }
             }
         }
+    }
+
+    /// Appends a compact attempt suffix ("try 2/3") to a status line when the
+    /// event carries attempt info.
+    static func statusText(_ base: String, attempt: ModelDownloadAttempt?) -> String {
+        guard let attempt else { return base }
+        return "\(base) · try \(attempt.attempt)/\(attempt.maxAttempts)"
     }
 }
 

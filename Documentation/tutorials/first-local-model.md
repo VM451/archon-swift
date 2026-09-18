@@ -72,3 +72,21 @@ is unavailable, the load must fail closed.
 It does not convert weights, download from Hugging Face, invent a tokenizer, or
 claim that every Apple device supports every model. For those paths, read
 [supported models](../reference/supported-models.md), [model catalogs](../reference/model-catalogs.md), and [model lifecycle](../reference/model-lifecycle.md).
+
+## 5. Lint, dry-run fit, and look up prep guidance
+
+Before importing, lint the directory and dry-run the device fit without
+downloading anything:
+
+```bash
+archon-model catalog-lint --local-path ./models
+archon-model device-fit --manifest ./models/qwen/archon-model.json --device-profile mac-16gb
+```
+
+Raw GGUF, SafeTensors, and Transformers sources need developer-side
+preparation first. Look up the recipe (lookup only; nothing converts on
+device):
+
+```bash
+archon-model prep-recipe --from gguf --to mlx --family Qwen
+```

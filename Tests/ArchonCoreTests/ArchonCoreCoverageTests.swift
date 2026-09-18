@@ -442,4 +442,29 @@ struct ArchonCoreCoverageTests {
             #expect((error as? CancellationError) != nil || error.isCancellation)
         }
     }
+
+    @Test("Agent-stack probe IDs register as available capabilities")
+    func probeConstantRegistration() async throws {
+        let ids = [
+            ArchonCapabilityProbeID.agentHandoff,
+            ArchonCapabilityProbeID.agentGuardrails,
+            ArchonCapabilityProbeID.agentEval,
+            ArchonCapabilityProbeID.contextTokenProfiles,
+            ArchonCapabilityProbeID.contextSummarization,
+            ArchonCapabilityProbeID.contextContributorLatency
+        ]
+        #expect(Set(ids).count == ids.count)
+        #expect(ids.allSatisfy { $0.hasPrefix("archon.") })
+
+        let registry = ArchonCapabilityRegistry()
+        for id in ids {
+            await registry.registerAvailable(id: id, description: "probe \(id)")
+        }
+        for id in ids {
+            let status = try await registry.require(id)
+            #expect(status.isAvailable)
+            #expect(status.capability.id == id)
+        }
+        #expect(await registry.allStatuses().map(\.capability.id) == ids.sorted())
+    }
 }

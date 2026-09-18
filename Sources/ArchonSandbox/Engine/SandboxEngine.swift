@@ -1,4 +1,5 @@
 import Foundation
+import ArchonCore
 #if canImport(WebKit)
 import WebKit
 #endif
@@ -11,12 +12,19 @@ public actor SandboxEngine {
     
     private var registeredTools: [String: any SandboxAgentTool] = [:]
     private var eventContinuation: AsyncStream<SandboxEvent>.Continuation?
+    private var auditContinuation: AsyncStream<SandboxAuditRecord>.Continuation?
+    private var auditBuffer: [SandboxAuditRecord] = []
+    private let maxAuditBufferRecords = 500
     private var outstandingToolCalls = 0
     private let maxOutstandingToolCalls = 32
     private let maxBridgeMessageBytes = 256 * 1024
-    
+
     /// Real-time stream of all events emitted by the sandbox (console logs, DOM mutations, errors, tool calls).
     nonisolated public let eventStream: AsyncStream<SandboxEvent>
+
+    /// Real-time stream of audited policy decisions (capability checks, WASM
+    /// loads). Bounded to the newest records, mirroring `eventStream`.
+    nonisolated public let auditStream: AsyncStream<SandboxAuditRecord>
     
     /// Low-level JS evaluation closure provided by the platform view representable / web view.
     private var jsEvaluator: (@MainActor @Sendable (String) async throws -> String)?
@@ -31,13 +39,18 @@ public actor SandboxEngine {
         var continuation: AsyncStream<SandboxEvent>.Continuation!
         self.eventStream = AsyncStream(bufferingPolicy: .bufferingNewest(500)) { continuation = $0 }
         self.eventContinuation = continuation
-        
+
+        var auditContinuation: AsyncStream<SandboxAuditRecord>.Continuation!
+        self.auditStream = AsyncStream(bufferingPolicy: .bufferingNewest(500)) { auditContinuation = $0 }
+        self.auditContinuation = auditContinuation
+
         // Emit initial lifecycle state
         self.eventContinuation?.yield(.lifecycle(.initializing))
     }
-    
+
     deinit {
         eventContinuation?.finish()
+        auditContinuation?.finish()
     }
     
     // MARK: - Workspace Accessors
@@ -252,6 +265,110 @@ public actor SandboxEngine {
     
     public func emitEvent(_ event: SandboxEvent) {
         eventContinuation?.yield(event)
+    }
+
+    // MARK: - Capability Policy & Audit
+
+    /// Bounded snapshot of audited policy decisions, oldest first.
+    public func auditRecords() -> [SandboxAuditRecord] {
+        auditBuffer
+    }
+
+    public func emitAudit(_ record: SandboxAuditRecord) {
+        auditBuffer.append(record)
+        if auditBuffer.count > maxAuditBufferRecords {
+            auditBuffer.removeFirst(auditBuffer.count - maxAuditBufferRecords)
+        }
+        auditContinuation?.yield(record)
+    }
+
+    /// Evaluates a scoped capability against the configuration and emits both
+    /// a `.capabilityDecision` event and a `SandboxAuditRecord`. Fail closed:
+    /// expired or mismatched grants deny.
+    @discardableResult
+    public func checkCapability(
+        _ permission: ArchonPermission,
+        scope: SandboxScope = .session,
+        at date: Date = Date()
+    ) -> Bool {
+        let allowed = configuration.allows(permission, scope: scope, at: date)
+        let event = SandboxEvent.capabilityDecision(
+            permission: permission.rawValue,
+            scope: Self.scopeLabel(scope),
+            allowed: allowed,
+            timestamp: date
+        )
+        emitEvent(event)
+        emitAudit(SandboxAuditRecord(
+            event: event,
+            outcome: allowed ? .allowed : .denied,
+            capability: permission,
+            recordedAt: date
+        ))
+        return allowed
+    }
+
+    private static func scopeLabel(_ scope: SandboxScope) -> String {
+        switch scope {
+        case .session: return "session"
+        case .workspaceFile(let path): return "file:\(path)"
+        case .scheme(let scheme): return "scheme:\(scheme)"
+        }
+    }
+
+    // MARK: - WASM-in-WebKit
+
+    /// Validates a workspace `.wasm` asset and asks page JavaScript to
+    /// instantiate it inside the existing in-process WebKit isolation
+    /// (`.inProcessWebKit`, never a VM). The module bytes never leave the
+    /// workspace; only a bounded loader script referencing the validated
+    /// `sandbox://` path is evaluated.
+    public func loadWasmModule(_ module: SandboxWasmModule) async throws {
+        try Task.checkCancellation()
+        let file: SandboxFile
+        do {
+            file = try SandboxWasmPolicy.validatedFile(
+                for: module,
+                in: workspace,
+                configuration: configuration
+            )
+        } catch {
+            let event = SandboxEvent.uncaughtError(
+                message: "WASM module rejected: \(error.localizedDescription)",
+                stackTrace: nil
+            )
+            emitEvent(event)
+            emitAudit(SandboxAuditRecord(
+                event: event,
+                outcome: .error,
+                capability: nil
+            ))
+            throw error
+        }
+        let script = """
+        (async () => {
+          const response = await fetch(\(Self.javascriptStringLiteral("sandbox://app/\(file.path)")));
+          const bytes = await response.arrayBuffer();
+          return await WebAssembly.compile(bytes).then(() => "wasm-loaded", (error) => { throw new Error(String(error)); });
+        })();
+        """
+        let outcome: SandboxAuditOutcome
+        do {
+            _ = try await evaluateScript(script)
+            outcome = .allowed
+        } catch {
+            outcome = .error
+            let event = SandboxEvent.uncaughtError(
+                message: "WASM module load failed: \(error.localizedDescription)",
+                stackTrace: nil
+            )
+            emitEvent(event)
+            emitAudit(SandboxAuditRecord(event: event, outcome: outcome, capability: nil))
+            throw error
+        }
+        let event = SandboxEvent.customMessage(name: "wasm-loaded", payload: file.path)
+        emitEvent(event)
+        emitAudit(SandboxAuditRecord(event: event, outcome: outcome, capability: nil))
     }
 
     private static func javascriptStringLiteral(_ value: String) -> String {

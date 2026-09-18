@@ -339,6 +339,7 @@ struct LoopbackMCPServerTests {
 
         try await withLoopbackTimeout(.seconds(3)) {
             try await transport.connect()
+            await transport.setAuthorizedToolNames(["loopback"])
             let result = try await transport.callTool(name: "loopback", arguments: [:])
             #expect(result.content == [.object([
                 "type": .string("text"),
@@ -368,6 +369,7 @@ struct LoopbackMCPServerTests {
         )
 
         try await transport.connect()
+        await transport.setAuthorizedToolNames(["held"])
         let events = await transport.streamTool(name: "held", arguments: [:])
         let consumer = Task {
             do {

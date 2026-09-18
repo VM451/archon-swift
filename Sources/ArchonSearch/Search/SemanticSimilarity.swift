@@ -21,6 +21,14 @@ public final class NaturalLanguageSimilarity: SemanticSimilarity, @unchecked Sen
         self.embedding = NLEmbedding.sentenceEmbedding(for: language)
     }
 
+    /// BCP-47 convenience init. Region/script subtags are stripped
+    /// (`"en-US"` -> English); unknown codes resolve to a `nil` embedding so
+    /// `isAvailable` is `false` and callers fall back to keyword ranking.
+    public init(languageCode: String) {
+        let base = languageCode.split(whereSeparator: { $0 == "-" || $0 == "_" }).first.map(String.init) ?? languageCode
+        self.embedding = NLEmbedding.sentenceEmbedding(for: NLLanguage(rawValue: base.lowercased()))
+    }
+
     public var isAvailable: Bool { embedding != nil }
 
     public func similarity(between query: String, and text: String) -> Double? {

@@ -174,13 +174,70 @@ public actor ContextBuilder {
         contributors.removeValue(forKey: id)
     }
 
-    public func snapshot(budget: ContextBudget? = nil) async throws -> ContextSnapshot {
+    public func snapshot(
+        budget: ContextBudget? = nil,
+        latencyPolicy: ContributorLatencyPolicy? = nil
+    ) async throws -> ContextSnapshot {
         try Task.checkCancellation()
+        let fragments = try await collectFragments(latencyPolicy: latencyPolicy)
+        try Task.checkCancellation()
+        return ContextSnapshot(
+            fragments: Self.apply(budget: budget, to: fragments, tokenEstimator: tokenEstimator)
+        )
+    }
+
+    /// Builds a snapshot through a host-supplied summarizer. A `nil`
+    /// summarizer, or a throwing one when `fallbackToTruncation` is set, falls
+    /// back to deterministic truncation. Summarized fragments keep their own
+    /// provenance and trust; ordering is re-applied deterministically.
+    public func summarizedSnapshot(
+        budget: ContextBudget? = nil,
+        summarizer: (any ContextSummarizer)? = nil,
+        fallbackToTruncation: Bool = true,
+        latencyPolicy: ContributorLatencyPolicy? = nil
+    ) async throws -> ContextSnapshot {
+        try Task.checkCancellation()
+        let fragments = try await collectFragments(latencyPolicy: latencyPolicy)
+        try Task.checkCancellation()
+        let ordered = ContextSnapshot(fragments: fragments).fragments
+        guard let summarizer else {
+            return ContextSnapshot(
+                fragments: Self.apply(budget: budget, to: ordered, tokenEstimator: tokenEstimator)
+            )
+        }
+        do {
+            try Task.checkCancellation()
+            let effectiveBudget = try budget ?? ContextBudget()
+            let summarized = try await summarizer.summarize(ordered, budget: effectiveBudget)
+            try Task.checkCancellation()
+            return ContextSnapshot(fragments: summarized)
+        } catch {
+            if error is CancellationError {
+                throw error
+            }
+            guard fallbackToTruncation else {
+                throw error
+            }
+            return ContextSnapshot(
+                fragments: Self.apply(budget: budget, to: ordered, tokenEstimator: tokenEstimator)
+            )
+        }
+    }
+
+    private func collectFragments(latencyPolicy: ContributorLatencyPolicy?) async throws -> [ContextFragment] {
         let orderedContributors = contributors.values.sorted { $0.id < $1.id }
-        let fragments = try await withThrowingTaskGroup(of: ContextFragment.self, returning: [ContextFragment].self) { group in
+        return try await withThrowingTaskGroup(of: ContextFragment.self, returning: [ContextFragment].self) { group in
             for contributor in orderedContributors {
                 group.addTask {
                     try Task.checkCancellation()
+                    if let latencyPolicy {
+                        return try await Self.withContributorTimeout(
+                            latencyPolicy.perContributorTimeout,
+                            id: contributor.id
+                        ) {
+                            try await contributor.makeContextFragment()
+                        }
+                    }
                     return try await contributor.makeContextFragment()
                 }
             }
@@ -192,10 +249,42 @@ public actor ContextBuilder {
             }
             return fragments
         }
-        try Task.checkCancellation()
-        return ContextSnapshot(
-            fragments: Self.apply(budget: budget, to: fragments, tokenEstimator: tokenEstimator)
-        )
+    }
+
+    private static func withContributorTimeout(
+        _ timeout: Duration,
+        id: String,
+        operation: @escaping @Sendable () async throws -> ContextFragment
+    ) async throws -> ContextFragment {
+        let outcome: ContributorTimeoutOutcome = await withTaskGroup(of: ContributorTimeoutOutcome.self) { group in
+            group.addTask {
+                do {
+                    return .success(try await operation())
+                } catch {
+                    return .failure(ContributorBoxedError(error))
+                }
+            }
+            group.addTask {
+                do {
+                    try await Task.sleep(for: timeout)
+                    return .timeout
+                } catch {
+                    return .failure(ContributorBoxedError(error))
+                }
+            }
+            let first = await group.next() ?? .timeout
+            group.cancelAll()
+            for await _ in group {}
+            return first
+        }
+        switch outcome {
+        case .success(let fragment):
+            return fragment
+        case .timeout:
+            throw ContributorLatencyError.contributorTimeout(id: id)
+        case .failure(let boxed):
+            throw boxed.error
+        }
     }
 
     private static func apply(
@@ -288,5 +377,19 @@ public actor ContextBuilder {
             result = candidate
         }
         return result
+    }
+}
+
+private enum ContributorTimeoutOutcome: Sendable {
+    case success(ContextFragment)
+    case timeout
+    case failure(ContributorBoxedError)
+}
+
+private struct ContributorBoxedError: @unchecked Sendable {
+    let error: Error
+
+    init(_ error: Error) {
+        self.error = error
     }
 }

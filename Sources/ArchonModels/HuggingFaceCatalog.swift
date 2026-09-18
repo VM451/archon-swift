@@ -339,6 +339,10 @@ public struct HuggingFaceCatalog: PaginatedModelCatalogProvider, Sendable {
             gated: payload.gated?.boolValue ?? false,
             supportedLanguages: payload.cardData?["language"]?.stringArrayValue ?? [],
             variants: variants,
+            // The Hub exposes no measured quality/speed contract, so this
+            // catalog never invents benchmark scores. Hosts attach measured
+            // records with explicit provenance when they have them.
+            benchmarks: [],
             createdAt: payload.createdAt.flatMap(Self.parseDate),
             lastModifiedAt: payload.lastModified.flatMap(Self.parseDate),
             downloads: payload.downloads,
@@ -490,6 +494,7 @@ public struct HuggingFaceCatalog: PaginatedModelCatalogProvider, Sendable {
             gated: model.gated,
             supportedLanguages: model.supportedLanguages,
             variants: request.includeVariants ? filteredVariants : [],
+            benchmarks: model.benchmarks,
             createdAt: model.createdAt,
             lastModifiedAt: model.lastModifiedAt,
             downloads: model.downloads,

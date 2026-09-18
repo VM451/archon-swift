@@ -34,6 +34,8 @@ public enum ProximaVectorIndexError: Error, LocalizedError, Equatable, Sendable 
     case busy
     case candidateFailure(String)
     case persistenceFailure(String)
+    case recordLimitExceeded(maximum: Int, actual: Int)
+    case snapshotBudgetExceeded(maximumBytes: Int, actualBytes: Int)
 
     public var errorDescription: String? {
         switch self {
@@ -47,7 +49,49 @@ public enum ProximaVectorIndexError: Error, LocalizedError, Equatable, Sendable 
             "The Proxima vector index failed: \(message)."
         case .persistenceFailure(let message):
             "Proxima vector index persistence failed: \(message)."
+        case .recordLimitExceeded(let maximum, let actual):
+            "Proxima vector index record count \(actual) exceeds the ceiling of \(maximum); refusing to rebuild."
+        case .snapshotBudgetExceeded(let maximum, let actual):
+            "Proxima vector index snapshot of \(actual) bytes exceeds the budget of \(maximum) bytes; refusing to write."
         }
+    }
+}
+
+/// Fail-closed resource ceiling for Proxima index migration and persistence.
+///
+/// Migration refuses to rebuild when the source yields more than `maxRecords`
+/// indexable records, and persistence refuses to write a snapshot larger
+/// than `maxSnapshotBytes`. Both checks run before any write, so a breach
+/// leaves the previously serving index (and any existing snapshot) untouched.
+/// Defaults are conservative placeholders until iPhone-class measurement
+/// lands; see the memory-proxima product page.
+public struct ProximaResourceCeiling: Codable, Equatable, Hashable, Sendable {
+    public var maxRecords: Int
+    public var maxSnapshotBytes: Int
+
+    public init(maxRecords: Int = 20_000, maxSnapshotBytes: Int = 16_777_216) {
+        self.maxRecords = max(0, maxRecords)
+        self.maxSnapshotBytes = max(0, maxSnapshotBytes)
+    }
+
+    public static let standard = ProximaResourceCeiling()
+}
+
+/// Accounting for one `migrate(from:ceiling:)` run.
+public struct ProximaMigrationReport: Codable, Equatable, Hashable, Sendable {
+    /// Records accepted into the rebuilt index.
+    public let indexed: Int
+    /// Source records skipped as unindexable (empty vector, dimension
+    /// mismatch, or non-finite component). Deleted and embedding-less rows
+    /// never leave the durable store, so they are not counted here.
+    public let skipped: Int
+    /// Encoded JSON snapshot size in bytes for the rebuilt contents.
+    public let bytes: Int
+
+    public init(indexed: Int, skipped: Int, bytes: Int) {
+        self.indexed = indexed
+        self.skipped = skipped
+        self.bytes = bytes
     }
 }
 
@@ -110,22 +154,37 @@ public actor ProximaVectorIndexAdapter: ArchonMemory.VectorIndex {
     }
 
     public func persist(to url: URL) throws {
+        try persist(to: url, ceiling: nil)
+    }
+
+    /// Persists a snapshot, refusing to write when `ceiling` is breached.
+    ///
+    /// The snapshot is encoded and measured before any filesystem write, so a
+    /// budget breach leaves any existing snapshot untouched. A `nil` ceiling
+    /// preserves the unbounded legacy behavior.
+    public func persist(to url: URL, ceiling: ProximaResourceCeiling?) throws {
         guard url.isFileURL else {
             throw ProximaVectorIndexError.persistenceFailure("The snapshot URL must be a file URL.")
         }
         do {
-            let snapshot = ProximaVectorIndexSnapshot(
+            let data = try Self.encodedSnapshot(
                 dimension: dimension,
                 configuration: configuration,
                 records: records.map { ArchonMemory.VectorIndexRecord(id: $0.key, vector: $0.value) }
-                    .sorted { $0.id.uuidString < $1.id.uuidString }
             )
-            let data = try JSONEncoder().encode(snapshot)
+            if let ceiling, data.count > ceiling.maxSnapshotBytes {
+                throw ProximaVectorIndexError.snapshotBudgetExceeded(
+                    maximumBytes: ceiling.maxSnapshotBytes,
+                    actualBytes: data.count
+                )
+            }
             try FileManager.default.createDirectory(
                 at: url.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
             try data.write(to: url, options: .atomic)
+        } catch let error as ProximaVectorIndexError {
+            throw error
         } catch {
             throw ProximaVectorIndexError.persistenceFailure(error.localizedDescription)
         }
@@ -196,6 +255,111 @@ public actor ProximaVectorIndexAdapter: ArchonMemory.VectorIndex {
         }
     }
 
+    /// Rebuilds the index, refusing to start when `ceiling` is breached.
+    ///
+    /// The record-count check runs before the replacement index is built, so
+    /// a breach (or a duplicate ID, invalid vector, or cancellation) leaves
+    /// the previously serving index untouched.
+    public func rebuild(
+        _ records: [ArchonMemory.VectorIndexRecord],
+        ceiling: ProximaResourceCeiling
+    ) async throws {
+        guard records.count <= ceiling.maxRecords else {
+            throw ProximaVectorIndexError.recordLimitExceeded(
+                maximum: ceiling.maxRecords,
+                actual: records.count
+            )
+        }
+        try await rebuild(records)
+    }
+
+    /// Migrates a durable store's contents into this index.
+    ///
+    /// Reads every indexable record from `source`, skips records this index
+    /// cannot hold (empty vector, dimension mismatch, non-finite component),
+    /// enforces `ceiling` before any write, then atomically rebuilds. A
+    /// ceiling breach, duplicate ID, or cancellation leaves the previously
+    /// serving index untouched, so rollback is "keep serving the old index".
+    /// Only typed `ProximaVectorIndexError`, `ArchonMemory.VectorIndexError`,
+    /// `ArchonMemoryError`, and `CancellationError` failures escape.
+    public func migrate(
+        from source: any ArchonMemory.VectorIndexRebuildSource,
+        ceiling: ProximaResourceCeiling = .standard
+    ) async throws -> ProximaMigrationReport {
+        try Task.checkCancellation()
+        let sourced = try await source.indexRecords()
+        try Task.checkCancellation()
+
+        var indexable: [ArchonMemory.VectorIndexRecord] = []
+        indexable.reserveCapacity(sourced.count)
+        var skipped = 0
+        for record in sourced {
+            if Self.isIndexable(record.vector, dimension: dimension) {
+                indexable.append(record)
+            } else {
+                skipped += 1
+            }
+        }
+
+        guard indexable.count <= ceiling.maxRecords else {
+            throw ProximaVectorIndexError.recordLimitExceeded(
+                maximum: ceiling.maxRecords,
+                actual: indexable.count
+            )
+        }
+        let projected: Data
+        do {
+            projected = try Self.encodedSnapshot(
+                dimension: dimension,
+                configuration: configuration,
+                records: indexable
+            )
+        } catch {
+            throw ProximaVectorIndexError.persistenceFailure(error.localizedDescription)
+        }
+        guard projected.count <= ceiling.maxSnapshotBytes else {
+            throw ProximaVectorIndexError.snapshotBudgetExceeded(
+                maximumBytes: ceiling.maxSnapshotBytes,
+                actualBytes: projected.count
+            )
+        }
+
+        try await rebuild(indexable, ceiling: ceiling)
+        return ProximaMigrationReport(indexed: indexable.count, skipped: skipped, bytes: projected.count)
+    }
+
+    /// Restores a snapshot, rebuilding from durable truth when it is unusable.
+    ///
+    /// - Returns: `false` when the snapshot restored normally, `true` when
+    ///   the snapshot was missing, corrupt, or dimension-mismatched and the
+    ///   index was instead rebuilt from `fallback`. The rebuild path skips
+    ///   records this index cannot hold and enforces the standard ceiling
+    ///   before any write; a breach surfaces as a typed error with the old
+    ///   index still serving. Cancellation propagates without rebuilding.
+    public func restoreOrRebuild(
+        snapshot url: URL,
+        fallback: any ArchonMemory.VectorIndexRebuildSource
+    ) async throws -> Bool {
+        do {
+            try await restore(from: url)
+            return false
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // Snapshot unusable: fall through to durable-store recovery.
+        }
+        try Task.checkCancellation()
+        let sourced = try await fallback.indexRecords()
+        try Task.checkCancellation()
+        var indexable: [ArchonMemory.VectorIndexRecord] = []
+        indexable.reserveCapacity(sourced.count)
+        for record in sourced where Self.isIndexable(record.vector, dimension: dimension) {
+            indexable.append(record)
+        }
+        try await rebuild(indexable, ceiling: .standard)
+        return true
+    }
+
     public func upsert(id: UUID, vector: [Float]) async throws {
         guard !rebuilding else {
             throw ProximaVectorIndexError.busy
@@ -230,16 +394,26 @@ public actor ProximaVectorIndexAdapter: ArchonMemory.VectorIndex {
         }
 
         let filter: (@Sendable (UUID) -> Bool)?
+        var fetchLimit = query.limit
+        var queryWidth = configuration.querySearchWidth
         if let allowedIDs = query.allowedIDs {
             filter = { id in allowedIDs.contains(id) }
+            // Narrow allow-lists starve ANN traversal: overfetch
+            // proportionally to the inverse selectivity, then trim after
+            // exact ranking. The allow-list is never broadened.
+            fetchLimit = ArchonMemory.LocalVectorStore.filteredOverfetchLimit(
+                baseLimit: query.limit,
+                allowedCount: allowedIDs.count,
+                totalCount: max(records.count, allowedIDs.count)
+            )
+            queryWidth = max(queryWidth, fetchLimit)
         } else {
             filter = nil
         }
         let candidateVector = Vector(query.vector)
-        let queryWidth = configuration.querySearchWidth
         let results = await index.search(
             query: candidateVector,
-            k: query.limit,
+            k: fetchLimit,
             efSearch: queryWidth,
             filter: filter
         )
@@ -257,6 +431,25 @@ public actor ProximaVectorIndexAdapter: ArchonMemory.VectorIndex {
                 }
                 return $0.id.uuidString < $1.id.uuidString
             }
+            .prefix(query.limit)
+            .map { $0 }
+    }
+
+    private static func isIndexable(_ vector: [Float], dimension: Int) -> Bool {
+        !vector.isEmpty && vector.count == dimension && vector.allSatisfy(\.isFinite)
+    }
+
+    private static func encodedSnapshot(
+        dimension: Int,
+        configuration: ProximaVectorIndexConfiguration,
+        records: [ArchonMemory.VectorIndexRecord]
+    ) throws -> Data {
+        let snapshot = ProximaVectorIndexSnapshot(
+            dimension: dimension,
+            configuration: configuration,
+            records: records.sorted { $0.id.uuidString < $1.id.uuidString }
+        )
+        return try JSONEncoder().encode(snapshot)
     }
 
     private static func validate(

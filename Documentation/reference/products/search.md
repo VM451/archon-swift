@@ -69,7 +69,7 @@ public actor ArchonSearchClient: Sendable {
 ```
 
 - `search(_:categories:page:)`: Dispatches queries to the configured `SearchEngine` (`DuckDuckGoSearchEngine` by default) and returns `[SearchResult]`.
-- `rankedSearch(_:categories:page:options:)`: Applies the local `ResultReranker` (term overlap + freshness decay + host allow/block scoping + max-age filter) with no network or model.
+- `rankedSearch(_:categories:page:options:)`: Applies the local `ResultReranker` (term overlap + freshness decay + host allow/block scoping + max-age filter) with no network or model. The optional `embedding:` parameter (or `SearchRankingOptions.embedding`) opts into the Apple-API embedding blend; `rankedSearchWithDiagnostics` additionally reports `SearchDiagnostics.usedSemanticRerank`.
 - `read(url:options:)`: Extracts clean text and Markdown from a URL using `RetrievalRouter` (`NativeReader` by default).
 - `ask(query:)` / `ask(_:)`: Executes search, extracts source pages, encapsulates content inside `<reference_data>`, and verifies citations (returning tuple or `SearchAnswer`).
 - `research(topic:options:)`: Executes autonomous multi-round iterative research.
@@ -208,7 +208,21 @@ Actor registry for named `SearchEngine` adapters. Host apps register on-device a
 Dependency-free value types combining engine score, query-term overlap, exponential freshness decay (`freshnessHalfLife`), `maxAge` filtering, and Goggles-style `allowHosts`/`blockHosts` scoping. Sorting is stable by URL; undated results keep relevance order.
 
 #### `SemanticSimilarity` + `NaturalLanguageSimilarity` (On-Device Neural Rerank)
-Vendor-neutral meaning-overlap seam with an Apple `NLEmbedding` sentence-vector implementation: no model download, no network, no new dependency. `ResultReranker` adds a bounded boost (`semanticWeight`, clamped 0...1); `nil` similarity keeps keyword behavior. Host apps can inject their own scorers.
+Vendor-neutral meaning-overlap seam with an Apple `NLEmbedding` sentence-vector implementation: no model download, no network, no new dependency. `ResultReranker` adds a bounded boost (`semanticWeight`, clamped 0...1); `nil` similarity keeps keyword behavior. Host apps can inject their own scorers. `NaturalLanguageSimilarity(languageCode:)` accepts BCP-47 codes (region subtags stripped); unknown codes report `isAvailable == false` and callers fall back to keyword ranking.
+
+#### `EmbeddingRerankOptions` (Opt-In Embedding Blend)
+```swift
+public struct EmbeddingRerankOptions: Sendable, Codable, Equatable {
+    public var enabled: Bool            // default false: strictly opt-in
+    public var weight: Double           // clamped 0...1 at use time
+    public var language: String         // BCP-47, default "en"
+    public var maxCharsPerResult: Int   // bound 1...2000, default 500
+}
+```
+Carried by `SearchRankingOptions.embedding` or passed directly to `rankedSearch(embedding:)` / `ResultReranker.rank(embedding:)`. Disabled, `nil`, zero-weight, or unavailable-embedding configurations return keyword-identical order; `rankWithEmbedding` / `rankedSearchWithDiagnostics` report whether any semantic score applied via `usedSemanticRerank`. Default rank order never changes when embedding is off.
+
+#### `AnswerQualityEval` (Deterministic Fixture Eval)
+Pure, in-process answer-quality scoring over `AnswerQualityFixture` values (query, retrieved results, answer, expected citations, abstention flag): citation precision/recall, fail-closed hallucination count (unknown sources *and* passages such as `[S1/P9]`), groundedness, abstention correctness, and injection neutralization (`[FILTERED_INJECTION]` + intact `<reference_data>` envelope). Bounded to `maxFixtures` (default 200, hard cap 200); empty input throws `SearchError.noResultsFound`; the aggregate is the per-fixture mean. Fixtures live in `Tests/ArchonSearchTests/Fixtures/answer-quality.json`. No network, no model; every score carries a `deterministic` self-check flag.
 
 #### `SearchQueryRewriter` (Local Query Variants)
 Deterministic normalization plus bounded term-drop variants for parallel discovery fan-out. No model, no network.
@@ -407,7 +421,55 @@ public struct ResearchTool: Tool, Sendable {
 
 ---
 
-### 13. `ArchonChatView` & UI Components
+### 13. `FrontierQueueActor` Scheduling (Politeness-Aware Crawl Priority)
+
+`FrontierQueueActor` is the SwiftData-backed crawl frontier. Until configured,
+dequeue uses legacy behavior (global priority order, sleeping politeness
+waits). `configureScheduling(_:)` opts into politeness-aware scheduling:
+
+```swift
+public struct CrawlScheduleOptions: Sendable, Codable, Equatable {
+    public var maxQueuedPerHost: Int  // default 100, >= 1
+    public var maxHostsInFlight: Int  // default 4, >= 1
+    public var maxRetries: Int        // default 3, >= 1
+    public var baseDelay: TimeInterval   // default 1s, >= 0
+    public var maxDelay: TimeInterval    // default 30s
+    public var backoffCap: TimeInterval  // default 300s, >= 1
+    public var depthPenalty: Double   // default 0.5, >= 0
+    public var failurePenalty: Double // default 1.0, >= 0
+}
+
+public enum CrawlHostOutcome: Sendable, Equatable {
+    case success
+    case rateLimited(retryAfter: TimeInterval?)
+    case serverError
+}
+```
+
+Semantics and bounds:
+
+- Within each host, nodes dequeue by effective score
+  `priority - depth x depthPenalty - failures x failurePenalty`
+  (ties: earliest added, then lowest URL). `CrawlNode` carries additive,
+  defaulted `depth` and `failureCount`; the depth-aware
+  `enqueue(urls:priorities:parentURLString:depth:)` overload seeds depth.
+- Hosts serve round-robin: no host dequeues twice until every ready host has
+  served once (ties broken alphabetically for determinism).
+- Hosts in backoff or inside their robots crawl-delay are *skipped*, never
+  slept on: dequeue returns the next ready host's URL, or `nil` when nothing
+  is currently servable.
+- `reportHostOutcome(host:outcome:)` applies outcomes: success clears backoff
+  and failure counts; 429 backs off by the server `Retry-After` (clamped to
+  `backoffCap`); 5xx backs off exponentially from `baseDelay`, capped by
+  `maxDelay` and `backoffCap`. `retryCount >= maxRetries` marks nodes
+  `.failed` (also honored by `markFailed`).
+- New hosts are withheld while `maxHostsInFlight` distinct hosts are
+  crawling; enqueue keeps at most `maxQueuedPerHost` pending nodes per host,
+  dropping lowest priority deterministically.
+- Dequeue is cancellation-checked (`Task.checkCancellation()`); cancellation
+  leaves nodes pending so the crawl recovers on retry.
+
+### 14. `ArchonChatView` & UI Components
 Apple-native conversational UI conforming to Liquid Glass HIG.
 
 ```swift

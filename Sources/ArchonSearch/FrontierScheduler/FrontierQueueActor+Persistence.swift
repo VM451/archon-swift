@@ -13,20 +13,23 @@ extension FrontierQueueActor {
     }
 
     public func markFailed(urlString: String, retryAfter: TimeInterval? = nil) throws {
+        let maxRetries = scheduleOptions?.clampedMaxRetries ?? 3
+        let cap = scheduleOptions?.clampedBackoffCap ?? 300
         let fetch = FetchDescriptor<CrawlNode>(
             predicate: #Predicate<CrawlNode> { $0.urlString == urlString }
         )
         if let node = try modelContext.fetch(fetch).first {
             node.retryCount += 1
-            if node.retryCount >= 3 {
+            if node.retryCount >= maxRetries {
                 node.status = .failed
+                node.backoffUntil = nil
             } else {
                 node.status = .pending
                 let delay: TimeInterval
-                if let retryAfter = retryAfter {
-                    delay = retryAfter
+                if let retryAfter, retryAfter.isFinite {
+                    delay = min(max(retryAfter, 0), cap)
                 } else {
-                    delay = pow(2.0, Double(node.retryCount))
+                    delay = min(pow(2.0, Double(node.retryCount)), cap)
                 }
                 node.backoffUntil = Date().addingTimeInterval(delay)
             }

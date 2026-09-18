@@ -324,11 +324,12 @@ struct ArchonModelsEdgeCasesTests {
     func downloadStateEquality() {
         #expect(ModelDownloadState.queued == ModelDownloadState.queued)
         #expect(ModelDownloadState.cancelled == ModelDownloadState.cancelled)
-        #expect(ModelDownloadState.failed("a") == ModelDownloadState.failed("a"))
-        #expect(ModelDownloadState.failed("a") != ModelDownloadState.failed("b"))
-        #expect(ModelDownloadState.downloading(progress: 0, bytesDownloaded: 0, totalBytes: nil)
-            == ModelDownloadState.downloading(progress: 0, bytesDownloaded: 0, totalBytes: nil))
-        #expect(ModelDownloadState.downloading(progress: 1, bytesDownloaded: 100, totalBytes: 100)
-            != ModelDownloadState.downloading(progress: 0, bytesDownloaded: 0, totalBytes: nil))
+        #expect(ModelDownloadState.failed("a", attempt: nil) == ModelDownloadState.failed("a", attempt: nil))
+        #expect(ModelDownloadState.failed("a", attempt: nil) != ModelDownloadState.failed("b", attempt: nil))
+        #expect(ModelDownloadState.downloading(progress: 0, bytesDownloaded: 0, totalBytes: nil, attempt: nil)
+            == ModelDownloadState.downloading(progress: 0, bytesDownloaded: 0, totalBytes: nil, attempt: nil))
+        #expect(ModelDownloadState.downloading(progress: 1, bytesDownloaded: 100, totalBytes: 100, attempt: nil)
+            != ModelDownloadState.downloading(progress: 0, bytesDownloaded: 0, totalBytes: nil, attempt: nil))
+        #expect(ModelDownloadState.paused(attempt: nil) == ModelDownloadState.paused(attempt: nil))
     }
 }

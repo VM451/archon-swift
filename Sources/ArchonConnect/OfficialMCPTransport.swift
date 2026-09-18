@@ -24,6 +24,19 @@ extension MCP.Client {
 public actor OfficialMCPTransport: MCPTransport {
     public let endpoint: URL
 
+    /// Server notifications forwarded to Archon consumers. Anything outside
+    /// this allowlist is never surfaced: unknown or arbitrary vendor
+    /// notifications are dropped at the adapter boundary instead of being
+    /// forwarded to host streams.
+    public static let forwardedNotificationMethods: Set<String> = [
+        MCP.ProgressNotification.name,
+        MCP.ToolListChangedNotification.name,
+        MCP.ResourceListChangedNotification.name,
+        MCP.PromptListChangedNotification.name,
+        MCP.ResourceUpdatedNotification.name,
+        MCP.LogMessageNotification.name
+    ]
+
     private let client: MCP.Client
     private let transport: MCP.HTTPClientTransport
     private var connected = false
@@ -33,6 +46,10 @@ public actor OfficialMCPTransport: MCPTransport {
     private var notificationContinuations: [UUID: AsyncThrowingStream<MCPStreamEvent, Error>.Continuation] = [:]
     private var activeRequestIDs: Set<MCP.ID> = []
 
+    /// Creates the adapter. `authorizer` passes through to the official SDK
+    /// transport untouched: Archon never stores, prints, or caches the
+    /// credentials it produces, and validation/header callbacks run on the
+    /// SDK's networking path. Pass nil to send no Authorization headers.
     public init(
         endpoint: URL,
         configuration: URLSessionConfiguration = .default,
@@ -142,6 +159,14 @@ public actor OfficialMCPTransport: MCPTransport {
         return stream
     }
 
+    /// Teardown ordering (both `disconnect` spellings): (1) finish Archon
+    /// stream continuations so consumers observe termination promptly, (2)
+    /// cancel SDK request contexts while the connection is still live — the
+    /// official SDK keeps the HTTP request task separate from its message
+    /// loop, so merely finishing the Archon stream could otherwise leave an
+    /// in-flight POST waiting — (3) clear tool grants, (4) disconnect the SDK
+    /// client. Hosted capabilities persist across disconnect; pass `.init()`
+    /// to `setHostedCapabilities` to clear them. Idempotent.
     public func disconnect() async {
         // Cancel request contexts while the client connection is still live.
         // The official SDK keeps the HTTP request task separate from its
@@ -154,6 +179,43 @@ public actor OfficialMCPTransport: MCPTransport {
                 reason: "The Archon MCP transport is disconnecting."
             )
         }
+        await finishTeardown()
+    }
+
+    /// Bounded variant of `disconnect()`: the SDK request-context
+    /// cancellations race a `timeout` sleep so teardown never blocks past the
+    /// bound, then teardown completes in the same order as `disconnect()`.
+    public func disconnect(timeout: TimeInterval) async {
+        let requestIDs = Array(activeRequestIDs)
+        if timeout > 0, !requestIDs.isEmpty {
+            let client = self.client
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    for requestID in requestIDs {
+                        try? await client.cancelRequest(
+                            requestID,
+                            reason: "The Archon MCP transport is disconnecting."
+                        )
+                    }
+                }
+                group.addTask {
+                    try? await Task.sleep(for: .seconds(max(timeout, 0)))
+                }
+                await group.next()
+                group.cancelAll()
+            }
+        } else {
+            for requestID in requestIDs {
+                try? await client.cancelRequest(
+                    requestID,
+                    reason: "The Archon MCP transport is disconnecting."
+                )
+            }
+        }
+        await finishTeardown()
+    }
+
+    private func finishTeardown() async {
         activeRequestIDs.removeAll()
         authorizedToolNames.removeAll()
         for continuation in progressContinuations.values {
@@ -173,22 +235,14 @@ public actor OfficialMCPTransport: MCPTransport {
         do {
             var tools: [MCPTool] = []
             var cursor: String?
-            var seenCursors = Set<String>()
-            var pageCount = 0
+            var pagination = MCPPaginationGuard()
             repeat {
-                pageCount += 1
-                guard pageCount <= MCPTransportLimits.maximumPaginationPages else {
-                    throw MCPTransportError.collectionTooLarge(maximumItems: MCPTransportLimits.maximumCollectionItems)
-                }
+                try pagination.checkPage()
                 let page = try await client.listTools(cursor: cursor)
                 tools.append(contentsOf: try page.tools.map(Self.archonTool(from:)))
-                guard tools.count <= MCPTransportLimits.maximumCollectionItems else {
-                    throw MCPTransportError.collectionTooLarge(maximumItems: MCPTransportLimits.maximumCollectionItems)
-                }
+                try MCPPaginationGuard.checkCollection(count: tools.count)
                 guard let nextCursor = page.nextCursor else { break }
-                guard seenCursors.insert(nextCursor).inserted else {
-                    throw MCPTransportError.invalidResponse
-                }
+                try pagination.checkCursor(nextCursor)
                 cursor = nextCursor
             } while true
             return tools
@@ -247,6 +301,10 @@ public actor OfficialMCPTransport: MCPTransport {
             }
             await self.removeProgressContinuation(progressToken)
         }
+        // Stream termination cancels the SDK request context: cancelling the
+        // task trips the `withTaskCancellationHandler` inside
+        // `callToolWithRequestContext`, which issues `client.cancelRequest`
+        // for the in-flight tool call.
         continuation.onTermination = { [weak self] _ in
             task.cancel()
             Task { await self?.removeProgressContinuation(progressToken) }
@@ -259,13 +317,9 @@ public actor OfficialMCPTransport: MCPTransport {
         do {
             var resources: [MCPResource] = []
             var cursor: String?
-            var seenCursors = Set<String>()
-            var pageCount = 0
+            var pagination = MCPPaginationGuard()
             repeat {
-                pageCount += 1
-                guard pageCount <= MCPTransportLimits.maximumPaginationPages else {
-                    throw MCPTransportError.collectionTooLarge(maximumItems: MCPTransportLimits.maximumCollectionItems)
-                }
+                try pagination.checkPage()
                 let page = try await client.listResources(cursor: cursor)
                 resources.append(contentsOf: page.resources.map {
                     MCPResource(
@@ -276,13 +330,9 @@ public actor OfficialMCPTransport: MCPTransport {
                         mimeType: $0.mimeType
                     )
                 })
-                guard resources.count <= MCPTransportLimits.maximumCollectionItems else {
-                    throw MCPTransportError.collectionTooLarge(maximumItems: MCPTransportLimits.maximumCollectionItems)
-                }
+                try MCPPaginationGuard.checkCollection(count: resources.count)
                 guard let nextCursor = page.nextCursor else { break }
-                guard seenCursors.insert(nextCursor).inserted else {
-                    throw MCPTransportError.invalidResponse
-                }
+                try pagination.checkCursor(nextCursor)
                 cursor = nextCursor
             } while true
             return resources
@@ -316,22 +366,14 @@ public actor OfficialMCPTransport: MCPTransport {
         do {
             var prompts: [MCPPrompt] = []
             var cursor: String?
-            var seenCursors = Set<String>()
-            var pageCount = 0
+            var pagination = MCPPaginationGuard()
             repeat {
-                pageCount += 1
-                guard pageCount <= MCPTransportLimits.maximumPaginationPages else {
-                    throw MCPTransportError.collectionTooLarge(maximumItems: MCPTransportLimits.maximumCollectionItems)
-                }
+                try pagination.checkPage()
                 let page = try await client.listPrompts(cursor: cursor)
                 prompts.append(contentsOf: page.prompts.map(Self.archonPrompt(from:)))
-                guard prompts.count <= MCPTransportLimits.maximumCollectionItems else {
-                    throw MCPTransportError.collectionTooLarge(maximumItems: MCPTransportLimits.maximumCollectionItems)
-                }
+                try MCPPaginationGuard.checkCollection(count: prompts.count)
                 guard let nextCursor = page.nextCursor else { break }
-                guard seenCursors.insert(nextCursor).inserted else {
-                    throw MCPTransportError.invalidResponse
-                }
+                try pagination.checkCursor(nextCursor)
                 cursor = nextCursor
             } while true
             return prompts
@@ -503,6 +545,9 @@ public actor OfficialMCPTransport: MCPTransport {
     }
 
     private func broadcast(method: String, params: JSONValue?) {
+        // Enforce the forwarding allowlist at the single fan-out point so an
+        // arbitrary or future vendor notification can never reach host streams.
+        guard Self.forwardedNotificationMethods.contains(method) else { return }
         for continuation in notificationContinuations.values {
             continuation.yield(.notification(method: method, params: params))
         }

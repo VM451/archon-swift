@@ -41,16 +41,63 @@ public actor ArchonSearchClient: Sendable {
     }
 
     /// Ranked search: local rerank with freshness and host scoping.
+    ///
+    /// When `embedding` (or `options.embedding`) is enabled, the Apple-API
+    /// embedding path blends a bounded semantic boost; otherwise behavior is
+    /// keyword-identical to previous releases.
     public func rankedSearch(
         _ query: String,
         categories: [String]? = nil,
         page: Int = 1,
         options: SearchRankingOptions = SearchRankingOptions(),
         similarity: (any SemanticSimilarity)? = nil,
-        semanticWeight: Double = 0.4
+        semanticWeight: Double = 0.4,
+        embedding: EmbeddingRerankOptions? = nil
     ) async throws -> [SearchResult] {
+        let (results, _) = try await rankedSearchWithDiagnostics(
+            query, categories: categories, page: page,
+            options: options, similarity: similarity,
+            semanticWeight: semanticWeight, embedding: embedding
+        )
+        return results
+    }
+
+    /// Ranked search with diagnostics, reporting `usedSemanticRerank`.
+    public func rankedSearchWithDiagnostics(
+        _ query: String,
+        categories: [String]? = nil,
+        page: Int = 1,
+        options: SearchRankingOptions = SearchRankingOptions(),
+        similarity: (any SemanticSimilarity)? = nil,
+        semanticWeight: Double = 0.4,
+        embedding: EmbeddingRerankOptions? = nil
+    ) async throws -> (results: [SearchResult], diagnostics: SearchDiagnostics) {
+        let start = Date()
         let results = try await searchEngine.search(query, categories: categories, page: page)
-        return ResultReranker().rank(results, for: query, options: options, similarity: similarity, semanticWeight: semanticWeight)
+        let ranker = ResultReranker()
+        let ranked: [SearchResult]
+        let usedSemantic: Bool
+        if embedding ?? options.embedding != nil {
+            let out = ranker.rankWithEmbedding(
+                results, for: query, options: options,
+                embedding: embedding, similarity: similarity
+            )
+            ranked = out.results
+            usedSemantic = out.usedSemanticRerank
+        } else if let similarity {
+            let out = ranker.rankWithSimilarity(
+                results, for: query, options: options,
+                similarity: similarity, semanticWeight: semanticWeight
+            )
+            ranked = out.results
+            usedSemantic = out.usedSemanticRerank
+        } else {
+            ranked = ranker.rank(results, for: query, options: options)
+            usedSemantic = false
+        }
+        var diagnostics = SearchDiagnostics(searchDuration: Date().timeIntervalSince(start))
+        diagnostics.usedSemanticRerank = usedSemantic
+        return (ranked, diagnostics)
     }
 
     /// Reads and extracts structured text and markdown from a webpage URL.

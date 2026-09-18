@@ -11,12 +11,14 @@ public final class SandboxViewController: ObservableObject {
     @Published public private(set) var isReady: Bool = false
     @Published public private(set) var errorMessage: String?
     @Published public private(set) var logs: [SandboxEvent] = []
-    
+    @Published public private(set) var auditRecords: [SandboxAuditRecord] = []
+
     public let workspace: SandboxWorkspace
     public let configuration: SandboxConfiguration
     public let engine: SandboxEngine
-    
+
     private var eventStreamTask: Task<Void, Never>?
+    private var auditStreamTask: Task<Void, Never>?
     #if canImport(WebKit)
     public var webView: WKWebView?
     #endif
@@ -31,14 +33,29 @@ public final class SandboxViewController: ObservableObject {
     
     deinit {
         eventStreamTask?.cancel()
+        auditStreamTask?.cancel()
     }
-    
+
     private func startObservingEvents() {
         eventStreamTask = Task { [weak self, engine] in
             for await event in engine.eventStream {
                 guard !Task.isCancelled else { break }
                 self?.handleEvent(event)
             }
+        }
+        auditStreamTask = Task { [weak self, engine] in
+            for await record in engine.auditStream {
+                guard !Task.isCancelled else { break }
+                self?.handleAuditRecord(record)
+            }
+        }
+    }
+
+    private func handleAuditRecord(_ record: SandboxAuditRecord) {
+        auditRecords.append(record)
+        // Keep audit buffer bounded to latest 200 items
+        if auditRecords.count > 200 {
+            auditRecords.removeFirst(auditRecords.count - 200)
         }
     }
     
@@ -72,5 +89,9 @@ public final class SandboxViewController: ObservableObject {
     
     public func clearLogs() {
         self.logs.removeAll()
+    }
+
+    public func clearAuditRecords() {
+        self.auditRecords.removeAll()
     }
 }

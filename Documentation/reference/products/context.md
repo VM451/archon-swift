@@ -24,3 +24,29 @@ memory/search/tool data and a model request.
 decide whether content is trustworthy. Durable facts remain in
 `ArchonMemory`; the host decides which contributors are appropriate for a
 request.
+
+## Token profiles
+
+`FamilyAwareTokenEstimator` applies a per-model-family bytes-per-token
+divisor (`ModelFamilyTokenProfile`: Apple Foundation, Gemma, Llama, Mistral,
+Claude, GPT, plus a UTF-8 fallback) with an optional explicit override.
+The fallback divisor matches `UTF8ContextTokenEstimator` exactly, and all
+estimates are deterministic and clamped at zero.
+
+## Summarization seam
+
+`ContextSummarizer` is a host-supplied, on-device summarizer boundary.
+`ContextBuilder.summarizedSnapshot(budget:summarizer:fallbackToTruncation:latencyPolicy:)`
+passes ordered fragments to the summarizer and re-applies deterministic
+ordering; summarized fragments keep their own provenance and trust. A `nil`
+or throwing summarizer falls back to deterministic truncation when
+`fallbackToTruncation` is set, otherwise the error propagates. Cancellation
+is honored before and after summarization.
+
+## Contributor latency budgets
+
+`ContributorLatencyPolicy` sets a per-contributor timeout (non-positive
+values are rejected). Timeouts fail closed with typed
+`ContributorLatencyError.contributorTimeout`; skip-mode is explicitly
+deferred so partial context is never silently returned. Generous budgets
+preserve deterministic priority/identity ordering.

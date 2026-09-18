@@ -785,3 +785,32 @@ extension Error {
         return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
     }
 }
+
+/// Well-known capability identifiers for agent-stack availability probes.
+/// Constants only; capability state remains host-observed through
+/// `ArchonCapabilityRegistry`.
+public enum ArchonCapabilityProbeID {
+    public static let agentHandoff = "archon.agent.handoff"
+    public static let agentGuardrails = "archon.agent.guardrails"
+    public static let agentEval = "archon.agent.eval"
+    public static let contextTokenProfiles = "archon.context.token-profiles"
+    public static let contextSummarization = "archon.context.summarization"
+    public static let contextContributorLatency = "archon.context.contributor-latency"
+}
+
+public extension ArchonCapabilityRegistry {
+    /// Registers an available capability status for a probe identifier.
+    func registerAvailable(
+        id: String,
+        description: String,
+        requiredPermissions: Set<ArchonPermission> = [],
+        reason: String? = nil
+    ) {
+        register(ArchonCapabilityStatus(
+            capability: ArchonCapability(id: id, description: description),
+            state: .available,
+            requiredPermissions: requiredPermissions,
+            reason: reason
+        ))
+    }
+}

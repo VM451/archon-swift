@@ -14,6 +14,9 @@ surfaces, not replacements for a signed application target.
 | `download` | Download a model variant | Uses the model lifecycle contract and staging rules |
 | `convert` | Run Apple's `coreai-models` exporter | macOS developer tool; requires caller-supplied checkout and `uv`; experimental output is marked experimental |
 | `benchmark` | Measure preparation/unload samples | Accepts validated runnable Core AI or MLX artifacts; never fabricates token throughput |
+| `catalog-lint` | Lint local manifests for consistency | Offline only; reports runtime/format, raw, experimental, and sizing findings; exits 1 on errors |
+| `device-fit` | Dry-run device-fit report | No download; `--manifest` or `--variant-id` with `--device-profile`; lists profiles with `--list-profiles` |
+| `prep-recipe` | Print a preparation recipe | Lookup only from `ModelPrepRecipeIndex`; unknown families fail closed; nothing converts on device |
 
 Conversion is intentionally excluded from application runtime targets. Raw
 GGUF, SafeTensors, Transformers, and unknown formats remain

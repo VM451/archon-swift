@@ -70,6 +70,28 @@ public struct ModelDetailView: View {
                 }
             }
 
+            if let benchmark = model.benchmarks.first(where: \.isValid) {
+                Section("Measured Quality") {
+                    LabeledContent(
+                        "Quality",
+                        value: benchmark.quality.formatted(.number.precision(.fractionLength(2)))
+                    )
+                    if let speed = benchmark.tokensPerSecond {
+                        LabeledContent(
+                            "Speed",
+                            value: "~\(speed.formatted(.number.precision(.fractionLength(1)))) tokens/sec"
+                        )
+                    }
+                    if let measuredOn = benchmark.measuredOn, !measuredOn.isEmpty {
+                        LabeledContent("Measured on", value: measuredOn)
+                    }
+                    Text("Measured by the catalog or host; never inferred by Archon.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityIdentifier(ModelAccessibilityIDs.detailBenchmark(variantID: model.id))
+            }
+
             Section("MLX Variants") {
                 if mlxVariants.isEmpty {
                     ContentUnavailableView(
@@ -266,6 +288,7 @@ public struct ModelDetailView: View {
                     ModelDownloadRequest(
                         variant: variant,
                         modelName: model.name,
+                        family: model.family,
                         license: model.license,
                         logoURL: model.logoURL,
                         sourceRepository: model.id,
@@ -349,13 +372,13 @@ public struct ModelDetailView: View {
                     case .resolving:
                         phases[variant.id] = .resolving
                         statuses[variant.id] = "Resolving"
-                    case .downloading(let value, _, _):
+                    case .downloading(let value, _, _, let attempt):
                         phases[variant.id] = .downloading
                         progress[variant.id] = value
-                        statuses[variant.id] = "Downloading"
-                    case .paused:
+                        statuses[variant.id] = ModelBrowserView.statusText("Downloading", attempt: attempt)
+                    case .paused(let attempt):
                         phases[variant.id] = .paused
-                        statuses[variant.id] = "Paused"
+                        statuses[variant.id] = ModelBrowserView.statusText("Paused", attempt: attempt)
                     case .verifying:
                         phases[variant.id] = .verifying
                         statuses[variant.id] = "Verifying"
@@ -370,9 +393,12 @@ public struct ModelDetailView: View {
                     case .updateAvailable:
                         phases[variant.id] = .updateAvailable
                         statuses[variant.id] = "Update available"
-                    case .failed(let message):
+                    case .failed(let message, let attempt):
                         phases[variant.id] = .failed
-                        statuses[variant.id] = message
+                        statuses[variant.id] = ModelBrowserView.statusText(
+                            ModelLibraryViewModel.redactedText(message),
+                            attempt: attempt
+                        )
                     case .cancelled:
                         phases[variant.id] = .cancelled
                         statuses[variant.id] = "Cancelled"
@@ -453,6 +479,7 @@ public struct ModelStorageView: View {
     private let library: ModelLibrary
     @State private var models: [InstalledModel] = []
     @State private var diskUsage: Int64 = 0
+    @State private var breakdown: ModelStorageBreakdown?
     @State private var errorMessage: String?
     @State private var isRefreshing = false
 
@@ -465,6 +492,18 @@ public struct ModelStorageView: View {
             Section("Storage") {
                 LabeledContent("Installed MLX models", value: "\(models.count)")
                 LabeledContent("MLX disk usage", value: ByteCountFormatter.string(fromByteCount: diskUsage, countStyle: .file))
+                if let breakdown {
+                    LabeledContent(
+                        "Staging (resumable)",
+                        value: ByteCountFormatter.string(fromByteCount: breakdown.stagingBytes, countStyle: .file)
+                    )
+                    .accessibilityIdentifier(ModelAccessibilityIDs.storageStaging)
+                    LabeledContent(
+                        "Temporary total",
+                        value: ByteCountFormatter.string(fromByteCount: breakdown.tempBytes, countStyle: .file)
+                    )
+                    .accessibilityIdentifier(ModelAccessibilityIDs.storageTemp)
+                }
                 Button("Clear Temporary Download Data", role: .destructive) {
                     Task { await clearTemporaryStorage() }
                 }
@@ -487,6 +526,12 @@ public struct ModelStorageView: View {
                                 Text("\(model.manifest.runtime.rawValue) · \(model.manifest.format.rawValue)\(model.manifest.isExperimental ? " · Experimental" : "")")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
+                                if let bytes = breakdown?.perModelBytes.first(where: { $0.id == model.id })?.bytes {
+                                    Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .accessibilityIdentifier(ModelAccessibilityIDs.storageRow(modelID: model.id))
+                                }
                             }
                         }
                     }
@@ -526,6 +571,7 @@ public struct ModelStorageView: View {
         do {
             models = try await library.installedMLXModels()
             diskUsage = try await library.mlxDiskUsageBytes()
+            breakdown = try await library.storageBreakdown()
             errorMessage = nil
         } catch {
             if !error.isCancellation && !Task.isCancelled {

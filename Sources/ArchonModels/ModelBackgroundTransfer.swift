@@ -46,6 +46,13 @@ public struct ModelBackgroundDownloadRecord: Codable, Equatable, Sendable {
     public var bytesDownloaded: Int64
     public var totalBytes: Int64?
     public var lastError: String?
+    /// 1-based coordinator try count. Every `start` or `resume` increments
+    /// it; explicit user resumes are unbounded, so no cap is advertised here.
+    public var attempt: Int
+    /// Staged bytes present when the latest try resumed with resume data.
+    public var resumedFromBytes: Int64?
+    /// Bytes skipped because a previous run already staged them as ready.
+    public var deltaReusedBytes: Int64?
 
     public init(
         request: ModelBackgroundDownloadRequest,
@@ -54,7 +61,10 @@ public struct ModelBackgroundDownloadRecord: Codable, Equatable, Sendable {
         status: ModelBackgroundTransferStatus = .queued,
         bytesDownloaded: Int64 = 0,
         totalBytes: Int64? = nil,
-        lastError: String? = nil
+        lastError: String? = nil,
+        attempt: Int = 1,
+        resumedFromBytes: Int64? = nil,
+        deltaReusedBytes: Int64? = nil
     ) {
         self.request = request
         self.taskIdentifier = taskIdentifier
@@ -63,6 +73,32 @@ public struct ModelBackgroundDownloadRecord: Codable, Equatable, Sendable {
         self.bytesDownloaded = bytesDownloaded
         self.totalBytes = totalBytes
         self.lastError = lastError
+        self.attempt = max(1, attempt)
+        self.resumedFromBytes = resumedFromBytes.flatMap { $0 >= 0 ? $0 : nil }
+        self.deltaReusedBytes = deltaReusedBytes.flatMap { $0 >= 0 ? $0 : nil }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case request, taskIdentifier, resumeData, status
+        case bytesDownloaded, totalBytes, lastError
+        case attempt, resumedFromBytes, deltaReusedBytes
+    }
+
+    /// Decodes records written before attempt bookkeeping existed.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            request: try container.decode(ModelBackgroundDownloadRequest.self, forKey: .request),
+            taskIdentifier: try container.decodeIfPresent(Int.self, forKey: .taskIdentifier),
+            resumeData: try container.decodeIfPresent(Data.self, forKey: .resumeData),
+            status: try container.decode(ModelBackgroundTransferStatus.self, forKey: .status),
+            bytesDownloaded: try container.decodeIfPresent(Int64.self, forKey: .bytesDownloaded) ?? 0,
+            totalBytes: try container.decodeIfPresent(Int64.self, forKey: .totalBytes),
+            lastError: try container.decodeIfPresent(String.self, forKey: .lastError),
+            attempt: try container.decodeIfPresent(Int.self, forKey: .attempt) ?? 1,
+            resumedFromBytes: try container.decodeIfPresent(Int64.self, forKey: .resumedFromBytes),
+            deltaReusedBytes: try container.decodeIfPresent(Int64.self, forKey: .deltaReusedBytes)
+        )
     }
 }
 
@@ -111,6 +147,55 @@ private struct PersistedModelBackgroundDownloadRecord: Codable {
     let bytesDownloaded: Int64
     let totalBytes: Int64?
     let lastError: String?
+    let attempt: Int
+    let resumedFromBytes: Int64?
+    let deltaReusedBytes: Int64?
+
+    private enum CodingKeys: String, CodingKey {
+        case request, taskIdentifier, encryptedResumeData, status
+        case bytesDownloaded, totalBytes, lastError
+        case attempt, resumedFromBytes, deltaReusedBytes
+    }
+
+    init(
+        request: ModelBackgroundDownloadRequest,
+        taskIdentifier: Int?,
+        encryptedResumeData: Data?,
+        status: ModelBackgroundTransferStatus,
+        bytesDownloaded: Int64,
+        totalBytes: Int64?,
+        lastError: String?,
+        attempt: Int,
+        resumedFromBytes: Int64?,
+        deltaReusedBytes: Int64?
+    ) {
+        self.request = request
+        self.taskIdentifier = taskIdentifier
+        self.encryptedResumeData = encryptedResumeData
+        self.status = status
+        self.bytesDownloaded = bytesDownloaded
+        self.totalBytes = totalBytes
+        self.lastError = lastError
+        self.attempt = attempt
+        self.resumedFromBytes = resumedFromBytes
+        self.deltaReusedBytes = deltaReusedBytes
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            request: try container.decode(ModelBackgroundDownloadRequest.self, forKey: .request),
+            taskIdentifier: try container.decodeIfPresent(Int.self, forKey: .taskIdentifier),
+            encryptedResumeData: try container.decodeIfPresent(Data.self, forKey: .encryptedResumeData),
+            status: try container.decode(ModelBackgroundTransferStatus.self, forKey: .status),
+            bytesDownloaded: try container.decodeIfPresent(Int64.self, forKey: .bytesDownloaded) ?? 0,
+            totalBytes: try container.decodeIfPresent(Int64.self, forKey: .totalBytes),
+            lastError: try container.decodeIfPresent(String.self, forKey: .lastError),
+            attempt: try container.decodeIfPresent(Int.self, forKey: .attempt) ?? 1,
+            resumedFromBytes: try container.decodeIfPresent(Int64.self, forKey: .resumedFromBytes),
+            deltaReusedBytes: try container.decodeIfPresent(Int64.self, forKey: .deltaReusedBytes)
+        )
+    }
 }
 
 /// Persistence boundary for background transfers. A file-backed store lets a
@@ -224,6 +309,12 @@ public actor FileModelBackgroundDownloadStore: ModelBackgroundDownloadStore {
         }
     }
 
+    /// Bounds for persisted records. Error text is truncated and oversized
+    /// resume blobs are dropped (the transfer restarts fresh) so one record
+    /// cannot grow the store without limit.
+    static let maximumPersistedErrorCharacters = 300
+    static let maximumPersistedResumeDataBytes = 1_048_576
+
     private static func sanitized(_ record: ModelBackgroundDownloadRecord) -> ModelBackgroundDownloadRecord {
         let safeHeaders = record.request.headers.filter { field, _ in
             let normalized = field.lowercased().replacingOccurrences(of: "_", with: "-")
@@ -233,21 +324,31 @@ public actor FileModelBackgroundDownloadStore: ModelBackgroundDownloadStore {
             ]
             return !sensitiveMarkers.contains(where: normalized.contains)
         }
-        guard safeHeaders.count != record.request.headers.count else { return record }
         let safeRequest = ModelBackgroundDownloadRequest(
             identifier: record.request.identifier,
             url: record.request.url,
             destinationURL: record.request.destinationURL,
             headers: safeHeaders
         )
+        var resumeData = record.resumeData
+        if let data = resumeData, data.count > maximumPersistedResumeDataBytes {
+            resumeData = nil
+        }
+        var lastError = record.lastError
+        if let error = lastError, error.count > maximumPersistedErrorCharacters {
+            lastError = String(error.prefix(maximumPersistedErrorCharacters))
+        }
         return ModelBackgroundDownloadRecord(
             request: safeRequest,
             taskIdentifier: record.taskIdentifier,
-            resumeData: record.resumeData,
+            resumeData: resumeData,
             status: record.status,
             bytesDownloaded: record.bytesDownloaded,
             totalBytes: record.totalBytes,
-            lastError: record.lastError
+            lastError: lastError,
+            attempt: record.attempt,
+            resumedFromBytes: record.resumedFromBytes,
+            deltaReusedBytes: record.deltaReusedBytes
         )
     }
 
@@ -260,7 +361,10 @@ public actor FileModelBackgroundDownloadStore: ModelBackgroundDownloadStore {
             status: safe.status,
             bytesDownloaded: safe.bytesDownloaded,
             totalBytes: safe.totalBytes,
-            lastError: safe.lastError
+            lastError: safe.lastError,
+            attempt: safe.attempt,
+            resumedFromBytes: safe.resumedFromBytes,
+            deltaReusedBytes: safe.deltaReusedBytes
         )
     }
 
@@ -272,7 +376,10 @@ public actor FileModelBackgroundDownloadStore: ModelBackgroundDownloadStore {
             status: record.status,
             bytesDownloaded: record.bytesDownloaded,
             totalBytes: record.totalBytes,
-            lastError: record.lastError
+            lastError: record.lastError,
+            attempt: record.attempt,
+            resumedFromBytes: record.resumedFromBytes,
+            deltaReusedBytes: record.deltaReusedBytes
         )
     }
 
@@ -593,15 +700,21 @@ public actor ModelBackgroundTransferCoordinator {
         continuations[request.identifier] = continuation
         continuationTokens[request.identifier] = continuationToken
         delegate.register(task: task, destinationURL: request.destinationURL)
+        let previous = try await store.record(for: request.identifier)
         var record = ModelBackgroundDownloadRecord(
             request: request,
             taskIdentifier: task.taskIdentifier,
             resumeData: nil,
-            status: .queued
+            status: .queued,
+            attempt: (previous?.attempt ?? 0) + 1
         )
-        if resumeData != nil, let previous = try await store.record(for: request.identifier) {
+        if let previous {
             record.bytesDownloaded = previous.bytesDownloaded
             record.totalBytes = previous.totalBytes
+            record.deltaReusedBytes = previous.deltaReusedBytes
+            if resumeData != nil, previous.bytesDownloaded > 0 {
+                record.resumedFromBytes = previous.bytesDownloaded
+            }
         }
         try await store.save(record)
         continuation.yield(.init(identifier: request.identifier, state: .queued))

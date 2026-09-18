@@ -65,3 +65,12 @@ See [model lifecycle](model-lifecycle.md) for operations and
 models and model-family policy](supported-models.md) for the distinction
 between lower-level family-neutral catalog support and the user-facing
 MLX-only runnable runtime artifact.
+
+## Preparation recipes and family metadata
+
+`ModelPrepRecipeIndex.recipe(source:target:family:)` documents the
+developer-side path from raw weights to a validated manifest. Recipes never
+change compatibility: raw formats stay `conversionRequired` regardless of
+recipe availability. The manifest's optional `family` field (1...64 visible
+characters) is classification data for recipe tuning and benchmark lookup,
+never a compatibility claim.

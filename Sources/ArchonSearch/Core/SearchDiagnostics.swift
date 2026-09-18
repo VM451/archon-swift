@@ -10,7 +10,9 @@ public struct SearchDiagnostics: Sendable, Codable, Equatable {
     public var characterEstimate: Int
     public var tokenEstimate: Int
     public var errors: [String]
-    
+    /// True when the embedding rerank path applied at least one semantic score.
+    public var usedSemanticRerank: Bool
+
     public init(
         searchDuration: TimeInterval = 0.0,
         engineResults: [String: Int] = [:],
@@ -19,7 +21,8 @@ public struct SearchDiagnostics: Sendable, Codable, Equatable {
         extractionMethod: String = "native",
         characterEstimate: Int = 0,
         tokenEstimate: Int = 0,
-        errors: [String] = []
+        errors: [String] = [],
+        usedSemanticRerank: Bool = false
     ) {
         self.searchDuration = searchDuration
         self.engineResults = engineResults
@@ -29,6 +32,26 @@ public struct SearchDiagnostics: Sendable, Codable, Equatable {
         self.characterEstimate = characterEstimate
         self.tokenEstimate = tokenEstimate
         self.errors = errors
+        self.usedSemanticRerank = usedSemanticRerank
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case searchDuration, engineResults, urlFetchCount, cacheHits
+        case extractionMethod, characterEstimate, tokenEstimate, errors
+        case usedSemanticRerank
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.searchDuration = try container.decodeIfPresent(TimeInterval.self, forKey: .searchDuration) ?? 0.0
+        self.engineResults = try container.decodeIfPresent([String: Int].self, forKey: .engineResults) ?? [:]
+        self.urlFetchCount = try container.decodeIfPresent(Int.self, forKey: .urlFetchCount) ?? 0
+        self.cacheHits = try container.decodeIfPresent(Int.self, forKey: .cacheHits) ?? 0
+        self.extractionMethod = try container.decodeIfPresent(String.self, forKey: .extractionMethod) ?? "native"
+        self.characterEstimate = try container.decodeIfPresent(Int.self, forKey: .characterEstimate) ?? 0
+        self.tokenEstimate = try container.decodeIfPresent(Int.self, forKey: .tokenEstimate) ?? 0
+        self.errors = try container.decodeIfPresent([String].self, forKey: .errors) ?? []
+        self.usedSemanticRerank = try container.decodeIfPresent(Bool.self, forKey: .usedSemanticRerank) ?? false
     }
     
     /// Records an error string into diagnostics telemetry.

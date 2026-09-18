@@ -338,6 +338,10 @@ public struct ModelDescriptor: Codable, Equatable, Sendable, Identifiable {
     public let gated: Bool
     public let supportedLanguages: [String]
     public let variants: [ModelVariant]
+    /// Measured family benchmark records supplied by the catalog or host.
+    /// Always explicit provenance; never invented by Archon. Empty when the
+    /// catalog provides no measurements.
+    public let benchmarks: [ModelFamilyBenchmark]
     /// Provider publication metadata used for freshness sorting and age filters.
     public let createdAt: Date?
     public let lastModifiedAt: Date?
@@ -370,6 +374,7 @@ public struct ModelDescriptor: Codable, Equatable, Sendable, Identifiable {
         gated: Bool = false,
         supportedLanguages: [String] = [],
         variants: [ModelVariant] = [],
+        benchmarks: [ModelFamilyBenchmark] = [],
         createdAt: Date? = nil,
         lastModifiedAt: Date? = nil,
         downloads: Int? = nil,
@@ -391,6 +396,7 @@ public struct ModelDescriptor: Codable, Equatable, Sendable, Identifiable {
         self.gated = gated
         self.supportedLanguages = supportedLanguages
         self.variants = variants
+        self.benchmarks = benchmarks
         self.createdAt = createdAt
         self.lastModifiedAt = lastModifiedAt
         self.downloads = downloads
@@ -400,7 +406,7 @@ public struct ModelDescriptor: Codable, Equatable, Sendable, Identifiable {
     private enum CodingKeys: String, CodingKey {
         case id, name, publisher, family, parameterCount, tasks, architecture
         case description, logoURL, source, sourceURL, revision, license, gated
-        case supportedLanguages, variants, createdAt, lastModifiedAt, downloads, likes
+        case supportedLanguages, variants, benchmarks, createdAt, lastModifiedAt, downloads, likes
     }
 
     public init(from decoder: Decoder) throws {
@@ -422,6 +428,7 @@ public struct ModelDescriptor: Codable, Equatable, Sendable, Identifiable {
             gated: try container.decodeIfPresent(Bool.self, forKey: .gated) ?? false,
             supportedLanguages: try container.decodeIfPresent([String].self, forKey: .supportedLanguages) ?? [],
             variants: try container.decodeIfPresent([ModelVariant].self, forKey: .variants) ?? [],
+            benchmarks: try container.decodeIfPresent([ModelFamilyBenchmark].self, forKey: .benchmarks) ?? [],
             createdAt: Self.decodeDate(forKey: .createdAt, from: container),
             lastModifiedAt: Self.decodeDate(forKey: .lastModifiedAt, from: container),
             downloads: try container.decodeIfPresent(Int.self, forKey: .downloads),
@@ -443,6 +450,129 @@ public struct ModelDescriptor: Codable, Equatable, Sendable, Identifiable {
             formatter.formatOptions = [.withInternetDateTime]
             return formatter.date(from: value)
         }()
+    }
+}
+
+/// Transparent, bounded state for one download run of a model variant.
+///
+/// The download manager emits this alongside progress so hosts can show
+/// attempt counts, resume offsets, and delta reuse without guessing. All
+/// byte counts are non-negative; absent values mean "none", never zero-fill.
+public struct ModelDownloadAttempt: Codable, Sendable, Equatable, Hashable {
+    /// 1-based run number for this variant within the manager's lifetime.
+    /// Pause/resume, retry, and redownload each start a new run.
+    public let attempt: Int
+    public let maxAttempts: Int
+    /// Staged bytes present when this run started (range-resume offset).
+    public let resumedFromBytes: Int64?
+    /// Bytes of already-complete resources skipped by delta bookkeeping.
+    public let deltaReusedBytes: Int64?
+    /// The failure that ended the previous run, when this run is a retry.
+    public let lastError: String?
+
+    public init(
+        attempt: Int,
+        maxAttempts: Int,
+        resumedFromBytes: Int64? = nil,
+        deltaReusedBytes: Int64? = nil,
+        lastError: String? = nil
+    ) {
+        self.attempt = max(1, attempt)
+        self.maxAttempts = max(1, maxAttempts)
+        self.resumedFromBytes = resumedFromBytes.flatMap { $0 >= 0 ? $0 : nil }
+        self.deltaReusedBytes = deltaReusedBytes.flatMap { $0 >= 0 ? $0 : nil }
+        if let lastError, !lastError.isEmpty {
+            self.lastError = String(lastError.prefix(300))
+        } else {
+            self.lastError = nil
+        }
+    }
+}
+
+/// A measured quality/speed record for one model family, supplied by a
+/// catalog or host. Archon never invents these values: records arrive with
+/// explicit provenance, invalid records are ignored by routing, and a
+/// missing record simply leaves the heuristic fallback in place.
+public struct ModelFamilyBenchmark: Codable, Sendable, Equatable, Hashable {
+    public let family: String
+    /// Measured quality normalized to 0...1.
+    public let quality: Double
+    /// Measured generation speed, normally tokens per second.
+    public let tokensPerSecond: Double?
+    /// Where the measurement came from (device, harness, date).
+    public let measuredOn: String?
+
+    public init(
+        family: String,
+        quality: Double,
+        tokensPerSecond: Double? = nil,
+        measuredOn: String? = nil
+    ) {
+        self.family = family
+        self.quality = quality
+        self.tokensPerSecond = tokensPerSecond
+        self.measuredOn = measuredOn
+    }
+
+    public var normalizedFamily: String {
+        family.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    /// Fail-closed validity: a blank or oversized family, a non-finite or
+    /// out-of-range quality, a negative speed, or oversized provenance all
+    /// invalidate the record.
+    public var isValid: Bool {
+        let trimmed = family.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 64 else { return false }
+        guard quality.isFinite, (0...1).contains(quality) else { return false }
+        if let tokensPerSecond {
+            guard tokensPerSecond.isFinite, tokensPerSecond >= 0 else { return false }
+        }
+        if let measuredOn, measuredOn.count > 128 { return false }
+        return true
+    }
+}
+
+/// Per-model storage accounting for one managed installation.
+public struct ModelStorageEntry: Codable, Sendable, Equatable, Hashable {
+    public let id: String
+    public let bytes: Int64
+
+    public init(id: String, bytes: Int64) {
+        self.id = id
+        self.bytes = max(0, bytes)
+    }
+}
+
+/// Storage analytics for the managed model library: per-model bytes plus
+/// the temporary/staging split. Computed on demand from the filesystem.
+public struct ModelStorageBreakdown: Sendable, Equatable {
+    public let perModelBytes: [ModelStorageEntry]
+    /// Bytes under `.staging` (partial downloads resumable by range).
+    public let stagingBytes: Int64
+    /// Bytes under all Archon-created temporary directories (`.staging`,
+    /// `.backup-*`, `.install-*`). Always >= stagingBytes.
+    public let tempBytes: Int64
+    /// Sum of per-model bytes.
+    public let installedBytes: Int64
+
+    public init(
+        perModelBytes: [ModelStorageEntry],
+        stagingBytes: Int64,
+        tempBytes: Int64
+    ) {
+        self.perModelBytes = perModelBytes.sorted { $0.id < $1.id }
+        self.stagingBytes = max(0, stagingBytes)
+        self.tempBytes = max(max(0, tempBytes), max(0, stagingBytes))
+        self.installedBytes = perModelBytes.reduce(into: Int64(0)) { total, entry in
+            let (sum, overflow) = total.addingReportingOverflow(entry.bytes)
+            total = overflow ? Int64.max : sum
+        }
+    }
+
+    public var totalBytes: Int64 {
+        let (sum, overflow) = installedBytes.addingReportingOverflow(tempBytes)
+        return overflow ? Int64.max : sum
     }
 }
 
@@ -634,6 +764,7 @@ public struct MLXModelCatalog: PaginatedModelCatalogProvider, Sendable {
             gated: model.gated,
             supportedLanguages: model.supportedLanguages,
             variants: includeVariants ? variants : [],
+            benchmarks: model.benchmarks,
             createdAt: model.createdAt,
             lastModifiedAt: model.lastModifiedAt,
             downloads: model.downloads,
@@ -870,6 +1001,7 @@ public struct OfficialModelCatalog: PaginatedModelCatalogProvider, Sendable {
             gated: model.gated,
             supportedLanguages: model.supportedLanguages,
             variants: includeVariants ? variants : [],
+            benchmarks: model.benchmarks,
             createdAt: model.createdAt,
             lastModifiedAt: model.lastModifiedAt,
             downloads: model.downloads,
@@ -1163,6 +1295,7 @@ public struct StaticModelCatalog: PaginatedModelCatalogProvider, Sendable {
                     gated: model.gated,
                     supportedLanguages: model.supportedLanguages,
                     variants: request.includeVariants ? variants : [],
+                    benchmarks: model.benchmarks,
                     createdAt: model.createdAt,
                     lastModifiedAt: model.lastModifiedAt,
                     downloads: model.downloads,
@@ -1338,6 +1471,7 @@ public struct LocalModelCatalog: PaginatedModelCatalogProvider, Sendable {
             id: "local://\(directory.lastPathComponent)",
             name: manifest.modelName,
             publisher: "Local",
+            family: manifest.family,
             parameterCount: manifest.parameterCount,
             architecture: manifest.architecture,
             logoURL: manifest.logoURL,
@@ -1891,7 +2025,26 @@ public enum ModelCompatibilityAnalyzer {
         device: ArchonDeviceCapabilities,
         task: ArchonModelTask? = nil
     ) -> ModelVariant? {
-        model.variants
+        recommendedVariant(for: model, device: device, task: task, benchmarks: [])
+    }
+
+    /// Chooses the best currently loadable variant, upgrading the quality
+    /// fallback with measured family benchmarks after fit.
+    ///
+    /// Ranking is: fit, then effective quality, then effective speed, then
+    /// runtime preference, then size and id for determinism. A variant's own
+    /// declared estimate wins when present; the measured family record fills
+    /// in only when the variant carries no usable estimate. Invalid records
+    /// (and records for other families) are ignored. Explicit `benchmarks`
+    /// take precedence over records carried on the descriptor.
+    public static func recommendedVariant(
+        for model: ModelDescriptor,
+        device: ArchonDeviceCapabilities,
+        task: ArchonModelTask? = nil,
+        benchmarks: [ModelFamilyBenchmark]
+    ) -> ModelVariant? {
+        let measured = measuredBenchmark(forFamily: model.family, explicit: benchmarks, carried: model.benchmarks)
+        return model.variants
             .filter { variant in
                 guard let task else { return true }
                 return variant.capabilities.tasks.contains(task)
@@ -1906,12 +2059,12 @@ public enum ModelCompatibilityAnalyzer {
                 let rightFit = fitRank(rhs.1.fit)
                 if leftFit != rightFit { return leftFit < rightFit }
 
-                let leftQuality = normalizedQuality(lhs.0.estimatedQualityScore)
-                let rightQuality = normalizedQuality(rhs.0.estimatedQualityScore)
+                let leftQuality = effectiveQuality(of: lhs.0, measured: measured)
+                let rightQuality = effectiveQuality(of: rhs.0, measured: measured)
                 if leftQuality != rightQuality { return leftQuality > rightQuality }
 
-                let leftSpeed = normalizedSpeed(lhs.0.estimatedTokensPerSecond)
-                let rightSpeed = normalizedSpeed(rhs.0.estimatedTokensPerSecond)
+                let leftSpeed = effectiveSpeed(of: lhs.0, measured: measured)
+                let rightSpeed = effectiveSpeed(of: rhs.0, measured: measured)
                 if leftSpeed != rightSpeed { return leftSpeed > rightSpeed }
 
                 let leftRuntime = runtimeRank(lhs.0.runtime)
@@ -1920,6 +2073,41 @@ public enum ModelCompatibilityAnalyzer {
                 return (lhs.0.sizeBytes ?? Int64.max, lhs.0.id) < (rhs.0.sizeBytes ?? Int64.max, rhs.0.id)
             }
             .first?.0
+    }
+
+    /// Returns the valid measured record for the model's family, preferring
+    /// explicit caller records over descriptor-carried records. First valid
+    /// record per source wins so repeated calls stay deterministic.
+    public static func measuredBenchmark(
+        forFamily family: String?,
+        explicit: [ModelFamilyBenchmark],
+        carried: [ModelFamilyBenchmark] = []
+    ) -> ModelFamilyBenchmark? {
+        guard let family, !family.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let normalized = family.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        for record in explicit where record.isValid && record.normalizedFamily == normalized {
+            return record
+        }
+        for record in carried where record.isValid && record.normalizedFamily == normalized {
+            return record
+        }
+        return nil
+    }
+
+    private static func effectiveQuality(of variant: ModelVariant, measured: ModelFamilyBenchmark?) -> Double {
+        if let declared = variant.estimatedQualityScore, declared.isFinite {
+            return min(max(declared, 0), 1)
+        }
+        if let measured { return measured.quality }
+        return 0
+    }
+
+    private static func effectiveSpeed(of variant: ModelVariant, measured: ModelFamilyBenchmark?) -> Double {
+        if let declared = variant.estimatedTokensPerSecond, declared.isFinite, declared >= 0 {
+            return declared
+        }
+        if let speed = measured?.tokensPerSecond { return speed }
+        return 0
     }
 
     /// Lists loadable quantization choices from smallest to largest. This is
@@ -1967,15 +2155,6 @@ public enum ModelCompatibilityAnalyzer {
         }
     }
 
-    private static func normalizedQuality(_ value: Double?) -> Double {
-        guard let value, value.isFinite else { return 0 }
-        return min(max(value, 0), 1)
-    }
-
-    private static func normalizedSpeed(_ value: Double?) -> Double {
-        guard let value, value.isFinite, value >= 0 else { return 0 }
-        return value
-    }
 }
 
 public struct ArchonModelManifest: Codable, Equatable, Sendable {
@@ -1985,6 +2164,9 @@ public struct ArchonModelManifest: Codable, Equatable, Sendable {
     public let schemaVersion: Int
     public let modelID: String
     public let modelName: String
+    /// Descriptive model family used for benchmark lookup and recipe tuning.
+    /// Classification only; never a compatibility claim.
+    public let family: String?
     public let sourceRepository: String?
     public let sourceRevision: String?
     public let license: ModelLicenseMetadata?
@@ -2024,10 +2206,11 @@ public struct ArchonModelManifest: Codable, Equatable, Sendable {
     /// are not eligible for local model loading.
     public let isExperimental: Bool
 
-    public init(variant: ModelVariant, modelName: String, license: ModelLicenseMetadata? = nil, logoURL: URL? = nil, sourceRepository: String? = nil, sourceRevision: String? = nil) {
+    public init(variant: ModelVariant, modelName: String, family: String? = nil, license: ModelLicenseMetadata? = nil, logoURL: URL? = nil, sourceRepository: String? = nil, sourceRevision: String? = nil) {
         self.init(
             modelID: variant.modelID,
             modelName: modelName,
+            family: family,
             sourceRepository: sourceRepository,
             sourceRevision: sourceRevision,
             license: license,
@@ -2060,6 +2243,7 @@ public struct ArchonModelManifest: Codable, Equatable, Sendable {
         schemaVersion: Int = ArchonModelManifest.currentSchemaVersion,
         modelID: String,
         modelName: String,
+        family: String? = nil,
         sourceRepository: String? = nil,
         sourceRevision: String? = nil,
         license: ModelLicenseMetadata? = nil,
@@ -2089,6 +2273,7 @@ public struct ArchonModelManifest: Codable, Equatable, Sendable {
         self.schemaVersion = schemaVersion
         self.modelID = modelID
         self.modelName = modelName
+        self.family = family
         self.sourceRepository = sourceRepository
         self.sourceRevision = sourceRevision
         self.license = license
@@ -2117,7 +2302,7 @@ public struct ArchonModelManifest: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, modelID, modelName, sourceRepository, sourceRevision
+        case schemaVersion, modelID, modelName, family, sourceRepository, sourceRevision
         case license, logoURL, runtime, format, architecture, supportedDeviceArchitectures
         case artifactPath, modelResources, tokenizerResources, checksum
         case modelSizeBytes, parameterCount, platforms, minimumOS, contextLength
@@ -2135,6 +2320,7 @@ public struct ArchonModelManifest: Codable, Equatable, Sendable {
             schemaVersion: try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? ArchonModelManifest.currentSchemaVersion,
             modelID: try container.decode(String.self, forKey: .modelID),
             modelName: try container.decode(String.self, forKey: .modelName),
+            family: try container.decodeIfPresent(String.self, forKey: .family),
             sourceRepository: try container.decodeIfPresent(String.self, forKey: .sourceRepository),
             sourceRevision: try container.decodeIfPresent(String.self, forKey: .sourceRevision),
             license: try container.decodeIfPresent(ModelLicenseMetadata.self, forKey: .license),
@@ -2169,6 +2355,7 @@ public struct ArchonModelManifest: Codable, Equatable, Sendable {
             schemaVersion: schemaVersion,
             modelID: modelID,
             modelName: modelName,
+            family: family,
             sourceRepository: sourceRepository,
             sourceRevision: sourceRevision,
             license: license,
@@ -2204,6 +2391,7 @@ public struct ArchonModelManifest: Codable, Equatable, Sendable {
             schemaVersion: ArchonModelManifest.currentSchemaVersion,
             modelID: modelID,
             modelName: modelName,
+            family: family,
             sourceRepository: sourceRepository,
             sourceRevision: sourceRevision,
             license: license,
@@ -2238,6 +2426,7 @@ public struct ArchonModelManifest: Codable, Equatable, Sendable {
             schemaVersion: schemaVersion,
             modelID: modelID,
             modelName: modelName,
+            family: family,
             sourceRepository: sourceRepository,
             sourceRevision: sourceRevision,
             license: license,
@@ -2364,6 +2553,12 @@ public enum ModelManifestValidator {
         }
         if manifest.modelName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             errors.append("modelName must not be empty.")
+        }
+        if let family = manifest.family {
+            let trimmed = family.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty || trimmed.count > 64 {
+                errors.append("family must be 1...64 visible characters when present.")
+            }
         }
         if manifest.runtime == .unknown {
             errors.append("runtime must identify a concrete execution backend.")
@@ -2649,6 +2844,7 @@ public enum ArchonModelsError: Error, LocalizedError, Equatable, Sendable {
     case noDownloadURL
     case cancelled
     case incompatible(ModelCompatibilityStatus)
+    case prepRecipeUnavailable(String)
 
     public var errorDescription: String? {
         switch self {
@@ -2672,6 +2868,7 @@ public enum ArchonModelsError: Error, LocalizedError, Equatable, Sendable {
         case .noDownloadURL: "This model variant does not provide a download URL."
         case .cancelled: "The model download was cancelled."
         case .incompatible(let status): "The model variant is not compatible with this device: \(status.rawValue)."
+        case .prepRecipeUnavailable(let value): "No preparation recipe is available for \(value)."
         }
     }
 }

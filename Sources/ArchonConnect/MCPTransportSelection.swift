@@ -16,6 +16,10 @@ public struct MCPTransportDescriptor: Codable, Equatable, Sendable {
     public let endpoint: URL
     public let requiresExplicitToolAuthorization: Bool
     public let summary: String
+    /// Package-provable conformance scope for this transport. The custom
+    /// transport stays the default until the official-SDK gates close; see
+    /// `conformanceProbe()` for the fake-driven report.
+    public let conformanceScope: String
 
     public init(choice: MCPTransportChoice, endpoint: URL) {
         self.choice = choice
@@ -24,8 +28,10 @@ public struct MCPTransportDescriptor: Codable, Equatable, Sendable {
         switch choice {
         case .custom:
             self.summary = "Custom Archon MCP transport. Host-owned JSON-RPC over HTTP; tool calls require explicit host authorization."
+            self.conformanceScope = "Package-provable: JSON-RPC schema validation, 1000-item collections, 100-page pagination with cursor-cycle rejection, bounded streams, and typed errors. Full wire interop stays proven through the official-SDK adapter fixtures."
         case .officialSDK:
             self.summary = "Official MCP Swift SDK adapter with Archon policy (explicit tool authorization, pagination and size limits, typed errors). Custom transport remains available."
+            self.conformanceScope = "Package-provable: SDK-owned wire behavior plus Archon policy (explicit tool authorization, uniform pagination guard, notification allowlist, bounded teardown, typed errors). Live-server interop remains an open gate."
         }
     }
 }

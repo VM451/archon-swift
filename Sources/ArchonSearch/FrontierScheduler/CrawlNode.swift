@@ -22,7 +22,11 @@ public final class CrawlNode {
     public var robotsChecked: Bool
     public var parentURLString: String?
     public var backoffUntil: Date?
-    
+    /// Crawl depth from the seed URL (0 for seeds). Deeper nodes score lower.
+    public var depth: Int
+    /// Host failures recorded against this node. Decays priority.
+    public var failureCount: Int
+
     public init(
         urlString: String,
         status: CrawlStatus = .pending,
@@ -33,7 +37,9 @@ public final class CrawlNode {
         addedAt: Date = Date(),
         robotsChecked: Bool = false,
         parentURLString: String? = nil,
-        backoffUntil: Date? = nil
+        backoffUntil: Date? = nil,
+        depth: Int = 0,
+        failureCount: Int = 0
     ) {
         self.urlString = urlString
         self.statusValue = status.rawValue
@@ -45,6 +51,8 @@ public final class CrawlNode {
         self.robotsChecked = robotsChecked
         self.parentURLString = parentURLString
         self.backoffUntil = backoffUntil
+        self.depth = depth
+        self.failureCount = failureCount
     }
     
     public var status: CrawlStatus {

@@ -68,6 +68,7 @@ public actor MemoryExtractor {
         // 5. Apply mutations locally in VectorStore
         var affectedItems: [MemoryItem] = []
         var executedOperations: [MemoryOperation] = []
+        var skippedOperations: [MemoryExtractionSkip] = []
 
         for op in structuredResponse.memoryOperations {
             switch op.event {
@@ -105,11 +106,54 @@ public actor MemoryExtractor {
 
             case .update:
                 guard let targetIdStr = op.id, let targetUUID = UUID(uuidString: targetIdStr) else {
+                    skippedOperations.append(MemoryExtractionSkip(
+                        operation: op,
+                        reason: .invalidTargetID(op.id)
+                    ))
                     continue
                 }
-                guard var existing = try await vectorStore.fetch(id: targetUUID) else {
+                guard let direct = try await vectorStore.fetch(id: targetUUID) else {
+                    skippedOperations.append(MemoryExtractionSkip(
+                        operation: op,
+                        reason: .targetMissing(targetUUID)
+                    ))
                     continue
                 }
+                if direct.isDeleted {
+                    skippedOperations.append(MemoryExtractionSkip(
+                        operation: op,
+                        reason: .targetDeleted(targetUUID)
+                    ))
+                    continue
+                }
+                let head: MemoryItem
+                do {
+                    head = try await resolveSupersessionHead(for: targetUUID)
+                } catch let error as ArchonMemoryError {
+                    skippedOperations.append(MemoryExtractionSkip(
+                        operation: op,
+                        reason: MemorySkipReason(error: error, fallbackID: targetUUID)
+                    ))
+                    continue
+                }
+                if let validTo = head.validTo, validTo <= Date() {
+                    skippedOperations.append(MemoryExtractionSkip(
+                        operation: op,
+                        reason: .targetExpired(head.id)
+                    ))
+                    continue
+                }
+                // Double-supersession guard: resolution guarantees a live head
+                // with no successor, so reaching here with one set means a
+                // concurrent write forked the chain; skip rather than fork.
+                guard head.supersededById == nil else {
+                    skippedOperations.append(MemoryExtractionSkip(
+                        operation: op,
+                        reason: .supersessionChainBroken(head.id)
+                    ))
+                    continue
+                }
+                var existing = head
 
                 let newVector = try await embeddingProvider.embed(text: op.memory)
                 let oldMemoryText = existing.memory
@@ -182,7 +226,39 @@ public actor MemoryExtractor {
             }
         }
 
-        return MemoryChangeset(changes: executedOperations, affectedItems: affectedItems)
+        return MemoryChangeset(
+            changes: executedOperations,
+            affectedItems: affectedItems,
+            skipped: skippedOperations
+        )
+    }
+
+    /// Resolves the live head of a supersession chain, following
+    /// `supersededById` pointers from `id`.
+    ///
+    /// Updating a mid-chain record targets the returned head so the chain
+    /// extends without forking. Throws
+    /// `ArchonMemoryError.supersessionTargetInvalid` when the starting
+    /// record is missing or deleted, and
+    /// `ArchonMemoryError.supersessionChainBroken` when a successor pointer
+    /// dangles, points at a deleted record, or cycles.
+    public func resolveSupersessionHead(for id: UUID) async throws -> MemoryItem {
+        guard var current = try await vectorStore.fetch(id: id), !current.isDeleted else {
+            throw ArchonMemoryError.supersessionTargetInvalid(id)
+        }
+        var seen: Set<UUID> = [current.id]
+        while let successorID = current.supersededById {
+            guard !seen.contains(successorID) else {
+                throw ArchonMemoryError.supersessionChainBroken(successorID)
+            }
+            seen.insert(successorID)
+            guard let successor = try await vectorStore.fetch(id: successorID),
+                  !successor.isDeleted else {
+                throw ArchonMemoryError.supersessionChainBroken(successorID)
+            }
+            current = successor
+        }
+        return current
     }
 
     private func extractAndStoreGraphTriples(from text: String, userId: String?, graphStore: GraphStore) async {

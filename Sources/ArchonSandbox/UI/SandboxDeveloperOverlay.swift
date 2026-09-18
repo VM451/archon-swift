@@ -1,4 +1,5 @@
 import SwiftUI
+import ArchonCore
 
 /// Real-time developer overlay providing live console logs, DOM AST inspection, and tool calling monitors.
 public struct SandboxDeveloperOverlay: View {
@@ -6,12 +7,15 @@ public struct SandboxDeveloperOverlay: View {
     @State private var selectedTab: Tab = .console
     @State private var searchText: String = ""
     @State private var selectedLogLevel: SandboxEvent.LogLevel?
-    
+    @State private var auditOutcomeFilter: SandboxAuditOutcome?
+    @State private var auditCapabilityFilter: ArchonPermission?
+
     public enum Tab: String, CaseIterable, Identifiable {
         case console = "Console"
         case dom = "DOM Tree"
         case files = "Files"
-        
+        case audit = "Audit"
+
         public var id: String { rawValue }
     }
     
@@ -54,6 +58,8 @@ public struct SandboxDeveloperOverlay: View {
                     domTreeView
                 case .files:
                     filesListView
+                case .audit:
+                    auditListView
                 }
             }
         }
@@ -139,6 +145,90 @@ public struct SandboxDeveloperOverlay: View {
         }
     }
     
+    private var auditFilter: SandboxAuditFilter {
+        SandboxAuditFilter(outcome: auditOutcomeFilter, capability: auditCapabilityFilter)
+    }
+
+    private var auditListView: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Picker("Outcome", selection: $auditOutcomeFilter) {
+                    Text("All").tag(SandboxAuditOutcome?.none)
+                    ForEach(SandboxAuditOutcome.allCases, id: \.self) { outcome in
+                        Text(outcome.rawValue).tag(SandboxAuditOutcome?.some(outcome))
+                    }
+                }
+                .pickerStyle(.menu)
+                .font(.caption2)
+                Picker("Capability", selection: $auditCapabilityFilter) {
+                    Text("All").tag(ArchonPermission?.none)
+                    ForEach(ArchonPermission.allCases, id: \.self) { permission in
+                        Text(permission.rawValue).tag(ArchonPermission?.some(permission))
+                    }
+                }
+                .pickerStyle(.menu)
+                .font(.caption2)
+                Spacer()
+                Button("Clear") { controller.clearAuditRecords() }
+                    .font(.caption2)
+                    .buttonStyle(.borderless)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            Divider()
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    let records = auditFilter.apply(to: controller.auditRecords)
+                    if records.isEmpty {
+                        Text("No audit records match this filter.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .padding()
+                    } else {
+                        ForEach(Array(records.enumerated()), id: \.offset) { _, record in
+                            HStack(alignment: .top, spacing: 6) {
+                                Text(auditOutcomeLabel(for: record.outcome))
+                                    .font(.caption2)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(auditOutcomeColor(for: record.outcome))
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(record.event.summary)
+                                        .font(.system(size: 11, weight: .regular, design: .monospaced))
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    if let capability = record.capability {
+                                        Text("capability: \(capability.rawValue)")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            Divider().opacity(0.3)
+                        }
+                    }
+                }
+                .padding(.vertical, 6)
+            }
+        }
+    }
+
+    private func auditOutcomeLabel(for outcome: SandboxAuditOutcome) -> String {
+        switch outcome {
+        case .allowed: return "ALLOW"
+        case .denied: return "DENY"
+        case .error: return "ERROR"
+        }
+    }
+
+    private func auditOutcomeColor(for outcome: SandboxAuditOutcome) -> Color {
+        switch outcome {
+        case .allowed: return .green
+        case .denied: return .orange
+        case .error: return .red
+        }
+    }
+
     private func eventIcon(for event: SandboxEvent) -> String {
         switch event {
         case .consoleLog(let level, _, _):
@@ -154,6 +244,8 @@ public struct SandboxDeveloperOverlay: View {
             return "arrow.triangle.2.circlepath"
         case .toolCall:
             return "wrench.and.screwdriver"
+        case .capabilityDecision:
+            return "lock.shield"
         case .customMessage:
             return "bubble.left"
         case .lifecycle:
@@ -176,6 +268,8 @@ public struct SandboxDeveloperOverlay: View {
             return .blue
         case .toolCall:
             return .purple
+        case .capabilityDecision:
+            return .teal
         case .customMessage:
             return .green
         case .lifecycle:

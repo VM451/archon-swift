@@ -251,6 +251,10 @@ public struct MCPPromptResult: Codable, Equatable, Sendable {
 public protocol MCPTransport: Sendable {
     func connect() async throws
     func disconnect() async
+    /// Bounded teardown: cancel request contexts, finish streams, and clear
+    /// tool grants within `timeout`, keeping hosted capabilities installed.
+    /// Transports without in-flight work treat this as `disconnect()`.
+    func disconnect(timeout: TimeInterval) async
     func listTools() async throws -> [MCPTool]
     func callTool(name: String, arguments: [String: JSONValue]) async throws -> MCPToolResult
     func streamTool(name: String, arguments: [String: JSONValue]) async -> AsyncThrowingStream<MCPStreamEvent, Error>
@@ -270,6 +274,12 @@ public protocol MCPTransport: Sendable {
 }
 
 public extension MCPTransport {
+    /// Default bounded teardown for transports with no in-flight work to join.
+    func disconnect(timeout: TimeInterval) async {
+        _ = timeout
+        await disconnect()
+    }
+
     /// Adapts a transport with no native stream to a one-result stream.
     func streamTool(name: String, arguments: [String: JSONValue]) async -> AsyncThrowingStream<MCPStreamEvent, Error> {
         let (stream, continuation) = AsyncThrowingStream<MCPStreamEvent, Error>.makeStream()
@@ -345,6 +355,33 @@ enum MCPTransportLimits {
     static let maximumPaginationPages = 100
 }
 
+/// Best-effort bounded join for already-cancelled stream tasks. Waits until
+/// every task finishes or `timeout` elapses, whichever comes first. Callers
+/// must cancel the tasks first; cancellation is what guarantees prompt
+/// completion, the timeout only bounds the wait.
+func joinCancelledStreamTasks(_ tasks: [Task<Void, Never>], timeout: TimeInterval) async {
+    guard timeout > 0, !tasks.isEmpty else { return }
+    await withTaskGroup(of: Bool.self) { group in
+        for task in tasks {
+            group.addTask {
+                await task.value
+                return true
+            }
+        }
+        group.addTask {
+            try? await Task.sleep(for: .seconds(timeout))
+            return false
+        }
+        var remaining = tasks.count
+        while let finished = await group.next() {
+            if finished == false { break }
+            remaining -= 1
+            if remaining == 0 { break }
+        }
+        group.cancelAll()
+    }
+}
+
 /// JSON-RPC MCP transport for HTTP or streamable-HTTP servers.
 ///
 /// Authentication is supplied as an already-resolved header value so this
@@ -402,6 +439,20 @@ public actor MCPHTTPTransport: MCPTransport {
 
     public func disconnect() async {
         for task in streamTasks.values { task.cancel() }
+        streamTasks.removeAll()
+        connected = false
+        sessionID = nil
+        authorizedToolNames.removeAll()
+    }
+
+    /// Bounded teardown: cancels active streams, waits up to `timeout` for
+    /// them to settle, then clears tool grants and session state. Idempotent:
+    /// calling twice (or after `disconnect()`) is a no-op. The custom
+    /// transport holds no hosted capabilities, so there is nothing to keep.
+    public func disconnect(timeout: TimeInterval) async {
+        let tasks = Array(streamTasks.values)
+        for task in tasks { task.cancel() }
+        await joinCancelledStreamTasks(tasks, timeout: max(timeout, 0))
         streamTasks.removeAll()
         connected = false
         sessionID = nil
@@ -539,6 +590,9 @@ public actor MCPHTTPTransport: MCPTransport {
                 }
             }
             streamTasks[streamID] = task
+            // Stream termination cancels the request context: cancelling the
+            // task aborts the in-flight URLSession stream (byte loops check
+            // cancellation) and drops the tracked task entry.
             continuation.onTermination = { [weak self] _ in
                 task.cancel()
                 Task { await self?.removeStreamTask(streamID) }
@@ -985,6 +1039,27 @@ public actor MCPClient {
         for task in streamTasks.values { task.cancel() }
         streamTasks.removeAll()
         await transport.disconnect()
+        connected = false
+        toolsByName.removeAll()
+        resourcesByURI.removeAll()
+        promptsByName.removeAll()
+        await auditSink.record(ArchonAuditEvent(
+            category: "mcp",
+            action: "disconnect",
+            outcome: "completed"
+        ))
+    }
+
+    /// Bounded teardown: cancels local stream consumers, waits up to
+    /// `timeout` for them to settle, tears down the transport within the same
+    /// bound, clears tool grants and caches, and audits once. Hosted
+    /// capabilities stay installed on the transport. Idempotent.
+    public func disconnect(timeout: TimeInterval) async {
+        let tasks = Array(streamTasks.values)
+        for task in tasks { task.cancel() }
+        await joinCancelledStreamTasks(tasks, timeout: max(timeout, 0))
+        streamTasks.removeAll()
+        await transport.disconnect(timeout: timeout)
         connected = false
         toolsByName.removeAll()
         resourcesByURI.removeAll()

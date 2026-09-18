@@ -30,3 +30,13 @@ transport, or UI implementation.
 Keep host authorization and user-facing permission prompts in the consuming
 application. `ArchonCore` describes policy and observes host facts; it does not
 grant Apple's system permissions.
+
+## Agent-stack probe IDs
+
+`ArchonCapabilityProbeID` provides well-known capability identifiers for
+agent-stack availability probes (`archon.agent.handoff`,
+`archon.agent.guardrails`, `archon.agent.eval`,
+`archon.context.token-profiles`, `archon.context.summarization`,
+`archon.context.contributor-latency`). `ArchonCapabilityRegistry`
+gains a `registerAvailable` convenience for recording an available status.
+These are constants only; capability state remains host-observed.

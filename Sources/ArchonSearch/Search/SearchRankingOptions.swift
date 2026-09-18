@@ -15,6 +15,8 @@ public struct SearchRankingOptions: Sendable, Codable, Equatable {
     /// Hosts that never survive, checked as suffix match.
     public var blockHosts: [String]
     public var maxResults: Int
+    /// Optional embedding rerank. `nil` (default) keeps keyword behavior.
+    public var embedding: EmbeddingRerankOptions?
 
     public init(
         preferRecent: Bool = true,
@@ -22,7 +24,8 @@ public struct SearchRankingOptions: Sendable, Codable, Equatable {
         freshnessHalfLife: TimeInterval = 60 * 60 * 24 * 30,
         allowHosts: [String] = [],
         blockHosts: [String] = [],
-        maxResults: Int = 10
+        maxResults: Int = 10,
+        embedding: EmbeddingRerankOptions? = nil
     ) {
         self.preferRecent = preferRecent
         self.maxAge = maxAge
@@ -30,5 +33,6 @@ public struct SearchRankingOptions: Sendable, Codable, Equatable {
         self.allowHosts = allowHosts
         self.blockHosts = blockHosts
         self.maxResults = maxResults
+        self.embedding = embedding
     }
 }

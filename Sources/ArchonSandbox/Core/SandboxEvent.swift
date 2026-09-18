@@ -7,6 +7,7 @@ public enum SandboxEvent: Sendable, Codable, Equatable {
     case domMutation(summary: String, targetSelector: String?, timestamp: Date)
     case customMessage(name: String, payload: String)
     case toolCall(id: String, toolName: String, argumentsJSON: String)
+    case capabilityDecision(permission: String, scope: String, allowed: Bool, timestamp: Date)
     case lifecycle(LifecycleState)
     
     public enum LogLevel: String, Codable, Sendable, Equatable, Comparable {
@@ -50,6 +51,8 @@ public enum SandboxEvent: Sendable, Codable, Equatable {
             return "[MESSAGE: \(name)] \(payload)"
         case .toolCall(let id, let toolName, let args):
             return "[TOOL_CALL: \(toolName) (id: \(id))] \(args)"
+        case .capabilityDecision(let permission, let scope, let allowed, _):
+            return "[CAPABILITY] \(permission) @ \(scope): \(allowed ? "allowed" : "denied")"
         case .lifecycle(let state):
             return "[LIFECYCLE] \(state.rawValue)"
         }

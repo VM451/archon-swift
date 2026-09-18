@@ -703,12 +703,14 @@ public actor LocalVectorStore: VectorStore {
         for (index, candidate) in candidates.enumerated() {
             let similarity = vectorSimilarities[index]
             let textRank = textScores[candidate.id] ?? 0.0
-            let vScore = similarity ?? 0.0
 
             let ageInDays = Float(max(0, now - candidate.lastAccessedAt) / 86400.0)
-            let timeDecay = exp(-decayLambda * ageInDays)
-
-            let finalScore = (alpha * vScore + beta * textRank * timeDecay) * candidate.scoreWeight
+            let finalScore = ranking.score(
+                dense: similarity,
+                sparse: textRank,
+                ageDays: ageInDays,
+                weight: candidate.scoreWeight
+            )
 
             if finalScore > 0 || vector == nil {
                 rankedIDs.append((
@@ -867,9 +869,12 @@ public actor LocalVectorStore: VectorStore {
                 let textRank = textScores[id] ?? 0.0
 
                 let ageInDays = Float(max(0, now - block.accessed[position]) / 86400.0)
-                let timeDecay = exp(-decayLambda * ageInDays)
-
-                let finalScore = (alpha * similarity + beta * textRank * timeDecay) * block.weights[position]
+                let finalScore = ranking.score(
+                    dense: similarity,
+                    sparse: textRank,
+                    ageDays: ageInDays,
+                    weight: block.weights[position]
+                )
                 if finalScore > 0 {
                     ranked.append(RankedEntry(
                         id: id,
@@ -889,8 +894,12 @@ public actor LocalVectorStore: VectorStore {
             }
             let textRank = textScores[id] ?? 0.0
             let ageInDays = Float(max(0, now - cached.lastAccessedAt) / 86400.0)
-            let timeDecay = exp(-decayLambda * ageInDays)
-            let finalScore = (beta * textRank * timeDecay) * cached.scoreWeight
+            let finalScore = ranking.score(
+                dense: nil,
+                sparse: textRank,
+                ageDays: ageInDays,
+                weight: cached.scoreWeight
+            )
             if finalScore > 0 {
                 ranked.append(RankedEntry(
                     id: id,
@@ -1503,6 +1512,22 @@ public actor LocalVectorStore: VectorStore {
         )
     }
 
+    /// Owned hybrid blend configured with this store's weights.
+    ///
+    /// The stored weights are assigned directly (bypassing the
+    /// `HybridRankingOptions` initializer clamp) so delegation reproduces the
+    /// historical formula exactly for in-range inputs. Out-of-range inputs
+    /// previously blended to a non-positive score and were filtered by the
+    /// `finalScore > 0` gate; the owned clamp keeps that gate behavior
+    /// identical.
+    private var ranking: HybridRankingOptions {
+        var options = HybridRankingOptions()
+        options.alpha = alpha
+        options.beta = beta
+        options.decayLambda = decayLambda
+        return options
+    }
+
     private static func appendFilterConditions(filters: MemoryFilter?, sql: inout String, args: inout [DatabaseValueConvertible]) {
         guard let filters = filters else {
             sql += " AND isDeleted = 0"
@@ -1533,5 +1558,102 @@ public actor LocalVectorStore: VectorStore {
             args.append(activeDouble)
             args.append(activeDouble)
         }
+    }
+}
+
+// MARK: - VectorIndexRebuildSource
+
+extension LocalVectorStore: VectorIndexRebuildSource {
+    private static let rebuildBatchSize = 500
+
+    /// Returns every non-deleted record carrying an embedding, in `id` order.
+    ///
+    /// Deleted rows and rows without an embedding are skipped (they are not
+    /// indexable). Reads stream in bounded batches and check for cancellation
+    /// between batches, so abandoning a large migration stops promptly.
+    /// Corrupt stored vectors fail closed with a typed error rather than
+    /// silently dropping durable data.
+    public func indexRecords() async throws -> [VectorIndexRecord] {
+        try Task.checkCancellation()
+        var records: [VectorIndexRecord] = []
+        var offset = 0
+        while true {
+            try Task.checkCancellation()
+            let pageOffset = offset
+            let batch = try await dbQueue.read { db -> [VectorIndexRecord] in
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: """
+                    SELECT id, vectorData FROM memories
+                    WHERE isDeleted = 0
+                    ORDER BY id ASC
+                    LIMIT \(Self.rebuildBatchSize) OFFSET \(pageOffset)
+                    """
+                )
+                var batch: [VectorIndexRecord] = []
+                batch.reserveCapacity(rows.count)
+                for row in rows {
+                    let idString: String = row["id"]
+                    guard let id = UUID(uuidString: idString) else { continue }
+                    guard let blob: Data = row["vectorData"], !blob.isEmpty else {
+                        continue
+                    }
+                    guard blob.count % MemoryLayout<Float>.size == 0 else {
+                        throw ArchonMemoryError.invalidConfiguration(
+                            "Stored memory vector has an invalid byte length."
+                        )
+                    }
+                    let vector = blob.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
+                    try Self.validate(vector: vector, label: "stored memory")
+                    guard !vector.isEmpty else { continue }
+                    batch.append(VectorIndexRecord(id: id, vector: vector))
+                }
+                return batch
+            }
+            records.append(contentsOf: batch)
+            if batch.count < Self.rebuildBatchSize { break }
+            offset += batch.count
+        }
+        return records
+    }
+
+    /// Counts non-deleted rows carrying an embedding.
+    ///
+    /// Approximate-index adapters use this as the `totalCount` input to
+    /// `filteredOverfetchLimit(baseLimit:allowedCount:totalCount:cap:)`
+    /// without materializing every record.
+    public func indexRecordCount() async throws -> Int {
+        try await dbQueue.read { db in
+            try Int.fetchOne(
+                db,
+                sql: """
+                SELECT COUNT(*) FROM memories
+                WHERE isDeleted = 0 AND vectorData IS NOT NULL AND length(vectorData) > 0
+                """
+            ) ?? 0
+        }
+    }
+
+    /// Overfetch hook for approximate filtered (allow-listed) search.
+    ///
+    /// When an ANN adapter must return `baseLimit` hits drawn from an
+    /// allow-list of `allowedCount` out of `totalCount` indexed records, it
+    /// should pull proportionally more candidates (`baseLimit` scaled by the
+    /// inverse selectivity) and trim after exact ranking, never broadening
+    /// the allow-list. The result is clamped to `0...cap` (default 500, the
+    /// `VectorIndex` limit range).
+    public static func filteredOverfetchLimit(
+        baseLimit: Int,
+        allowedCount: Int,
+        totalCount: Int,
+        cap: Int = 500
+    ) -> Int {
+        let clampedCap = max(0, cap)
+        guard baseLimit > 0, allowedCount > 0, totalCount > 0 else {
+            return min(max(0, baseLimit), clampedCap)
+        }
+        let factor = Double(totalCount) / Double(allowedCount)
+        let scaled = Int((Double(baseLimit) * max(1, factor)).rounded(.up))
+        return min(clampedCap, max(baseLimit, scaled))
     }
 }

@@ -48,3 +48,17 @@ than starting unstructured work directly in a view.
 
 Validate accessibility, file-import security scope, loading states, failure
 states, offline behavior, and physical-device layout in a signed host app.
+
+## Badges, analytics, and identifiers
+
+Browser rows and the detail view show measured-quality badges when the
+catalog supplies a valid `ModelFamilyBenchmark`, alongside the existing
+compatibility badges and `ModelLogoView` artwork. The library lists per-model
+sizes, and the storage view renders `storageBreakdown()` analytics with
+per-model rows plus staging/temporary totals. Download status lines include
+bounded try counts, and attempt failures use the same redaction rules as other
+surface errors. New identifiers (`archon.models.browser.benchmark.*`,
+`archon.models.detail.benchmark.*`, `archon.models.library.size.*`,
+`archon.models.storage.row.*`, `archon.models.storage.temp`,
+`archon.models.storage.staging`) are centralized in `ModelAccessibilityIDs`
+and covered by stability tests.

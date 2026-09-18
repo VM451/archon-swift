@@ -223,3 +223,12 @@ memory profile but retains the package's 3 GiB mobile process envelope and
 roughly 1.5 GiB safe model budget. This is deliberately more conservative than
 the phone's storage capacity. A host may only revise that envelope after it has
 captured representative signed-app memory, thermal, and inference evidence.
+
+## Preparation recipes and benchmark provenance
+
+Raw checkpoints reach runnable state only through developer-side preparation.
+`ModelPrepRecipeIndex` documents those GGUF/SafeTensors/Transformers to
+MLX/Core AI paths; recipes never make a raw artifact runnable. Measured
+`ModelFamilyBenchmark` records may accompany catalogued families with explicit
+provenance and feed `recommendedVariant` after fit. Catalogs must never invent
+scores: families without measurements simply use the declared-estimate path.

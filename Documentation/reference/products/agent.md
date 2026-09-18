@@ -76,3 +76,38 @@ the required choice when sharing the catalog with a user-facing UI.
 
 See [Supported models and model-family policy](../supported-models.md) for
 catalog wiring, runtime/artifact support, and the AI-agent guidance.
+
+## Multi-agent handoffs
+
+`SwarmOrchestrator` routes typed `HandoffRequest` values to registered agent
+graphs. `HandoffPolicy` constrains allowed targets (`nil` permits any
+registered agent), maximum chain depth, and whether a reason is required.
+Chain depth is tracked through `.handoff.<target>` suffixes on the thread
+identifier, so depth survives restarts and stays observable in traces.
+Failures are typed `HandoffError` values (`unknownTarget`, `notAllowed`,
+`chainTooDeep`, `missingReason`, `cancelled`); cancellation is checked before
+and after the target graph runs. `HandoffNode` performs a handoff inside a
+graph, and `AgentAsToolNode` exposes a child graph as a
+`ToolDispatcher`-compatible tool with bounded output.
+
+## Guardrails
+
+On-device, deterministic guardrail building blocks. `AgentGuardrail` checks
+state plus `RunTrace` and returns `allow` or `deny(reason:)`; `GuardrailChain`
+evaluates in fixed registration order with first-deny-wins semantics and
+throws typed `GuardrailError.denied` on enforcement. Built-ins:
+`OutputLengthGuardrail` (bounded characters), `ToolAllowlistGuardrail` (wraps
+`ToolAuthorizationPolicy` plus an optional registry for exact dispatcher
+parity), and `ProhibitedPatternGuardrail` (bounded literal patterns).
+`GuardrailNode` enforces a chain before and after a child closure.
+
+## Local evaluation seams
+
+`ToolOrderEvaluator` (ordered tool subsequence) and `TokenBudgetEvaluator`
+(`RunTrace` totals) extend the dependency-free metric set alongside
+`ContainsEvaluator`, `ToolCallSequenceEvaluator`, `LatencyEvaluator`, and
+`CostBudgetEvaluator`. `AgentEvalRunner.run(graph:dataset:tracer:options:)`
+adds `EvalRunOptions` with per-scenario timeouts (recorded as typed
+`ScenarioTimeout` failures), fail-fast short-circuiting, and seeded
+deterministic scenario ordering. `EvalReport.jsonData()` serializes with
+stable key and scenario order.

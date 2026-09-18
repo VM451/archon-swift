@@ -60,3 +60,29 @@ for item in searchResults {
     print("Found Memory:", item.item.memory, "(Score:", item.score, ")")
 }
 ```
+
+### 5. Migrate a Derived Vector Index from the Durable Store
+
+Derived indexes (such as the optional Proxima adapter) always rebuild from
+durable truth. Migrate, verify recall, and roll back by keeping the old index
+serving — migration never mutates the durable store:
+
+```swift
+import ArchonMemory
+import ArchonMemoryProxima
+
+// 1. Rebuild the new index from the durable store under a fail-closed ceiling.
+let report = try await proximaIndex.migrate(
+    from: localStore,
+    ceiling: ProximaResourceCeiling(maxRecords: 20_000, maxSnapshotBytes: 16_777_216)
+)
+print("Migrated \(report.indexed) records, skipped \(report.skipped), snapshot \(report.bytes) bytes")
+
+// 2. Verify recall against brute-force truth before switching traffic.
+// 3. Rollback: a failed or cancelled migration leaves the old index serving,
+//    so rollback is simply "keep serving the old index".
+
+// Recover from a lost or corrupt snapshot the same way:
+let rebuilt = try await proximaIndex.restoreOrRebuild(snapshot: snapshotURL, fallback: localStore)
+print(rebuilt ? "Rebuilt from durable store" : "Restored snapshot")
+```

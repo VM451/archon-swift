@@ -28,10 +28,88 @@ public struct ResultReranker: Sendable {
         semanticWeight: Double = 0.4,
         now: Date = Date()
     ) -> [SearchResult] {
+        rankImpl(results, for: query, options: options, similarity: similarity, semanticWeight: semanticWeight, maxChars: nil, now: now).results
+    }
+
+    /// Semantic-aware overload with application reporting. Reports whether any
+    /// result received a non-`nil` semantic score.
+    public func rankWithSimilarity(
+        _ results: [SearchResult],
+        for query: String,
+        options: SearchRankingOptions = SearchRankingOptions(),
+        similarity: (any SemanticSimilarity)?,
+        semanticWeight: Double = 0.4,
+        now: Date = Date()
+    ) -> (results: [SearchResult], usedSemanticRerank: Bool) {
+        rankImpl(results, for: query, options: options, similarity: similarity, semanticWeight: semanticWeight, maxChars: nil, now: now)
+    }
+
+    /// Embedding-rerank overload (SEARCH-004). Effective options resolve as the
+    /// explicit `embedding` parameter, falling back to `options.embedding`.
+    /// Disabled, `nil`, zero-weight, or unavailable-embedding configurations
+    /// return keyword-identical order. `similarity` overrides the built-in
+    /// Apple embedding (used by tests and host-provided scorers).
+    public func rank(
+        _ results: [SearchResult],
+        for query: String,
+        options: SearchRankingOptions = SearchRankingOptions(),
+        embedding: EmbeddingRerankOptions?,
+        similarity: (any SemanticSimilarity)? = nil,
+        now: Date = Date()
+    ) -> [SearchResult] {
+        rankWithEmbedding(results, for: query, options: options, embedding: embedding, similarity: similarity, now: now).results
+    }
+
+    /// Embedding-rerank with application reporting. `usedSemanticRerank` is
+    /// `true` only when at least one result received a non-`nil` semantic
+    /// score; keyword-fallback paths report `false`.
+    public func rankWithEmbedding(
+        _ results: [SearchResult],
+        for query: String,
+        options: SearchRankingOptions = SearchRankingOptions(),
+        embedding: EmbeddingRerankOptions?,
+        similarity: (any SemanticSimilarity)? = nil,
+        now: Date = Date()
+    ) -> (results: [SearchResult], usedSemanticRerank: Bool) {
+        let effective = embedding ?? options.embedding
+        guard let effective, effective.enabled else {
+            return (rank(results, for: query, options: options, now: now), false)
+        }
+        let weight = effective.clampedWeight
+        guard weight > 0 else {
+            return (rank(results, for: query, options: options, now: now), false)
+        }
+        let resolved: any SemanticSimilarity
+        if let similarity {
+            resolved = similarity
+        } else {
+            let apple = NaturalLanguageSimilarity(languageCode: effective.language)
+            guard apple.isAvailable else {
+                return (rank(results, for: query, options: options, now: now), false)
+            }
+            resolved = apple
+        }
+        return rankImpl(
+            results, for: query, options: options,
+            similarity: resolved, semanticWeight: weight,
+            maxChars: effective.clampedMaxChars, now: now
+        )
+    }
+
+    private func rankImpl(
+        _ results: [SearchResult],
+        for query: String,
+        options: SearchRankingOptions,
+        similarity: (any SemanticSimilarity)?,
+        semanticWeight: Double,
+        maxChars: Int?,
+        now: Date
+    ) -> (results: [SearchResult], usedSemanticRerank: Bool) {
         let terms = tokenize(query)
-        let weight = min(max(semanticWeight, 0), 1)
+        let weight = min(max(semanticWeight.isFinite ? semanticWeight : 0, 0), 1)
         var scored: [(result: SearchResult, score: Double)] = []
         scored.reserveCapacity(results.count)
+        var usedSemantic = false
         for result in results {
             guard passesScope(result, options: options) else { continue }
             guard passesFreshness(result, options: options, now: now) else { continue }
@@ -46,19 +124,24 @@ public struct ResultReranker: Sendable {
                 let halfLife = max(1, options.freshnessHalfLife)
                 score += 0.3 * exp(-age / halfLife)
             }
-            if weight > 0, let similarity,
-               let semantic = similarity.similarity(between: query, and: result.title + " " + result.snippet) {
-                score += min(max(semantic, 0), 1) * weight
+            if weight > 0, let similarity {
+                var text = result.title + " " + result.snippet
+                if let maxChars { text = String(text.prefix(maxChars)) }
+                if let semantic = similarity.similarity(between: query, and: text) {
+                    score += min(max(semantic, 0), 1) * weight
+                    usedSemantic = true
+                }
             }
             scored.append((result, score))
         }
-        return scored
+        let ranked = scored
             .sorted {
                 if $0.score != $1.score { return $0.score > $1.score }
                 return $0.result.url.absoluteString < $1.result.url.absoluteString
             }
             .prefix(max(0, options.maxResults))
             .map(\.result)
+        return (ranked, usedSemantic && !ranked.isEmpty)
     }
 
     private func passesScope(_ result: SearchResult, options: SearchRankingOptions) -> Bool {

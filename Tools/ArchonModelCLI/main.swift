@@ -16,7 +16,10 @@ struct ArchonModelCLI: AsyncParsableCommand {
             Search.self,
             Download.self,
             Convert.self,
-            Benchmark.self
+            Benchmark.self,
+            CatalogLint.self,
+            DeviceFit.self,
+            PrepRecipe.self
         ]
     )
 }
@@ -192,6 +195,7 @@ private struct Download: AsyncParsableCommand {
         let request = ModelDownloadRequest(
             variant: variant,
             modelName: descriptor.name,
+            family: descriptor.family,
             license: descriptor.license,
             logoURL: descriptor.logoURL,
             sourceRepository: descriptor.id,
@@ -392,6 +396,329 @@ private struct Benchmark: AsyncParsableCommand {
         )
         let data = try encodeJSON(report)
         print(String(data: data, encoding: .utf8) ?? "{}")
+    }
+}
+
+private struct CatalogLint: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "catalog-lint",
+        abstract: "Lint local model manifests for runtime/format consistency. Offline only."
+    )
+
+    @Option(name: .long, help: "Local manifest directory. Defaults to the model library root.")
+    var localPath: String?
+
+    @Option(name: .long, help: "Maximum number of descriptors to lint.")
+    var limit: Int = 100
+
+    @Flag(name: .long, help: "Emit a stable machine-readable JSON report.")
+    var json = false
+
+    mutating func run() async throws {
+        let path: String
+        if let localPath {
+            path = localPath
+        } else {
+            path = await ModelLibrary.makeDefault().rootURL.path
+        }
+        let catalog = LocalModelCatalog(locations: [localURL(path)])
+        let page = try await catalog.searchPage(ModelSearchRequest(query: "", limit: limit))
+
+        var errors: [String] = []
+        var warnings: [String] = []
+        var seenIDs = Set<String>()
+        var runnableCount = 0
+        var rawCount = 0
+        var experimentalCount = 0
+        for model in page.models {
+            if !seenIDs.insert(model.id).inserted {
+                errors.append("\(model.id): duplicate descriptor id.")
+            }
+            for variant in model.variants {
+                if let expected = variant.format.directRuntime, variant.runtime != expected {
+                    errors.append("\(model.id)#\(variant.id): \(variant.format.rawValue) must declare the \(expected.rawValue) runtime, not \(variant.runtime.rawValue).")
+                }
+                if variant.format.requiresConversion {
+                    rawCount += 1
+                    warnings.append("\(model.id)#\(variant.id): \(variant.format.rawValue) is conversion-required and not runnable.")
+                    continue
+                }
+                if variant.isExperimental {
+                    experimentalCount += 1
+                    warnings.append("\(model.id)#\(variant.id): experimental until runtime, output, and device validation pass.")
+                    continue
+                }
+                runnableCount += 1
+                if variant.sizeBytes == nil && variant.resources.isEmpty {
+                    warnings.append("\(model.id)#\(variant.id): no size metadata; disk preflight cannot be proven.")
+                }
+                if ModelCompatibilityAnalyzer.estimatedPeakMemoryBytes(for: variant) == nil {
+                    warnings.append("\(model.id)#\(variant.id): no peak-memory estimate; device fit cannot be proven.")
+                }
+            }
+        }
+
+        if json {
+            let payload: [String: Any] = [
+                "descriptors": page.models.count,
+                "runnableVariants": runnableCount,
+                "rawVariants": rawCount,
+                "experimentalVariants": experimentalCount,
+                "errors": errors.sorted(),
+                "warnings": warnings.sorted()
+            ]
+            let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+            print(String(decoding: data, as: UTF8.self))
+        } else {
+            print("descriptors: \(page.models.count) runnable: \(runnableCount) raw: \(rawCount) experimental: \(experimentalCount)")
+            for warning in warnings.sorted() { print("warning: \(warning)") }
+            for error in errors.sorted() { print("error: \(error)") }
+        }
+        guard errors.isEmpty else { throw ExitCode(1) }
+    }
+}
+
+private struct DeviceFit: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "device-fit",
+        abstract: "Dry-run device-fit report for a manifest or local-catalog variant. No download."
+    )
+
+    @Option(name: .long, help: "Path to archon-model.json.")
+    var manifest: String?
+
+    @Option(name: .long, help: "Exact variant id to look up with --local-path.")
+    var variantID: String?
+
+    @Option(name: .long, help: "Local manifest directory used with --variant-id.")
+    var localPath: String?
+
+    @Option(name: .long, help: "Device profile name. Defaults to the current device.")
+    var deviceProfile: String = "current"
+
+    @Flag(name: .long, help: "List available device profiles and exit.")
+    var listProfiles = false
+
+    @Option(name: .long, help: "Task to check, for example textGeneration.")
+    var task: String?
+
+    @Flag(name: .long, help: "Emit a stable machine-readable JSON report.")
+    var json = false
+
+    mutating func run() async throws {
+        if listProfiles {
+            for name in DeviceProfiles.names {
+                print(name)
+            }
+            return
+        }
+        let device = try DeviceProfiles.device(named: deviceProfile)
+        let variant: ModelVariant
+        let family: String?
+        if let manifestPath = manifest {
+            let manifestValue = try readManifest(at: manifestPath)
+            variant = DeviceProfiles.variant(from: manifestValue)
+            family = manifestValue.family
+        } else if let variantID {
+            let path: String
+            if let localPath {
+                path = localPath
+            } else {
+                path = await ModelLibrary.makeDefault().rootURL.path
+            }
+            let catalog = LocalModelCatalog(locations: [localURL(path)])
+            let models = try await catalog.search(ModelSearchRequest(query: "", limit: 100))
+            guard let match = models.lazy.flatMap({ model in
+                model.variants.map { (model, $0) }
+            }).first(where: { $0.1.id == variantID }) else {
+                throw ValidationError("No local variant matches --variant-id \(variantID).")
+            }
+            variant = match.1
+            family = match.0.family
+        } else {
+            throw ValidationError("Pass --manifest or --variant-id (with --local-path).")
+        }
+
+        var requirements: ModelCapabilityRequirements?
+        if let task, !task.isEmpty {
+            guard let parsed = ArchonModelTask(rawValue: task) else {
+                throw ValidationError("Unknown task \(task).")
+            }
+            requirements = ModelCapabilityRequirements(task: parsed)
+        }
+        let compatibility = ModelCompatibilityAnalyzer.analyze(
+            variant: variant,
+            device: device,
+            requirements: requirements
+        )
+        let peak = ModelCompatibilityAnalyzer.estimatedPeakMemoryBytes(for: variant)
+        if json {
+            var payload: [String: Any] = [
+                "variant": variant.id,
+                "status": compatibility.status.rawValue,
+                "fit": compatibility.fit.rawValue,
+                "canLoad": compatibility.canLoad,
+                "canDownload": compatibility.canDownload,
+                "reasons": compatibility.reasons,
+                "budgetBytes": device.recommendedModelMemoryBytes.description
+            ]
+            if let peak { payload["peakBytes"] = peak.description }
+            if let family { payload["family"] = family }
+            let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+            print(String(decoding: data, as: UTF8.self))
+        } else {
+            print("variant: \(variant.id)")
+            if let family { print("family: \(family)") }
+            print("status: \(compatibility.status.rawValue) fit: \(compatibility.fit.rawValue)")
+            print("canLoad: \(compatibility.canLoad) canDownload: \(compatibility.canDownload)")
+            if let peak { print("peakBytes: \(peak)") }
+            print("budgetBytes: \(device.recommendedModelMemoryBytes)")
+            for reason in compatibility.reasons { print("reason: \(reason)") }
+        }
+    }
+}
+
+private enum DeviceProfiles {
+    static let names = ["current", "mac-16gb", "mac-8gb", "iphone-8gb", "ipad-8gb"]
+
+    static func device(named name: String) throws -> ArchonDeviceCapabilities {
+        switch name {
+        case "current":
+            return .current
+        case "mac-16gb":
+            return ArchonDeviceCapabilities(
+                platform: .macOS,
+                osVersion: ArchonOSVersion(major: 27),
+                physicalMemoryBytes: 16_000_000_000,
+                availableMemoryBytes: 12_000_000_000,
+                processorCount: 10,
+                deviceArchitecture: "arm64",
+                supportsAppleFoundationModels: true,
+                supportsCoreAI: true
+            )
+        case "mac-8gb":
+            return ArchonDeviceCapabilities(
+                platform: .macOS,
+                osVersion: ArchonOSVersion(major: 27),
+                physicalMemoryBytes: 8_000_000_000,
+                availableMemoryBytes: 6_000_000_000,
+                processorCount: 8,
+                deviceArchitecture: "arm64",
+                supportsAppleFoundationModels: true,
+                supportsCoreAI: true
+            )
+        case "iphone-8gb":
+            return ArchonDeviceCapabilities(
+                platform: .iOS,
+                osVersion: ArchonOSVersion(major: 27),
+                physicalMemoryBytes: 8_000_000_000,
+                availableMemoryBytes: 5_000_000_000,
+                processorCount: 6,
+                deviceArchitecture: "arm64",
+                supportsAppleFoundationModels: true,
+                supportsCoreAI: false
+            )
+        case "ipad-8gb":
+            return ArchonDeviceCapabilities(
+                platform: .iPadOS,
+                osVersion: ArchonOSVersion(major: 27),
+                physicalMemoryBytes: 8_000_000_000,
+                availableMemoryBytes: 5_000_000_000,
+                processorCount: 8,
+                deviceArchitecture: "arm64",
+                supportsAppleFoundationModels: true,
+                supportsCoreAI: false
+            )
+        default:
+            throw ValidationError("Unknown --device-profile \(name). Use --list-profiles.")
+        }
+    }
+
+    static func variant(from manifest: ArchonModelManifest) -> ModelVariant {
+        ModelVariant(
+            id: manifest.modelID,
+            name: manifest.modelName,
+            modelID: manifest.modelID,
+            source: .localImport,
+            format: manifest.format,
+            runtime: manifest.runtime,
+            architecture: manifest.architecture,
+            supportedDeviceArchitectures: manifest.supportedDeviceArchitectures,
+            supportedPlatforms: manifest.platforms,
+            minimumOS: manifest.minimumOS,
+            parameterCount: manifest.parameterCount,
+            contextLength: manifest.contextLength,
+            precision: manifest.precision,
+            quantization: manifest.quantization,
+            kvCacheBytesPerToken: manifest.kvCacheBytesPerToken,
+            sizeBytes: manifest.modelSizeBytes,
+            estimatedMemoryBytes: manifest.estimatedMemoryBytes,
+            estimatedQualityScore: manifest.estimatedQualityScore,
+            estimatedTokensPerSecond: manifest.estimatedTokensPerSecond,
+            sha256: manifest.checksum,
+            resources: manifest.modelResources,
+            tokenizerResources: manifest.tokenizerResources,
+            capabilities: manifest.capabilities,
+            isExperimental: manifest.isExperimental
+        )
+    }
+}
+
+private struct PrepRecipe: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "prep-recipe",
+        abstract: "Print the developer-side preparation recipe for raw weights. Lookup only; nothing converts on device."
+    )
+
+    @Option(name: .long, help: "Raw source format: gguf, safetensors, or transformers.")
+    var from: String
+
+    @Option(name: .long, help: "Target runtime: mlx or coreAI.")
+    var to: String
+
+    @Option(name: .long, help: "Model family for tuned guidance. Unknown families fail closed.")
+    var family: String?
+
+    @Flag(name: .long, help: "Emit a stable machine-readable JSON report.")
+    var json = false
+
+    mutating func run() throws {
+        guard let source = ArchonModelFormat(rawValue: from.lowercased()) else {
+            throw ValidationError("Unknown --from format \(from).")
+        }
+        let normalizedTarget = to.lowercased().replacingOccurrences(of: "-", with: "")
+        let target: ArchonModelRuntime?
+        switch normalizedTarget {
+        case "mlx": target = .mlx
+        case "coreai": target = .coreAI
+        default: target = nil
+        }
+        guard let target else {
+            throw ValidationError("Unknown --to runtime \(to).")
+        }
+        guard let recipe = ModelPrepRecipeIndex.recipe(source: source, target: target, family: family) else {
+            let label = "\(source.rawValue) -> \(target.rawValue)" + (family.map { " (\($0))" } ?? "")
+            throw ArchonModelsError.prepRecipeUnavailable(label)
+        }
+        if json {
+            var payload: [String: Any] = [
+                "sources": recipe.sourceFormats.map(\.rawValue).sorted(),
+                "target": recipe.targetRuntime.rawValue,
+                "steps": recipe.steps,
+                "tooling": recipe.tooling,
+                "validatesToManifest": recipe.validatesToManifest
+            ]
+            if let family = recipe.family { payload["family"] = family }
+            let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+            print(String(decoding: data, as: UTF8.self))
+        } else {
+            print("recipe: \(recipe.sourceFormats.map(\.rawValue).sorted().joined(separator: ",")) -> \(recipe.targetRuntime.rawValue)")
+            if let family = recipe.family { print("family: \(family)") }
+            print("tooling: \(recipe.tooling.joined(separator: ", "))")
+            for (index, step) in recipe.steps.enumerated() {
+                print("step \(index + 1): \(step)")
+            }
+        }
     }
 }
 

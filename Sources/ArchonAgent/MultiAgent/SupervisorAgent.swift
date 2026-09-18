@@ -60,7 +60,7 @@ public final class SupervisorAgent<State: AgentState>: @unchecked Sendable {
 
 /// Swarm Orchestrator managing dynamic agent-to-agent handoffs.
 public final class SwarmOrchestrator<State: AgentState>: @unchecked Sendable {
-    private var activeAgents: [String: Graph<State>] = [:]
+    var activeAgents: [String: Graph<State>] = [:]
 
     public init() {}
 
