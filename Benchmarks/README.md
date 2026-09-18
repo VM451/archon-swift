@@ -71,8 +71,9 @@ identical corpus, queries, and ground truth.
 The macOS rows are arm64 Apple Silicon package timings. The iPhone 16 rows
 are first physical-device evidence for latency and recall only. The Proxima
 adapter stays an optional performance candidate, not the default
-replacement: persistence/reopen, crash recovery, memory ceilings, migration,
-and filtered update/delete workloads must still pass the [quality
+replacement: migration and crash recovery are now proven package-side
+(`ProximaMigrationTests`), so the remaining gates are memory ceilings and
+representative-device validation per the [quality
 scorecard](../context/quality-scorecard.md) before adoption.
 
 The developer command measures real preparation/unload samples for local Core
