@@ -148,7 +148,7 @@ struct ProvidersExtendedTests {
     func testProviderConfigurations() throws {
         let openai = OpenAIProvider(apiKey: "sk-test", model: "gpt-4o")
         #expect(openai.id == "openai.gpt-4o")
-        #expect(!openai.capabilities.supportsStreaming)
+        #expect(openai.capabilities.supportsStreaming)
 
         let anthropic = AnthropicProvider(apiKey: "anth-test", model: "claude-3-5-sonnet")
         #expect(anthropic.id == "anthropic.claude-3-5-sonnet")

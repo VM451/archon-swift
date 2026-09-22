@@ -41,6 +41,10 @@ public enum ArchonAIModel: Sendable {
     /// OpenAI (GPT-4o, GPT-4o-mini, o3-mini).
     case openAI(apiKey: String, model: String = "gpt-4o")
 
+    /// Mistral AI (Medium 3.5, Large 3, Small 4) over the OpenAI-compatible
+    /// `https://api.mistral.ai/v1` endpoint.
+    case mistral(apiKey: String, model: String = "mistral-medium-3-5")
+
     /// Local Ollama inference server.
     case ollama(endpoint: URL = URL(string: "http://localhost:11434")!, model: String = "gemma4:latest")
 
@@ -83,6 +87,9 @@ public enum ArchonAI: Sendable {
 
         case .openAI(let apiKey, let model):
             return OpenAIProvider(apiKey: apiKey, model: model)
+
+        case .mistral(let apiKey, let model):
+            return MistralProvider(apiKey: apiKey, model: model)
 
         case .ollama(let endpoint, let model):
             return OllamaProvider(model: model, endpoint: endpoint)
@@ -167,6 +174,14 @@ public enum ArchonAI: Sendable {
         model: String = "gpt-4o"
     ) -> any LLMProvider {
         OpenAIProvider(apiKey: apiKey, model: model)
+    }
+
+    /// Mistral AI provider (Medium 3.5 default; Large 3 and Small 4 via `model`).
+    public static func mistral(
+        apiKey: String,
+        model: String = "mistral-medium-3-5"
+    ) -> any LLMProvider {
+        MistralProvider(apiKey: apiKey, model: model)
     }
 
 }

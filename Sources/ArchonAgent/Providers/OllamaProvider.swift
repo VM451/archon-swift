@@ -114,7 +114,9 @@ public final class OllamaProvider: LLMProvider, @unchecked Sendable {
     }
 }
 
-/// Mistral AI Provider supporting Mistral Large, Codestral, and Pixtral.
+/// Mistral AI Provider over the OpenAI-compatible `https://api.mistral.ai/v1`
+/// endpoint (Medium 3.5, Large 3, Small 4, Codestral). Streaming and
+/// generation delegate to the shared `OpenAIProvider` transport.
 public final class MistralProvider: LLMProvider, @unchecked Sendable {
     public let id: String
     public let capabilities: ModelCapabilities
@@ -122,11 +124,11 @@ public final class MistralProvider: LLMProvider, @unchecked Sendable {
 
     public init(
         apiKey: String,
-        model: String = "mistral-large-latest",
+        model: String = "mistral-medium-3-5",
         urlSession: URLSession = .shared
     ) {
         self.id = "mistral.\(model)"
-        self.capabilities = .cloudStandard.withStreaming(false)
+        self.capabilities = .cloudStandard
         self.openAIWrapper = OpenAIProvider(
             apiKey: apiKey,
             model: model,
@@ -158,7 +160,7 @@ public final class GrokProvider: LLMProvider, @unchecked Sendable {
         urlSession: URLSession = .shared
     ) {
         self.id = "xai.\(model)"
-        self.capabilities = .cloudStandard.withStreaming(false)
+        self.capabilities = .cloudStandard
         self.openAIWrapper = OpenAIProvider(
             apiKey: apiKey,
             model: model,
@@ -190,7 +192,7 @@ public final class NvidiaProvider: LLMProvider, @unchecked Sendable {
         urlSession: URLSession = .shared
     ) {
         self.id = "nvidia.\(model)"
-        self.capabilities = .cloudStandard.withStreaming(false)
+        self.capabilities = .cloudStandard
         self.openAIWrapper = OpenAIProvider(
             apiKey: apiKey,
             model: model,
