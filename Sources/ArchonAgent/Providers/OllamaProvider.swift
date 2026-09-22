@@ -180,7 +180,10 @@ public final class GrokProvider: LLMProvider, @unchecked Sendable {
     }
 }
 
-/// NVIDIA NIM Provider supporting open LLM inference models accelerated by NVIDIA TensorRT-LLM.
+/// NVIDIA NIM Provider over the OpenAI-compatible
+/// `https://integrate.api.nvidia.com/v1` endpoint (Nemotron 3.5
+/// Lightning, Nemotron 3 Ultra). Streaming and generation delegate to
+/// the shared `OpenAIProvider` transport.
 public final class NvidiaProvider: LLMProvider, @unchecked Sendable {
     public let id: String
     public let capabilities: ModelCapabilities
@@ -188,7 +191,7 @@ public final class NvidiaProvider: LLMProvider, @unchecked Sendable {
 
     public init(
         apiKey: String,
-        model: String = "meta/llama-3.3-70b-instruct",
+        model: String = "nvidia/nemotron-3.5-lightning-30b-a3b",
         urlSession: URLSession = .shared
     ) {
         self.id = "nvidia.\(model)"

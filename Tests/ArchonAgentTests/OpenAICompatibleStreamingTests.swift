@@ -148,6 +148,16 @@ struct OpenAICompatibleStreamingTests {
         let viaShortcut = ArchonAI.mistral(apiKey: "k", model: "mistral-large-2512")
         #expect(viaShortcut.id == "mistral.mistral-large-2512")
     }
+
+    @Test("NVIDIA factory resolves through the unified enum and shortcut")
+    func nvidiaFactory() {
+        let viaEnum = ArchonAI.model(.nvidia(apiKey: "k"))
+        #expect(viaEnum is NvidiaProvider)
+        #expect(viaEnum.id == "nvidia.nvidia/nemotron-3.5-lightning-30b-a3b")
+        #expect(viaEnum.capabilities.supportsStreaming)
+        let viaShortcut = ArchonAI.nvidia(apiKey: "k", model: "nvidia/nemotron-3-ultra-550b-a55b")
+        #expect(viaShortcut.id == "nvidia.nvidia/nemotron-3-ultra-550b-a55b")
+    }
 }
 
 private func expectIfNotNil<T>(_ value: T?) -> T? {
