@@ -45,9 +45,9 @@ public enum ArchonAIModel: Sendable {
     /// `https://api.mistral.ai/v1` endpoint.
     case mistral(apiKey: String, model: String = "mistral-medium-3-5")
 
-    /// NVIDIA NIM (Nemotron 3.5 Lightning, Nemotron 3 Ultra) over the
-    /// OpenAI-compatible `https://integrate.api.nvidia.com/v1` endpoint.
-    case nvidia(apiKey: String, model: String = "nvidia/nemotron-3.5-lightning-30b-a3b")
+    /// OpenRouter (Nemotron 3.5 Lightning, Nemotron 3 Ultra) over the
+    /// OpenAI-compatible `https://openrouter.ai/api/v1` endpoint.
+    case openrouter(apiKey: String, model: String = "nvidia/nemotron-3.5-lightning:free")
 
     /// Local Ollama inference server.
     case ollama(endpoint: URL = URL(string: "http://localhost:11434")!, model: String = "gemma4:latest")
@@ -95,8 +95,8 @@ public enum ArchonAI: Sendable {
         case .mistral(let apiKey, let model):
             return MistralProvider(apiKey: apiKey, model: model)
 
-        case .nvidia(let apiKey, let model):
-            return NvidiaProvider(apiKey: apiKey, model: model)
+        case .openrouter(let apiKey, let model):
+            return OpenRouterProvider(apiKey: apiKey, model: model)
 
         case .ollama(let endpoint, let model):
             return OllamaProvider(model: model, endpoint: endpoint)
@@ -191,12 +191,12 @@ public enum ArchonAI: Sendable {
         MistralProvider(apiKey: apiKey, model: model)
     }
 
-    /// NVIDIA NIM provider (Nemotron 3.5 Lightning default; 3 Ultra via `model`).
-    public static func nvidia(
+    /// OpenRouter provider (Nemotron 3.5 Lightning default; 3 Ultra via `model`).
+    public static func openrouter(
         apiKey: String,
-        model: String = "nvidia/nemotron-3.5-lightning-30b-a3b"
+        model: String = "nvidia/nemotron-3.5-lightning:free"
     ) -> any LLMProvider {
-        NvidiaProvider(apiKey: apiKey, model: model)
+        OpenRouterProvider(apiKey: apiKey, model: model)
     }
 
 }

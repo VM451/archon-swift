@@ -3,7 +3,7 @@ import Foundation
 @testable import ArchonAgent
 
 // Deterministic coverage for the OpenAI-compatible transport shared by
-// `OpenAIProvider`, `MistralProvider`, `GrokProvider`, and `NvidiaProvider`.
+// `OpenAIProvider`, `MistralProvider`, `GrokProvider`, and `OpenRouterProvider`.
 // Live SSE/generate round trips need network and stay a consuming-app gate;
 // these tests pin the pure request builder, the SSE event parser, and the
 // advertised capabilities/factory wiring instead.
@@ -130,7 +130,7 @@ struct OpenAICompatibleStreamingTests {
         #expect(OpenAIProvider(apiKey: "k").capabilities.supportsStreaming)
         #expect(MistralProvider(apiKey: "k").capabilities.supportsStreaming)
         #expect(GrokProvider(apiKey: "k").capabilities.supportsStreaming)
-        #expect(NvidiaProvider(apiKey: "k").capabilities.supportsStreaming)
+        #expect(OpenRouterProvider(apiKey: "k").capabilities.supportsStreaming)
     }
 
     @Test("Mistral provider defaults to Medium 3.5 on the Mistral endpoint")
@@ -149,14 +149,22 @@ struct OpenAICompatibleStreamingTests {
         #expect(viaShortcut.id == "mistral.mistral-large-2512")
     }
 
-    @Test("NVIDIA factory resolves through the unified enum and shortcut")
-    func nvidiaFactory() {
-        let viaEnum = ArchonAI.model(.nvidia(apiKey: "k"))
-        #expect(viaEnum is NvidiaProvider)
-        #expect(viaEnum.id == "nvidia.nvidia/nemotron-3.5-lightning-30b-a3b")
+    @Test("OpenRouter provider defaults to Nemotron 3.5 Lightning free tier")
+    func openRouterDefaults() {
+        let provider = OpenRouterProvider(apiKey: "k")
+        #expect(provider.id == "openrouter.nvidia/nemotron-3.5-lightning:free")
+        #expect(provider.capabilities.supportsStreaming)
+        #expect(provider.capabilities.supportsToolCalling)
+    }
+
+    @Test("OpenRouter factory resolves through the unified enum and shortcut")
+    func openRouterFactory() {
+        let viaEnum = ArchonAI.model(.openrouter(apiKey: "k"))
+        #expect(viaEnum is OpenRouterProvider)
+        #expect(viaEnum.id == "openrouter.nvidia/nemotron-3.5-lightning:free")
         #expect(viaEnum.capabilities.supportsStreaming)
-        let viaShortcut = ArchonAI.nvidia(apiKey: "k", model: "nvidia/nemotron-3-ultra-550b-a55b")
-        #expect(viaShortcut.id == "nvidia.nvidia/nemotron-3-ultra-550b-a55b")
+        let viaShortcut = ArchonAI.openrouter(apiKey: "k", model: "nvidia/nemotron-3-ultra-550b-a55b:free")
+        #expect(viaShortcut.id == "openrouter.nvidia/nemotron-3-ultra-550b-a55b:free")
     }
 }
 

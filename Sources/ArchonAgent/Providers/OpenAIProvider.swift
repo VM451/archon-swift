@@ -2,7 +2,7 @@ import Foundation
 
 /// Universal OpenAI Provider supporting GPT-4o, GPT-4o-mini, o1, and o3 endpoints.
 /// Also the shared transport for the OpenAI-compatible `MistralProvider`,
-/// `GrokProvider`, and `NvidiaProvider` wrappers, which only override the
+/// `GrokProvider`, and `OpenRouterProvider` wrappers, which only override the
 /// endpoint URL and provider id.
 public final class OpenAIProvider: LLMProvider, @unchecked Sendable {
     public let id: String

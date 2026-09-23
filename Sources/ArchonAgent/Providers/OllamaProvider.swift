@@ -180,33 +180,34 @@ public final class GrokProvider: LLMProvider, @unchecked Sendable {
     }
 }
 
-/// NVIDIA NIM Provider over the OpenAI-compatible
-/// `https://integrate.api.nvidia.com/v1` endpoint (Nemotron 3.5
-/// Lightning, Nemotron 3 Ultra). Streaming and generation delegate to
-/// the shared `OpenAIProvider` transport.
-public final class NvidiaProvider: LLMProvider, @unchecked Sendable {
+/// OpenRouter Provider over the OpenAI-compatible
+/// `https://openrouter.ai/api/v1` endpoint, serving the Nemotron
+/// family (Nemotron 3.5 Lightning, Nemotron 3 Ultra). Streaming and
+/// generation delegate to the shared `OpenAIProvider` transport. The
+/// host app supplies the OpenRouter API key; it is never stored here.
+public final class OpenRouterProvider: LLMProvider, @unchecked Sendable {
     public let id: String
     public let capabilities: ModelCapabilities
     private let openAIWrapper: OpenAIProvider
 
     public init(
         apiKey: String,
-        model: String = "nvidia/nemotron-3.5-lightning-30b-a3b",
+        model: String = "nvidia/nemotron-3.5-lightning:free",
         urlSession: URLSession = .shared
     ) {
-        self.id = "nvidia.\(model)"
+        self.id = "openrouter.\(model)"
         self.capabilities = .cloudStandard
         self.openAIWrapper = OpenAIProvider(
             apiKey: apiKey,
             model: model,
-            endpoint: URL(string: "https://integrate.api.nvidia.com/v1/chat/completions")!,
+            endpoint: URL(string: "https://openrouter.ai/api/v1/chat/completions")!,
             capabilities: .cloudStandard,
             urlSession: urlSession
         )
     }
 
     public func generate(prompt: [ChatMessage], tools: [ToolDefinition], options: GenerationOptions) async throws -> ModelResponse {
-        try ZeroCloudMode.ensureAllowed(provider: "NvidiaNIM")
+        try ZeroCloudMode.ensureAllowed(provider: "OpenRouter")
         return try await openAIWrapper.generate(prompt: prompt, tools: tools, options: options)
     }
 
