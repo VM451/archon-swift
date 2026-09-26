@@ -37,6 +37,30 @@ public struct ToolCallChunk: Codable, Sendable, Equatable {
     }
 }
 
+/// A bounded binary attachment carried with a message, such as a camera frame,
+/// screen frame, or still image for a vision-capable provider.
+public struct MessageAttachment: Codable, Sendable, Equatable, Identifiable {
+    public let id: String
+    public let kind: String
+    public let mimeType: String
+    public let data: Data
+    public let capturedAt: Date
+
+    public init(
+        id: String = UUID().uuidString,
+        kind: String,
+        mimeType: String,
+        data: Data,
+        capturedAt: Date = Date()
+    ) {
+        self.id = id
+        self.kind = kind
+        self.mimeType = mimeType
+        self.data = data
+        self.capturedAt = capturedAt
+    }
+}
+
 /// Represents a single message exchange in a multi-turn agent conversation.
 public struct ChatMessage: Codable, Sendable, Equatable, Identifiable {
     public let id: String
@@ -44,6 +68,7 @@ public struct ChatMessage: Codable, Sendable, Equatable, Identifiable {
     public let content: String
     public let toolCalls: [ToolCall]?
     public let toolCallId: String?
+    public let attachments: [MessageAttachment]?
     public let timestamp: Date
 
     public init(
@@ -52,6 +77,7 @@ public struct ChatMessage: Codable, Sendable, Equatable, Identifiable {
         content: String,
         toolCalls: [ToolCall]? = nil,
         toolCallId: String? = nil,
+        attachments: [MessageAttachment]? = nil,
         timestamp: Date = Date()
     ) {
         self.id = id
@@ -59,6 +85,7 @@ public struct ChatMessage: Codable, Sendable, Equatable, Identifiable {
         self.content = content
         self.toolCalls = toolCalls
         self.toolCallId = toolCallId
+        self.attachments = attachments
         self.timestamp = timestamp
     }
 

@@ -180,6 +180,21 @@ public final class OpenAIProvider: LLMProvider, @unchecked Sendable {
 
     // MARK: - Request building (pure, unit-tested)
 
+    /// Encodes a message body, expanding vision attachments into Chat
+    /// Completions content parts (`text` + `image_url` data URLs) so camera
+    /// and screen frames reach multimodal models.
+    static func messageContent(for message: ChatMessage) -> Any {
+        guard let attachments = message.attachments, !attachments.isEmpty else {
+            return message.content
+        }
+        var parts: [[String: Any]] = [["type": "text", "text": message.content]]
+        for attachment in attachments {
+            let url = "data:\(attachment.mimeType);base64,\(attachment.data.base64EncodedString())"
+            parts.append(["type": "image_url", "image_url": ["url": url]])
+        }
+        return parts
+    }
+
     static func requestBody(
         model: String,
         prompt: [ChatMessage],
@@ -189,7 +204,7 @@ public final class OpenAIProvider: LLMProvider, @unchecked Sendable {
     ) throws -> Data {
         var messagesPayload: [[String: Any]] = []
         for msg in PIISanitizer.sanitize(prompt: prompt) {
-            var m: [String: Any] = ["role": msg.role.rawValue, "content": msg.content]
+            var m: [String: Any] = ["role": msg.role.rawValue, "content": Self.messageContent(for: msg)]
             if let calls = msg.toolCalls {
                 m["tool_calls"] = calls.map { call in
                     [

@@ -101,6 +101,25 @@ throws typed `GuardrailError.denied` on enforcement. Built-ins:
 parity), and `ProhibitedPatternGuardrail` (bounded literal patterns).
 `GuardrailNode` enforces a chain before and after a child closure.
 
+## Realtime interactive sessions
+
+`RealtimeSession` is the full-duplex voice + vision orchestration behind
+Gemini Live / GPT-Live style dynamics: simultaneous microphone PCM, text,
+and camera/screen frames on one timeline; energy-based VAD turn-taking
+(`VoiceActivityDetector` + `RealtimeTurnPolicy`); barge-in that cancels the
+in-flight response and yields the floor, guarded by a turn epoch so stale
+tasks never emit afterward; live partial/final transcription events;
+spoken replies through the `SpeechSynthesizer` seam; and a newest-N visual
+frame buffer. Speech recognition and synthesis stay behind vendor-neutral
+seams with bundled Apple adapters (`AppleSpeechRecognizer` on-device
+`SFSpeechRecognizer`, `AppleSpeechSynthesizer` with immediate-stop
+barge-in). `ChatMessage.attachments` carries visual frames to vision-capable
+providers — mapped to OpenAI `image_url` parts and Gemini `inline_data`
+parts — while non-vision providers get an honest descriptor and no pixels.
+Microphone/camera/screen capture, permissions, entitlements, and realtime
+model transports (OpenAI Realtime, Gemini Live, LiveKit-backed) remain
+host-owned; see the [realtime how-to](../../how-to/realtime-voice-agent.md).
+
 ## Local evaluation seams
 
 `ToolOrderEvaluator` (ordered tool subsequence) and `TokenBudgetEvaluator`

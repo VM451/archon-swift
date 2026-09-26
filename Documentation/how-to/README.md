@@ -10,4 +10,5 @@ Swift and Swift Package Manager.
 - [Integrate MCP connectivity](integrate-mcp.md)
 - [Configure the local WebKit sandbox](configure-sandbox.md)
 - [Host semantic actions](host-semantic-actions.md)
+- [Build a realtime voice + vision agent](realtime-voice-agent.md)
 - [Validate a release](validate-a-release.md)

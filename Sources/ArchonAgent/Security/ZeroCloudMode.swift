@@ -131,6 +131,7 @@ public struct PIISanitizer: Sendable {
                 content: sanitize(text: message.content),
                 toolCalls: message.toolCalls,
                 toolCallId: message.toolCallId,
+                attachments: message.attachments,
                 timestamp: message.timestamp
             )
         }

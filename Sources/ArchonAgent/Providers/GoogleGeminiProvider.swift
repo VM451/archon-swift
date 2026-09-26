@@ -21,6 +21,21 @@ public final class GoogleGeminiProvider: LLMProvider, @unchecked Sendable {
         self.urlSession = urlSession
     }
 
+    /// Encodes one message into Gemini `parts`, appending vision attachments
+    /// as `inline_data` so camera and screen frames reach multimodal models.
+    static func messageParts(for message: ChatMessage) -> [[String: Any]] {
+        var parts: [[String: Any]] = [["text": message.content]]
+        for attachment in message.attachments ?? [] {
+            parts.append([
+                "inline_data": [
+                    "mime_type": attachment.mimeType,
+                    "data": attachment.data.base64EncodedString()
+                ]
+            ])
+        }
+        return parts
+    }
+
     public func generate(
         prompt: [ChatMessage],
         tools: [ToolDefinition],
@@ -38,7 +53,7 @@ public final class GoogleGeminiProvider: LLMProvider, @unchecked Sendable {
             let role = msg.role == .assistant ? "model" : "user"
             contents.append([
                 "role": role,
-                "parts": [["text": msg.content]]
+                "parts": Self.messageParts(for: msg)
             ])
         }
 

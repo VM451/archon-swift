@@ -39,7 +39,8 @@ documentation surface.
 3. [Integrate a local model](tutorials/first-local-model.md)
 4. [Understand product boundaries](reference/products.md)
 5. [Forward lifecycle and permissions](how-to/host-lifecycle.md)
-6. [Read the competitor comparison and scorecard](reference/competitor-comparison.md)
+6. [Build a realtime voice + vision agent](how-to/realtime-voice-agent.md)
+7. [Read the competitor comparison and scorecard](reference/competitor-comparison.md)
 
 ### Existing Archon integration
 

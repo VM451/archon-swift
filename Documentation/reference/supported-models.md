@@ -195,6 +195,11 @@ When answering questions or changing an application that uses this package:
 7. Read this page together with the [model contract](model-contract.md),
    [catalog reference](model-catalogs.md), [lifecycle reference](model-lifecycle.md),
    and [ArchonAgent product guide](products/agent.md).
+8. Route realtime voice + vision questions to `RealtimeSession`: full-duplex
+   turns, barge-in, and camera/screen frames are an `ArchonAgent` session
+   concern, not a catalog concern. Vision pixels reach only providers whose
+   `ModelCapabilities.supportsVision` is true (OpenAI `image_url`, Gemini
+   `inline_data`); never claim a text-only provider "sees" frames.
 
 The package's user promise is validated, data-driven MLX model discovery—not
 an unbounded guarantee that every model checkpoint can execute on every Apple
