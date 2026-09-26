@@ -12,12 +12,17 @@ public final class OpenAIProvider: LLMProvider, @unchecked Sendable {
     public let model: String
     private let urlSession: URLSession
 
+    private let authHeaderField: String
+    private let authValuePrefix: String
+
     public init(
         apiKey: String,
         model: String = "gpt-4o",
         endpoint: URL = URL(string: "https://api.openai.com/v1/chat/completions")!,
         capabilities: ModelCapabilities = .cloudStandard,
-        urlSession: URLSession = .shared
+        urlSession: URLSession = .shared,
+        authHeaderField: String = "Authorization",
+        authValuePrefix: String = "Bearer "
     ) {
         self.id = "openai.\(model)"
         self.capabilities = capabilities
@@ -25,6 +30,8 @@ public final class OpenAIProvider: LLMProvider, @unchecked Sendable {
         self.endpoint = endpoint
         self.model = model
         self.urlSession = urlSession
+        self.authHeaderField = authHeaderField
+        self.authValuePrefix = authValuePrefix
     }
 
     public func generate(
@@ -46,7 +53,7 @@ public final class OpenAIProvider: LLMProvider, @unchecked Sendable {
         var request = URLRequest(url: endpoint)
         request.timeoutInterval = 120
         request.httpMethod = "POST"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("\(authValuePrefix)\(apiKey)", forHTTPHeaderField: authHeaderField)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = bodyData
 
@@ -123,7 +130,7 @@ public final class OpenAIProvider: LLMProvider, @unchecked Sendable {
                     var request = URLRequest(url: endpoint)
                     request.timeoutInterval = 120
                     request.httpMethod = "POST"
-                    request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+                    request.setValue("\(authValuePrefix)\(apiKey)", forHTTPHeaderField: authHeaderField)
                     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
                     request.httpBody = bodyData

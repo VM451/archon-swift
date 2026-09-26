@@ -40,6 +40,43 @@ Custom `ToolEffectLedger` conformances must implement the reserve/record/release
 protocol. `record` is valid only after a successful reservation; release a
 reservation when execution is skipped or fails before producing a receipt.
 
+## Cloud API providers
+
+`ArchonAI` resolves API-key providers through one factory (`ArchonAIModel`
+cases plus `ArchonAI.*` shortcuts). Most vendors are thin adapters over the
+shared OpenAI-compatible transport (`OpenAIProvider` request/response/SSE
+handling), so behavior is uniform and only the endpoint, auth style, and
+default model differ:
+
+| Provider | Case | Endpoint / auth notes |
+| --- | --- | --- |
+| OpenAI | `.openAI` | `api.openai.com/v1`, Bearer |
+| Anthropic | `.claude` | Native Messages API, `x-api-key` |
+| Google Gemini (AI Studio) | `.gemini` | `generativelanguage.googleapis.com`, `x-goog-api-key` |
+| Google Vertex AI (Express) | `.vertex` | Global publishers collection, `x-goog-api-key`; no project/service-account auth |
+| Azure OpenAI | `.azure` | Deployment-scoped resource URL + `api-version`, `api-key` header; no Entra ID |
+| Amazon Bedrock | `.bedrock` | Regional `bedrock-runtime.{region}.amazonaws.com/v1`, Bedrock API key; no SigV4/Converse |
+| Together AI | `.together` | `api.together.xyz/v1`, Bearer |
+| Groq | `.groq` | `api.groq.com/openai/v1`, Bearer (inference cloud, not xAI Grok) |
+| Cerebras | `.cerebras` | `api.cerebras.ai/v1`, Bearer |
+| SambaNova | `.sambaNova` | `api.sambanova.ai/v1`, Bearer |
+| DeepInfra Turbo / Base | `.deepInfraTurbo` / `.deepInfra` | Shared `api.deepinfra.com/v1/openai`; tiers differ by model ID |
+| Nebius AI Studio | `.nebius` | `api.studio.nebius.com/v1`, Bearer |
+| Baseten Model APIs | `.baseten` | Shared `inference.baseten.co/v1`; per-deployment Truss URLs need a custom endpoint |
+| Crusoe | `.crusoe` | `api.intelligence.crusoecloud.com/v1`, Bearer |
+| Parasail | `.parasail` | `api.saas.parasail.io/v1`, Bearer |
+| Scaleway | `.scaleway` | `api.scaleway.ai/v1`, Bearer secret key |
+| Novita | `.novita` | `api.novita.ai/v3/openai`, Bearer |
+| CoreWeave | `.coreWeave` | Host-supplied deployment URL (no shared default) |
+| Cloudflare Workers AI | `.cloudflare` | Account-scoped `.../accounts/{id}/ai/v1`, Bearer API token |
+| Mistral / OpenRouter / xAI | `.mistral` / `.openrouter` / custom | Pre-existing OpenAI-compatible adapters |
+
+Keys are host-supplied and never stored; every cloud call honors
+`ZeroCloudMode`. Default models are reasonable at authoring time and the host
+overrides any of them via `model`. Live inference against vendor endpoints
+stays a consuming-app gate — package tests prove endpoints, auth headers,
+and factory wiring with stubbed transport only.
+
 ## Adaptive local model selection
 
 `AdaptiveModelCatalog` is the family-neutral input to

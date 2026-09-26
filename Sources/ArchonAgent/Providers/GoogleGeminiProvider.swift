@@ -7,18 +7,25 @@ public final class GoogleGeminiProvider: LLMProvider, @unchecked Sendable {
     private let apiKey: String
     public let model: String
     private let urlSession: URLSession
+    /// Model-collection root, e.g. AI Studio
+    /// `https://generativelanguage.googleapis.com/v1beta/models` or Vertex AI
+    /// Express `https://aiplatform.googleapis.com/v1/publishers/google/models`.
+    /// Both use the same Gemini shape and `x-goog-api-key` header.
+    public let baseURL: String
 
     public init(
         apiKey: String,
         model: String = "gemini-1.5-pro",
         capabilities: ModelCapabilities = .cloudStandard,
-        urlSession: URLSession = .shared
+        urlSession: URLSession = .shared,
+        baseURL: String = "https://generativelanguage.googleapis.com/v1beta/models"
     ) {
         self.id = "google.\(model)"
         self.capabilities = capabilities.withStreaming(false)
         self.apiKey = apiKey
         self.model = model
         self.urlSession = urlSession
+        self.baseURL = baseURL
     }
 
     /// Encodes one message into Gemini `parts`, appending vision attachments
@@ -43,7 +50,7 @@ public final class GoogleGeminiProvider: LLMProvider, @unchecked Sendable {
     ) async throws -> ModelResponse {
         try ZeroCloudMode.ensureAllowed(provider: "GoogleGemini")
 
-        let urlString = "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent"
+        let urlString = "\(baseURL)/\(model):generateContent"
         guard let url = URL(string: urlString) else {
             throw GraphError.toolExecutionFailed(toolName: "GoogleGemini", errorDescription: "Invalid URL.")
         }
