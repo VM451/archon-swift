@@ -21,56 +21,36 @@ all-base-products re-export; optional adapters remain separate.
 | Default safety posture | Typed errors, bounded operations, fail closed |
 | App boundary | The consuming app owns credentials, entitlements, permissions, and host adapters |
 
-## System design
+## System context (C4 Level 1)
+
+The system in scope is a native Apple app with the Archon SDK embedded. It
+runs local-first on device and talks to external systems only through
+explicit, host-approved boundaries.
 
 ```mermaid
-flowchart TB
-    App["Native Apple app"]
-    Facade["ArchonFull<br/>optional re-export"]
-    Core["ArchonCore<br/>capabilities · policy · errors"]
-    Models["ArchonModels<br/>catalog · artifacts · downloads"]
-    Agent["ArchonAgent<br/>graphs · routing · tools"]
-    Context["ArchonContext<br/>request-scoped context"]
-    Memory["ArchonMemory<br/>long-term memory · RAG · research archive"]
-    Search["ArchonSearch<br/>discovery · crawl · citations"]
-    Connect["ArchonConnect<br/>MCP transport · permissions"]
-    ComputerUse["ArchonComputerUse<br/>semantic host actions"]
-    Sandbox["ArchonSandbox<br/>restricted WebKit workspace"]
-    UI["ArchonModelsUI<br/>SwiftUI model surfaces"]
-    Runtime["Apple Foundation Models<br/>Core AI · MLX adapters"]
-    Host["Host services<br/>credentials · entitlements · permissions"]
+C4Context
+    Person(user, "User", "Uses the Apple app")
+    System(app, "Apple app + Archon SDK", "Local models, agents, memory, search, tools, sandbox")
+    System_Ext(hf, "Hugging Face Hub", "Model catalog metadata and artifact downloads")
+    System_Ext(cloud, "Cloud LLM providers", "Optional API-key inference")
+    System_Ext(pcc, "Apple Private Cloud Compute", "Privacy-preserving server inference")
+    System_Ext(cloudkit, "Apple CloudKit", "Optional memory and workspace sync")
+    System_Ext(mcp, "MCP servers", "External tools, resources, prompts")
+    System_Ext(web, "Web", "Search, crawl, and citation sources")
 
-    App --> Facade
-    App --> Host
-    Facade --> Core
-    Facade --> Models
-    Facade --> Agent
-    Facade --> Context
-    Facade --> Memory
-    Facade --> Search
-    Facade --> Connect
-    Facade --> ComputerUse
-    Facade --> Sandbox
-    Facade --> UI
-    Agent --> Models
-    Agent --> Context
-    Agent --> Memory
-    Agent --> Search
-    Agent --> Connect
-    Agent --> ComputerUse
-    Agent --> Sandbox
-    Models --> Runtime
-    Context --> Memory
-    Context --> Search
-    Host -. injects .-> Runtime
-    Host -. authorizes .-> Connect
-    Host -. observes .-> ComputerUse
-    Host -. supplies .-> Sandbox
+    Rel(user, app, "Uses")
+    Rel(app, hf, "Discovers and downloads models")
+    Rel(app, cloud, "Sends prompts, only with host consent")
+    Rel(app, pcc, "Offloads eligible requests")
+    Rel(app, cloudkit, "Syncs, only when configured")
+    Rel(app, mcp, "Calls tools via permissioned transport")
+    Rel(app, web, "Searches and cites, only with network permission")
 ```
 
-Arrows show composition and service boundaries, not the complete SwiftPM
-dependency graph. Read [`Documentation/architecture.md`](Documentation/architecture.md)
-for the deeper design notes.
+Level 1 only: people, the system, and external systems. Internal structure
+(products, SwiftPM graph, runtime adapters) lives one level down in
+[`Documentation/architecture.md`](Documentation/architecture.md) and the
+per-product diagrams under [`Documentation/diagrams/`](Documentation/diagrams/).
 
 ## Products
 
